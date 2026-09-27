@@ -117,7 +117,8 @@ ${ taps }
 	{
 		let pd = flarePolyDist( p - s * ${ f( g.a ) } );
 		let body = vec3f( smoothstep( ${ f( g.r * 0.975 ) }, ${ f( g.r * 0.975 * 0.9 ) }, pd ), smoothstep( ${ f( g.r ) }, ${ f( g.r * 0.9 ) }, pd ), smoothstep( ${ f( g.r * 1.025 ) }, ${ f( g.r * 1.025 * 0.9 ) }, pd ) );
-		let rim = smoothstep( ${ f( g.r * 0.55 ) }, ${ f( g.r ) }, pd ) * 0.7 + 0.3;
+		// coated modern glass: a faint, nearly even disc (a strong bright rim read as a ring)
+		let rim = smoothstep( ${ f( g.r * 0.55 ) }, ${ f( g.r ) }, pd ) * 0.2 + 0.8;
 		// smaller ghosts concentrate the same reflected energy: brighter
 		ghosts += body * rim * vec3f( ${ g.tint.map( f ).join( ', ' ) } ) * ${ f( g.k * 0.0028 / ( g.r * g.r ) ) };
 	}`;
@@ -158,7 +159,8 @@ ${ ghosts }
 
 	// halo: dispersive ring about the image centre
 	let rc = length( p );
-	let halo = vec3f( smoothstep( 0.03, 0.0, abs( rc - 0.43 ) ), smoothstep( 0.03, 0.0, abs( rc - 0.445 ) ), smoothstep( 0.03, 0.0, abs( rc - 0.46 ) ) ) * smoothstep( 0.25, 0.8, length( s ) ) * 0.12;
+	// (kept faint and soft: at 0.12 with a 0.03 edge it drew a hard rainbow ring across the frame)
+	let halo = vec3f( smoothstep( 0.06, 0.0, abs( rc - 0.43 ) ), smoothstep( 0.06, 0.0, abs( rc - 0.445 ) ), smoothstep( 0.06, 0.0, abs( rc - 0.46 ) ) ) * smoothstep( 0.25, 0.8, length( s ) ) * 0.025;
 
 	// starburst and veiling glare around the sun
 	let q = p - s;
@@ -169,7 +171,8 @@ ${ ghosts }
 	let glow = exp( rq * -5.0 ) * 0.05 + exp( rq * -40.0 ) * 0.4;
 	let burst = spikes + fine + glow;
 
-	return light * ( ghosts * offAxis + halo + vec3f( burst ) );
+	// ghosts at about a third of their former energy: subtle reflections, as through coated optics
+	return light * ( ghosts * offAxis * 0.35 + halo + vec3f( burst ) );
 }
 `,
 		} );

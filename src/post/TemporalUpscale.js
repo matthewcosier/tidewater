@@ -40,6 +40,9 @@ function halton( index, base ) {
 
 const HALTON = Array.from( { length: 32 }, ( _, i ) => [ halton( i + 1, 2 ), halton( i + 1, 3 ) ] );
 
+const CUT_DISTANCE = 20; // m moved in one frame that counts as a cut (a car at 300 km/h covers 1.4 m)
+const SOFT_FRAMES = 4;
+
 export class TemporalUpscale {
 
 	constructor( beauty, depthTexture, velocityTexture, camera, waterMaskTexture = null ) {
@@ -59,6 +62,10 @@ export class TemporalUpscale {
 			edgeDepthDiff: [ 'f32', 0.001 ],
 			maxVelocityLength: [ 'f32', 128 ],
 			hasWaterMask: [ 'f32', waterMaskTexture ? 1 : 0 ],
+			// 1 on a camera cut, easing to 0 over SOFT_FRAMES: the current frame is reconstructed with a
+			// wide (bilinear-like) kernel, so the one-frame, near-nearest reconstruction of the half-res
+			// frame is not what the history starts from (palm fronds and foliage read as blocks)
+			softStart: [ 'f32', 0 ],
 		}, { label: 'taau' } );
 		const U = this.uniforms.fields;
 		this.frameWeight = U.frameWeight;
@@ -183,6 +190,20 @@ fn taauDepthAt( p: vec2i ) -> f32 {
 	return 1.0 - textureLoad( taauDepth, clamp( p, vec2i( 0 ), s - 1 ), 0 );
 }
 
+// Motion (uv, current - previous, y down) that the camera alone gives the opaque surface at input
+// texel p: its world position from the depth (jittered camera: the texel centre is where it was
+// rasterized), reprojected with this and last frame's unjittered cameras, as a static mesh writes it.
+fn taauCameraMotion( p: vec2i ) -> vec2f {
+	let s = vec2i( textureDimensions( taauDepth ) );
+	let q = clamp( p, vec2i( 0 ), s - 1 );
+	let uv = ( vec2f( q ) + 0.5 ) / vec2f( s );
+	let pw = frame.invViewProj * vec4f( uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, textureLoad( taauDepth, q, 0 ), 1.0 );
+	let world = vec4f( pw.xyz / select( pw.w, 1e-6, abs( pw.w ) < 1e-6 ), 1.0 );
+	let c = frame.viewProjNoJitter * world;
+	let o = frame.prevViewProjNoJitter * world;
+	return ( c.xy / max( c.w, 1e-6 ) - o.xy / max( o.w, 1e-6 ) ) * vec2f( 0.5, -0.5 );
+}
+
 // last frame's depth at uv, reprojected into this frame's camera (standard perspective depth)
 fn taauPreviousDepth( uv: vec2f ) -> f32 {
 	let s = vec2i( textureDimensions( taauPrevDepth ) );
@@ -221,7 +242,9 @@ fn fragment( in: FSIn ) -> vec4f {
 
 	// reproject using the velocity at the dilated depth tap
 	let vs = vec2i( textureDimensions( taauVelocity ) );
-	let offsetUV = textureLoad( taauVelocity, clamp( closestPositionTexel, vec2i( 0 ), vs - 1 ), 0 ).xy;
+	// xy: uv motion; z: 1 on deforming (skinned) surfaces (MeshShader)
+	let velocityTap = textureLoad( taauVelocity, clamp( closestPositionTexel, vec2i( 0 ), vs - 1 ), 0 );
+	let offsetUV = velocityTap.xy;
 	let historyUV = uvNode - offsetUV;
 	let previousDepth = taauPreviousDepth( historyUV );
 
@@ -247,7 +270,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		for ( var x = -1; x <= 1; x++ ) {
 			let tap = closestTap + vec2i( x, y );
 			let delta = pIn - ( vec2f( tap ) + ( vec2f( 0.5 ) + taau.jitterOffset ) );
-			let w = exp( dot( delta, delta ) * -2.29 );
+			let w = exp( dot( delta, delta ) * mix( -2.29, -0.7, taau.softStart ) );
 			let c = max( taauLoadBeauty( tap ), vec4f( 0.0 ) );
 			sumColor += c * w;
 			sumWeight += w;
@@ -274,7 +297,18 @@ fn fragment( in: FSIn ) -> vec4f {
 	let isDepthChanged = abs( closestDepth - previousDepth ) > taau.depthThreshold;
 	let canLock = isValidUV && ! isDepthChanged;
 	let gatedThinFeature = select( 0.0, thinFeature, canLock );
-	let lock = sat( gatedThinFeature );
+	// The lock is for static thin geometry under the camera jitter. On a surface that moves on its own
+	// (its motion differs from what the camera alone gives at that depth: arms, hat brims, the bird, a
+	// boat) or deforms (skinned), last frame's pixel is not this one (a limb that just uncovered the
+	// torso, a flapping wing): the unclipped history bleeds through as see-through ghosts and smears.
+	// Those keep the variance clip. Skinned surfaces (velocity z = 1) drop it at a much smaller motion:
+	// a torso bobbing along under a swinging arm is where that arm was. Static geometry (and
+	// wind-swayed foliage, whose motion vectors are the camera's) and a person standing still keep the
+	// lock, so wires, masts, leaves and a patterned shirt do not start flickering again.
+	let ownMotion = length( ( offsetUV - taauCameraMotion( closestPositionTexel ) ) * inputSizeF );
+	let deforming = sat( velocityTap.z );
+	let lockMotion = 1.0 - smoothstep( mix( 0.25, 0.04, deforming ), mix( 1.0, 0.2, deforming ), ownMotion );
+	let lock = sat( gatedThinFeature ) * lockMotion;
 	let lockedHistoryColor = mix( clippedHistoryColor, historyColor, lock );
 
 	// fast camera motion trusts the current frame more; capped on water, whose fine detail shimmers under the jitter
@@ -307,6 +341,23 @@ fn fragment( in: FSIn ) -> vec4f { return textureSampleLevel( taauBeauty, smpLin
 		if ( ! this._hasPrevInvVP ) U.prevInvViewProj.value.copy( F.invViewProj.value );
 		this._hasPrevInvVP = true;
 
+		// camera cut (teleport, free-camera jump, respawn): the old history and reprojection are
+		// meaningless. Restart from a bilinear seed of this frame with an identity reprojection, and
+		// soften the current-frame reconstruction for a few frames while the history refills.
+		const cp = F.cameraPos.value, lc = this._lastCam;
+		if ( lc && Math.hypot( cp.x - lc[ 0 ], cp.y - lc[ 1 ], cp.z - lc[ 2 ] ) > CUT_DISTANCE ) this._cut = true;
+		this._lastCam = [ cp.x, cp.y, cp.z ];
+		if ( this._cut ) {
+
+			this._cut = false;
+			this._needsRestart = true;
+			U.prevInvViewProj.value.copy( F.invViewProj.value );
+			this._soft = SOFT_FRAMES;
+
+		}
+		U.softStart.value = this._soft > 0 ? this._soft / SOFT_FRAMES : 0;
+		if ( this._soft > 0 ) this._soft --;
+
 		// the previous-depth copy follows the scene depth size (resized before anything binds it this frame)
 		const sd = this.depthTexture;
 		if ( this._prevDepth.width !== sd.width || this._prevDepth.height !== sd.height ) {
@@ -334,6 +385,13 @@ fn fragment( in: FSIn ) -> vec4f { return textureSampleLevel( taauBeauty, smpLin
 	}
 
 	// after the frame's passes are recorded: this frame's (jittered) camera becomes the previous one
+	// call after any camera jump the distance test cannot see (a cut to a nearby but different view)
+	reset() {
+
+		this._cut = true;
+
+	}
+
 	endFrame() {
 
 		// the uniform block is uploaded when bound (this frame's value is already packed), so the next

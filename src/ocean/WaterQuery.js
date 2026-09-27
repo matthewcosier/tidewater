@@ -1,7 +1,10 @@
 import { G, StorageBuffer, ShaderModule, ComputeKernel, Readback } from '../engine/webgpu.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
 
-export const MAX_QUERIES = 64;
+// 128: the island's gameplay points had taken all of the first 64 (boat hull, rally car, jetskis, wildlife...),
+// so a slot asked for later (the jetski mate) threw and fell back to someone else's height. The kernel runs
+// one 64-wide workgroup per 64 slots in use; the readback is 2 KB.
+export const MAX_QUERIES = 128;
 
 // Water surface queries on the GPU.
 //   - slot 0 is always the camera (consumed the same frame by the waterline/underwater passes)
@@ -164,7 +167,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 		if ( this.slots.has( name ) ) return this.slots.get( name ).start;
 		const start = this.count;
-		if ( start + n > MAX_QUERIES ) throw new Error( 'WaterQuery: out of slots' );
+		if ( start + n > MAX_QUERIES ) throw new Error( `WaterQuery: out of slots ('${ name }' wants ${ n }, ${ MAX_QUERIES - start } left)` );
 		this.slots.set( name, { start, n } );
 		this.count += n;
 		return start;
@@ -195,7 +198,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 		// built on first use: the wake / shore attached to the surface after construction are included
 		if ( ! this.kernel ) this._build();
 		this.inputBuffer.write( this.inputs );
-		this.kernel.dispatch( 1 );
+		this.kernel.dispatch( Math.ceil( this.count / 64 ) ); // every slot allocated so far, late ones included
 
 		if ( ! this._pending ) {
 

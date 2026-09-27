@@ -287,7 +287,7 @@ struct FragOut {
 		so.color = vec4f( mat.color * in.color.rgb * hookEnvDiffuse( in.N ) * hookAmbientModulation( in.P, in.N ), 1.0 );
 		let cur0 = vs.curClip.xy / vs.curClip.w;
 		let prev0 = vs.prevClip.xy / vs.prevClip.w;
-		so.velocity = vec4f( ( cur0 - prev0 ) * vec2f( 0.5, -0.5 ), 0.0, 1.0 );
+		so.velocity = vec4f( ( cur0 - prev0 ) * vec2f( 0.5, -0.5 ), DEFORMING_F, 1.0 );
 		so.mask = vec4f( 0.0 );
 		return so;
 	}
@@ -300,6 +300,7 @@ struct FragOut {
 	s.clearcoatNormal = normalize( s.clearcoatNormal );
 	var r: FragResult;
 #if LIT
+	s.roughness = specularAntiAlias( s.normal, s.roughness );
 	r.color = vec4f( shadeSurface( s, in.P, in.V, in.pixel ), s.alpha );
 #else
 	r.color = vec4f( s.albedo + s.emissive, s.alpha );
@@ -307,7 +308,8 @@ struct FragOut {
 #if PASS_MAIN
 	let cur = vs.curClip.xy / vs.curClip.w;
 	let prev = vs.prevClip.xy / vs.prevClip.w;
-	r.velocity = vec4f( ( cur - prev ) * vec2f( 0.5, -0.5 ), 0.0, 1.0 );
+	// z = 1 on deforming (skinned) surfaces: the TAA keeps its variance clip there (no thin-feature lock)
+	r.velocity = vec4f( ( cur - prev ) * vec2f( 0.5, -0.5 ), DEFORMING_F, 1.0 );
 #else
 	r.velocity = vec4f( 0.0 );
 #endif
@@ -322,9 +324,17 @@ struct FragOut {
 	// the fragment owns the motion of its pixel even when its colour is blended (AirMotes specks)
 	let a = VELOCITY_WEIGHT;
 #else
+#if VELOCITY_COVERAGE
+	// thin particles (spray, the rooster tail, the rocket flame): most of a pixel's colour under a
+	// faint one is what is behind it (the hull, the rider), so it keeps that motion; a particle claims
+	// the pixel's motion only as it becomes opaque (a coverage-weighted blend let faint, fast spray drag
+	// the hull's reprojection onto the water: a speckled, see-through hull under TAA)
+	let a = smoothstep( 0.4, 0.9, r.color.a ) * VELOCITY_WEIGHT;
+#else
 	let a = select( 1.0, r.color.a, TRANSPARENT_F ) * VELOCITY_WEIGHT;
 #endif
-	out.velocity = vec4f( r.velocity.xy * a, 0.0, a );
+#endif
+	out.velocity = vec4f( r.velocity.xy * a, r.velocity.z * a, a );
 #else
 	out.velocity = r.velocity;
 #endif
@@ -344,6 +354,7 @@ struct FragOut {
 		.replace( 'fn fragInput(', shadowHook + 'fn fragInput(' )
 		.replace( /\bTRANSPARENT_F\b/g, material.transparent ? 'true' : 'false' )
 		.replace( /\bVELOCITY_WEIGHT\b/g, fmt( material.velocityWeight ) )
+		.replace( /\bDEFORMING_F\b/g, has.has( 'skinIndex' ) ? '1.0' : '0.0' )
 		.replace( /\bREFRACTION_CLIP_MARGIN\b/g, fmt( ( pass.defines && pass.defines.REFRACTION_CLIP_MARGIN ) ?? 0 ) );
 
 	// modules: lighting (with the installed hooks) for colour passes, or whenever a material module needs it

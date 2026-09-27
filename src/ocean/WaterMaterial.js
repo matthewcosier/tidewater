@@ -254,7 +254,11 @@ ${ hasClip ? `	if ( vDepth < 1.0 ) {
 	let trail = smoothstep( -0.01, 0.25, frontD ) * smoothstep( 2.2, 0.3, frontD );
 	// patchy along the front (dense bunches and thin stretches), not an even white rope
 	let edgePatch = ${ hasClip ? 'smoothstep( -0.45, 0.55, perlin2( pos.xz * 0.42 ) ) * 0.7 + smoothstep( -0.3, 0.6, perlin2( pos.xz * 1.7 + vec2f( 3.1, 7.7 ) ) ) * 0.3' : '1.0' };
-	let edgeFoam = ( bead * mix( 0.45, 1.1, uprush ) * mix( 0.35, 1.0, edgePatch ) + trail * mix( 0.12, 0.4, uprush ) * edgePatch ) * smoothstep( 0.0, 1.0, swRt ) * smoothstep( 0.4, -0.2, vDepth );
+	// lace: the foam behind the bead is a web of threads, not a sheet, and the bead itself thins as the
+	// sheet runs up and slows
+	let lace = ${ hasClip ? 'smoothstep( 0.16, 0.02, abs( perlin2( pos.xz * 1.9 + vec2f( 1.3, 5.9 ) ) ) ) * 0.6 + smoothstep( 0.12, 0.0, abs( perlin2( pos.xz * 4.3 + vec2f( 7.1, 2.3 ) ) ) ) * 0.4' : '1.0' };
+	let thin = mix( 1.0, 0.4, smoothstep( 0.05, 0.4, swTau ) );
+	let edgeFoam = ( bead * thin * mix( 0.45, 1.1, uprush ) * mix( 0.35, 1.0, edgePatch ) * mix( 0.5, 1.0, lace ) + trail * mix( 0.12, 0.4, uprush ) * edgePatch * lace ) * smoothstep( 0.0, 1.0, swRt ) * smoothstep( 0.4, -0.2, vDepth );
 	// the meniscus: the last decimetre of the sheet bends down to the sand
 	let lipW = 1.0 - smoothstep( 0.0, 0.14, frontD );
 
@@ -378,42 +382,72 @@ ${ T ? `		let L0 = max( pos.y - terrainHeightAt( pos.xz ), 0.0 ) / tDown;
 		let ndcEnd = clipEnd.xy / max( clipEnd.w, 1e-4 );
 		let uvR = vec2f( ndcEnd.x * 0.5 + 0.5, ndcEnd.y * -0.5 + 0.5 );
 		let onScreen = all( uvR > vec2f( 0.0 ) ) && all( uvR < vec2f( 1.0 ) );
-		var uvF = screenUV;
-		var dR = sceneDepthC;
 		var sceneCol = vec3f( 0.0 );
-		var found = false;
+		// what the refracted ray sees: colour, screen position and view depth, weighted (front to back:
+		// the refraction candidates below, then the opaque copy takes the weight left in rest)
+		var uvF = vec2f( 0.0 );
+		var vzR = 0.0;
+		var rest = 1.0;
 #if WATER_REFRACTION
 		// the scene below the water only (RefractionPass): nothing above the water (pier, rails, posts,
 		// the boat) can hide the refracted end point. Coverage in alpha: bilinear across its edge, then
 		// un-premultiplied, so the clip boundary blends instead of darkening.
 		// (an end point off screen takes the nearest edge texel: the opaque pass shades deep seabed
 		// cheaply, see MeshShader submergedHidden, so the unrefracted pixel is no fallback there)
+		// A sample only counts where it lies behind this water surface. The source keeps fragments up
+		// to 0.4 m above sea level (a hull's waterline band: the ragged fringe round a moored jetski),
+		// and at grazing angles the end point lands on nearer seabed (the lip of a reef drop-off:
+		// the path through the water comes out metres wrong, a row of dark dashes). The test is
+		// filtered, each of the four depth texels tested and weighted bilinearly, so it has no half-res
+		// stair-steps; where it fails, shorter offsets toward this pixel are tried before the opaque copy.
 		{
-			let uvRc = clamp( uvR, vec2f( 0.001 ), vec2f( 0.999 ) );
-			let rc = textureSampleLevel( waterRefrColor, smpLinearClamp, uvRc, 0.0 );
 			let rSize = vec2f( textureDimensions( waterRefrDepth ) );
-			let rd = textureLoad( waterRefrDepth, vec2i( min( uvRc * rSize, rSize - 1.0 ) ), 0 ).x;
-			if ( rc.a > 0.5 && rd > 0.0 ) {
-				sceneCol = rc.rgb / rc.a;
-				uvF = uvRc;
-				dR = rd;
-				found = true;
+			let rMax = vec2i( rSize ) - 1;
+			for ( var k = 0; k < 3; k ++ ) {
+				if ( rest < 0.01 ) { break; }
+				let fK = select( select( 0.2, 0.5, k == 1 ), 1.0, k == 0 );
+				let uvK = clamp( mix( screenUV, uvR, fK ), vec2f( 0.001 ), vec2f( 0.999 ) );
+				let rc = textureSampleLevel( waterRefrColor, smpLinearClamp, uvK, 0.0 );
+				if ( rc.a <= 0.5 ) { continue; }
+				let tc = uvK * rSize - 0.5;
+				let i0 = vec2i( floor( tc ) );
+				let fw = tc - floor( tc );
+				var wv = 0.0;
+				var vz = 0.0;
+				for ( var j = 0; j < 4; j ++ ) {
+					let o = vec2i( j & 1, j >> 1u );
+					let d = textureLoad( waterRefrDepth, clamp( i0 + o, vec2i( 0 ), rMax ), 0 ).x;
+					let vd = viewDepth( d );
+					let w = select( 1.0 - fw.x, fw.x, o.x == 1 ) * select( 1.0 - fw.y, fw.y, o.y == 1 );
+					let ok = d > 0.0 && surfViewZ + vd > 0.05;
+					wv += select( 0.0, w, ok );
+					vz += select( 0.0, w * vd, ok );
+				}
+				if ( wv <= 0.0 ) { continue; }
+				let take = rest * wv;
+				sceneCol += take * rc.rgb / rc.a;
+				uvF += take * uvK;
+				vzR += take * vz / wv;
+				rest -= take;
 			}
 		}
 #endif
-		if ( ! found ) {
+		if ( rest >= 0.01 ) {
 			// nothing under the water there (shallows above the clip height, off screen): the opaque copy,
 			// where the refracted sample lies behind the water surface, else the unrefracted pixel
 			let dO = _waterSceneDepthAt( uvR );
 			let valid = onScreen && surfViewZ + viewDepth( dO ) > 0.05;
-			uvF = select( screenUV, uvR, valid );
-			dR = select( sceneDepthC, dO, valid );
-			sceneCol = textureSampleLevel( waterSceneColor, smpLinearClamp, uvF, 0.0 ).rgb;
+			let uvO = select( screenUV, uvR, valid );
+			sceneCol += rest * textureSampleLevel( waterSceneColor, smpLinearClamp, uvO, 0.0 ).rgb;
+			uvF += rest * uvO;
+			vzR += rest * viewDepth( select( sceneDepthC, dO, valid ) );
 		}
+		let wSum = 1.0 - max( rest, 0.0 ) * select( 0.0, 1.0, rest < 0.01 );
+		sceneCol /= wSum; uvF /= wSum; vzR /= wSum;
 		sceneCol = select( sceneCol, skyReflectionRadiance( normalize( vec3f( Tv.x, max( abs( Tv.y ), 0.03 ), Tv.z ) ) ), thruCrest );
 
 		// objects in front of the sea floor (pylons, rocks, reef) shorten the path
-		let qView = viewPositionFromViewZ( uvF, - viewDepth( dR ) );
+		let qView = viewPositionFromViewZ( uvF, - vzR );
 		let qDist = length( qView - posV );
 		var pathLen = clamp( min( Lter, qDist ), 0.0, 400.0 );
 		pathLen = min( pathLen, crestT );
