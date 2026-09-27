@@ -1,5 +1,6 @@
 import { Quaternion, Euler } from '../engine/index.js';
 import { cloneVehicle } from './VehicleModel.js';
+import { CarLights } from './CarLights.js';
 import { RoomClient } from './RoomClient.js';
 import { VEHICLES } from './Vehicles.js';
 import { SocialPanel } from './SocialPanel.js';
@@ -111,6 +112,7 @@ export class SharedDrive {
 
 	remove( id ) {
 		const peer = this.peers.get( id ); if ( ! peer ) return;
+		peer.lights?.dispose();
 		this.app.scene.remove( peer.model.root );
 		this.rally.tracks.reset( id ); this.rally.physics.remove_remote( peer.slot + 1 );
 		peer.row?.remove(); this.peers.delete( id );
@@ -128,6 +130,11 @@ export class SharedDrive {
 			if ( ! this.sample( peer, now - ( peer.offset ?? 0 ) - DELAY ) ) continue;
 			const s = peer.visual;
 			peer.model.root.position.fromArray( s ); peer.model.root.quaternion.copy( this.q );
+			// lamps on while driven; brake lights from the car slowing (the pedals are not sent)
+			peer.lights ??= new CarLights( this.app.localLights, peer.model.root );
+			const speed = Math.abs( s[ 7 ] ), slowing = dt > 0 && peer.speed !== undefined ? ( peer.speed - speed ) / dt : 0;
+			peer.speed = speed;
+			peer.lights.update( dt, true, slowing > 3 && speed > 0.5 ? 1 : 0 );
 			const profile = VEHICLES[ peer.vehicle ];
 			for ( let wheel = 0; wheel < 4; wheel ++ ) {
 				const index = 13 + wheel * 4;

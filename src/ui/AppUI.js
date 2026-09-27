@@ -4,6 +4,7 @@ import { icon } from './icons.js';
 import { ON_FOOT } from '../player/Player.js';
 import { G } from '../core/Globals.js';
 import { GroundBounce } from '../materials/GroundBounce.js';
+import { DAY_RATE, NIGHT_X } from '../sky/DayClock.js';
 
 // Binds the Tidewater UI (panel + HUD) to the running app.
 const SEA = {
@@ -38,7 +39,7 @@ export class AppUI {
 			caustics: app.caustics ? app.caustics.strength.value : 1,
 			time: app.settings.timeOfDay,
 			advance: app.settings.timeSpeed !== 0,
-			timeSpeed: app.settings.timeSpeed || 0.05,
+			timeSpeed: app.settings.timeSpeed || DAY_RATE,
 			clouds: app.clouds ? app.clouds.coverage.value : 0.45,
 			cirrus: app.clouds && app.clouds.cirrus ? app.clouds.cirrus.value : 0.5,
 			exposure: 0,
@@ -165,7 +166,7 @@ export class AppUI {
 			speed.setVisible( v );
 
 		} } );
-		speed = sun.addSlider( { label: 'Time speed', object: s, key: 'timeSpeed', min: 0.002, max: 1, log: true, unit: 'h/s', onChange: ( v ) => { if ( s.advance ) app.settings.timeSpeed = v; } } ).setVisible( s.advance );
+		speed = sun.addSlider( { label: 'Time speed', object: s, key: 'timeSpeed', min: 0.002, max: 1, log: true, unit: 'h/s', tooltip: `Game hours per real second in daylight. Deep night runs ${ NIGHT_X } times faster.`, onChange: ( v ) => { if ( s.advance ) app.settings.timeSpeed = v; } } ).setVisible( s.advance );
 		const atmo = sky.addFolder( 'Atmosphere', { icon: 'cloud' } );
 		if ( app.clouds ) atmo.addSlider( { label: 'Cloud cover', object: s, key: 'clouds', min: 0, max: 1, step: 0.01, format: ( v ) => `${ Math.round( v * 100 ) }%`, onChange: ( v ) => { app.clouds.coverage.value = v; } } );
 		if ( app.clouds && app.clouds.cirrus ) atmo.addSlider( { label: 'Cirrus', object: s, key: 'cirrus', min: 0, max: 1, step: 0.01, format: ( v ) => `${ Math.round( v * 100 ) }%`, onChange: ( v ) => { app.clouds.cirrus.value = v; } } );

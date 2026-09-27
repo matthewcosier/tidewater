@@ -2,7 +2,7 @@
 import { FISH, FISH_IDS, fishValue, fishLengthCm } from '../src/game/FishTable.js';
 import { habitatAt, pickSpecies, rollWeight, biteDelay } from '../src/game/Bites.js';
 import { CatchMinigame } from '../src/game/CatchMinigame.js';
-import { GameState, STARTING_MONEY, STARTING_BANK, DAILY_LIMIT, withdrawMessage } from '../src/game/GameState.js';
+import { GameState, STARTING_MONEY, STARTING_BANK, DAILY_LIMIT, withdrawMessage, randomPin, isPin, isWeakPin } from '../src/game/GameState.js';
 import { gearStats, defaultUpgrades, UPGRADES } from '../src/game/Gear.js';
 
 let fails = 0;
@@ -229,6 +229,24 @@ ok( Object.keys( defaultUpgrades() ).length === Object.keys( UPGRADES ).length &
 	s3.withdraw( 200 );
 	const s4 = new GameState( { getItem: ( k ) => old.get( k ) ?? null, setItem: () => {} } );
 	ok( s4.load() && s4.bank === 800 && s4.money === 212, 'the opening balance is only paid once' );
+	// the card PIN: random per game, 4 digits, never a weak one, kept in the save
+	const m0 = new Map(), g0 = new GameState( { getItem: ( k ) => m0.get( k ) ?? null, setItem: ( k, v ) => m0.set( k, v ) } );
+	g0.withdraw( 20 );
+	ok( isPin( g0.pin ) && JSON.parse( m0.get( 'tidewater.save.v1' ) ).pin === g0.pin, 'a new game has a random 4 digit PIN, saved with the game' );
+	ok( [ '0000', '7777', '1112', '1234', '9876', '0123', '3210' ].every( isWeakPin ) && ! isWeakPin( '7291' ) && ! isWeakPin( '1357' ), 'repeated digits and straight runs are weak' );
+	const pins = new Set();
+	for ( let i = 0; i < 400; i ++ ) pins.add( randomPin() );
+	ok( pins.size > 300 && [ ...pins ].every( isPin ), 'PINs vary from game to game and are never weak' );
+	const seq = [ 0.1234, 0.0000, 0.5555, 0.7291 ];
+	ok( randomPin( () => seq.shift() ) === '7291', 'a weak draw is drawn again' );
+	const again2 = new GameState( store );
+	ok( again2.load() && again2.pin === again.pin, 'the PIN persists in the save' );
+	ok( s3.pin && isPin( s3.pin ) && JSON.parse( old.get( 'tidewater.save.v1' ) ).pin === s3.pin, 'a save without a PIN gets a new random one, saved straight away' );
+	ok( s4.pin === s3.pin, 'and keeps it on the next load' );
+	const before2 = again2.pin;
+	let fresh = 0;
+	for ( let i = 0; i < 5; i ++ ) { again2.reset(); if ( again2.pin !== before2 ) fresh ++; }
+	ok( fresh >= 4 && isPin( again2.pin ), 'a new game draws a new PIN' );
 
 }
 console.log( `value check ${ value }` );

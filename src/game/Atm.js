@@ -4,11 +4,10 @@ import { checkNotes, withdrawMessage } from './GameState.js';
 
 // Tidewater Community Bank ATMs (public/models/atm.glb, tools/props/atm_build.py): one by Marta's chandlery,
 // one on the Joey Island shopfront between the gift shop and the tackle shop. Walk up, "E Use ATM" opens the
-// ATM screen: insert the card, key the PIN, then withdraw (GameState.withdraw moves bank to pocket) or check
+// ATM screen: insert the card, key the PIN (GameState.pin, random per game, on the HUD's card chip), then withdraw (GameState.withdraw moves bank to pocket) or check
 // the balance. Three wrong PINs and the card is retained for RETAIN_S seconds of play, then handed back.
 // While the screen is up it takes every key press first, so WASD, numbers and the game's shortcuts go to the
 // ATM and not to the player. Without a DOM (headless) the machines still stand and block, and E says so.
-export const ATM_PIN = '3084';
 export const PIN_TRIES = 3;
 export const RETAIN_S = 60;
 export const QUICK_AMOUNTS = [ 20, 50, 100, 200 ];
@@ -484,7 +483,7 @@ export class AtmNetwork {
 
 		}
 
-		if ( this.pin === ATM_PIN ) {
+		if ( this.pin === this.game.state.pin ) {
 
 			this.tries = 0;
 			this.pin = '';

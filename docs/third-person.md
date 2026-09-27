@@ -11,7 +11,7 @@ their own character from over the shoulder, or wear it in first person.
   "Third person" or "First person". It shows only while on foot.
 - In third person the mouse orbits (it is the same look as first person), the scroll wheel zooms
   from 1.5 to 8 m, and W moves along the camera's heading.
-- The choice is remembered per browser (`localStorage['tidewater.view']`, default first person).
+- The choice is remembered per browser (`localStorage['tidewater.view']`). A new player, or a browser that blocks storage, starts in third person.
 
 ## Files
 

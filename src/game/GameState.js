@@ -22,6 +22,31 @@ export function checkNotes( amount ) {
 
 }
 
+// the bank card's 4 digit PIN: random per game and kept in the save. Weak PINs are drawn again: a digit
+// used three or more times (0000, 1112) and straight runs up or down (1234, 9876).
+export function isWeakPin( pin ) {
+
+	const d = [ ...pin ].map( Number ), count = new Map();
+	for ( const x of d ) count.set( x, ( count.get( x ) || 0 ) + 1 );
+	if ( Math.max( ...count.values() ) >= 3 ) return true;
+	const step = d[ 1 ] - d[ 0 ];
+	return Math.abs( step ) === 1 && d.every( ( x, i ) => i === 0 || x - d[ i - 1 ] === step );
+
+}
+
+export const isPin = ( pin ) => typeof pin === 'string' && /^[0-9]{4}$/.test( pin ) && ! isWeakPin( pin );
+
+export function randomPin( random = Math.random ) {
+
+	for ( ;; ) {
+
+		const pin = String( Math.floor( random() * 10000 ) ).padStart( 4, '0' );
+		if ( isPin( pin ) ) return pin;
+
+	}
+
+}
+
 const dollars = ( n ) => `$${ Math.max( 0, n ).toLocaleString( 'en-AU' ) }`;
 
 // what the ATM screen says for each refusal (`info`: { bank, left } at the time)
@@ -50,6 +75,7 @@ export class GameState {
 		this.storage = storage;
 		this.money = STARTING_MONEY;
 		this.bank = STARTING_BANK;
+		this.pin = randomPin(); // the ATM card's PIN (the HUD shows it)
 		// taken out of the bank on game day `day` (kept for the session only; Game counts the days)
 		this.withdrawn = { day: 0, total: 0 };
 		this.inventory = []; // { id, species, kg, cm, value, caughtAt (game hours), record }
@@ -273,7 +299,7 @@ export class GameState {
 
 	toJSON() {
 
-		return { v: 1, purse: true, money: this.money, bank: this.bank, inventory: this.inventory, log: this.log, upgrades: this.upgrades, fuel: this.fuel, souvenirs: this.souvenirs, nextId: this._nextId };
+		return { v: 1, purse: true, money: this.money, bank: this.bank, pin: this.pin, inventory: this.inventory, log: this.log, upgrades: this.upgrades, fuel: this.fuel, souvenirs: this.souvenirs, nextId: this._nextId };
 
 	}
 
@@ -282,6 +308,9 @@ export class GameState {
 		if ( ! d || d.v !== 1 ) return false;
 		this.money = ( Number.isFinite( d.money ) ? d.money : 0 ) + ( d.purse ? 0 : STARTING_MONEY );
 		this.bank = Number.isFinite( d.bank ) ? d.bank : STARTING_BANK;
+		// a save without a PIN gets a new random one (load() saves it straight away)
+		this.pinMinted = ! isPin( d.pin );
+		this.pin = this.pinMinted ? randomPin() : d.pin;
 		this.inventory = Array.isArray( d.inventory ) ? d.inventory.filter( ( f ) => f && FISH[ f.species ] && Number.isFinite( f.kg ) ) : [];
 		// saves from before lengths were recorded
 		for ( const f of this.inventory ) if ( ! Number.isFinite( f.cm ) ) f.cm = Math.round( fishLengthCm( f.species, f.kg ) );
@@ -312,7 +341,9 @@ export class GameState {
 		try {
 
 			const raw = this.storage.getItem( SAVE_KEY );
-			return raw ? this.fromJSON( JSON.parse( raw ) ) : false;
+			const ok = raw ? this.fromJSON( JSON.parse( raw ) ) : false;
+			if ( ok && this.pinMinted ) this.save();
+			return ok;
 
 		} catch ( e ) {
 
@@ -326,6 +357,7 @@ export class GameState {
 
 		this.money = STARTING_MONEY;
 		this.bank = STARTING_BANK;
+		this.pin = randomPin();
 		this.withdrawn = { day: 0, total: 0 };
 		this.inventory = [];
 		this.log = {};

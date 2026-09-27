@@ -54,6 +54,16 @@ meshes and `driving/input.rs` (`DriveIntent`), whose SHA-256 hashes are in
   the next 1.6 s, comes within 2.3 m of the car's next 9 m of road, and no car
   starts aboard while the player's car is moving in the lanes or aboard.
 
+## Car lights
+
+`src/rally/CarLights.js` gives each drivable car (the Aster RS and the Black Jeep) and every remote car in shared driving:
+
+- two headlight spot lights at the front of the headlamp lenses, aimed slightly down the road (`LAMPS.head`, 60 m range, 9 to 24 degree cone);
+- a small red point light behind the car for the tail lights, three times brighter while braking;
+- glowing lenses: the Aster's `Headlamp` and `TailLamp` materials, the Jeep's `LEDLens` and `RearLED`. Each car draws its own copies of those materials, so one car's brake lights never light another's.
+
+Head and tail lights come on from dusk on the island lamps' ramp (`smooth( G.night, 0.15, 0.75 )`, the same as `src/materials/LocalLights.js`) while someone drives the car or it coasts after a bail-out; brake lenses glow day and night under the brake key or trigger. Remote cars have no pedal data, so their brake lights follow deceleration (over 3 m/s² while moving). The spots share LocalLights' eight nearest-to-camera slots with the island lamps.
+
 ## Car dock
 
 The start screen offer ends for good on the first walk of 4 m, a drive, the free camera, any

@@ -6,6 +6,7 @@ import { VEHICLES } from './Vehicles.js';
 import { TyreTracks } from './TyreTracks.js';
 import { EngineSound } from './EngineSound.js';
 import { SharedDrive } from './SharedDrive.js';
+import { CarLights } from './CarLights.js';
 import { DriveHUD } from './DriveHUD.js';
 import { clearSpawn, recoverySpot } from './Spawn.js';
 import { CarWater } from './CarWater.js';
@@ -112,6 +113,8 @@ export class RallyDrive {
 		scene.add( aster.root );
 		scene.add( jeep.root );
 		jeep.root.visible = false;
+		// head, tail and brake lights (before the damage rig, which draws the lenses these give each car)
+		this.lights = { aster: new CarLights( this.app.localLights, aster.root ), jeep: new CarLights( this.app.localLights, jeep.root ) };
 		this.tracks = new TyreTracks( scene, terrain );
 		this.damage = new Damage( this );
 		this.cameraColliders = new Colliders();
@@ -331,6 +334,7 @@ export class RallyDrive {
 		this.water?.update( this.model.root, this.forward, this.profile );
 		this.physics.advance( dt, throttle, brake, steer, handbrake );
 		this.syncModel( dt );
+		for ( const [ key, lights ] of Object.entries( this.lights || {} ) ) lights.update( dt, key === this.vehicleKey && ( this.active || this.coasting ), brake );
 		this.damage?.update( dt );
 		this.water?.splash( dt, this.drawn, this.model.root, this.forward, this.profile );
 		this.tracks.tick( dt );

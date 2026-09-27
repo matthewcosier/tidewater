@@ -28,7 +28,7 @@ const _wish = new THREE.Vector3();
 const DECK_RADIUS = 0.24;
 const DECK_STEP = 0.36; // highest ledge you step up onto
 const HELM_REACH = 0.75; // m from the helm seat to take the wheel
-// on foot: first person, or over the shoulder (V, or the HUD button); remembered per browser
+// on foot: over the shoulder (the default), or first person (V, or the HUD button); remembered per browser
 export const ON_FOOT = new Set( [ 'walk', 'swim', 'deck', 'ferry' ] );
 const VIEW_KEY = 'tidewater.view';
 // the ragdoll (src/player/Ragdoll.js): the modes it can start from (not aboard the ferry or the boat:
@@ -40,11 +40,11 @@ function loadView() {
 
 	try {
 
-		return localStorage.getItem( VIEW_KEY ) === 'third' ? 'third' : 'first';
+		return localStorage.getItem( VIEW_KEY ) === 'first' ? 'first' : 'third';
 
 	} catch ( e ) {
 
-		return 'first';
+		return 'third';
 
 	}
 

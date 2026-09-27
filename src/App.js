@@ -71,6 +71,7 @@ import { Terminal, applyTerminalSite, PLACES } from './ferry/Terminal.js';
 import { Game } from './game/Game.js';
 import { STAND } from './game/FishStand.js';
 import { CHANDLERY } from './game/Chandlery.js';
+import { DAY_RATE, START_HOUR, advanceClock } from './sky/DayClock.js';
 import { JoeyVillage, JOEY_VILLAGE_SITE } from './joey/Village.js';
 import { BoatController } from './player/BoatController.js';
 import { BoatSpray } from './player/BoatSpray.js';
@@ -85,14 +86,16 @@ export class App {
 
 	constructor() {
 
+		this.qs = new URLSearchParams( location.search );
 		this.settings = {
-			timeOfDay: 16.2,
+			timeOfDay: START_HOUR,
 			sunAzimuth: 0, // degrees: turns the sun's daily path about the vertical
-			timeSpeed: 0, // hours per real second
+			// game hours per real second in daylight (deep night runs faster, src/sky/DayClock.js); 0 holds the
+			// clock, as the benchmark does
+			timeSpeed: this.qs.has( 'bench' ) ? 0 : DAY_RATE,
 			exposure: 0.55,
 			renderScale: 1, // internal resolution (the temporal upscaler reconstructs the output), Performance tab
 		};
-		this.qs = new URLSearchParams( location.search );
 		// The driver's shout on bailing out of a car (off with ?noShout).
 		this.settings.bailShout = ! this.qs.has( 'noShout' );
 
@@ -533,16 +536,16 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		const horizonFade = MathUtils.smoothstep( sunTrue.y, - 0.03, 0.02 );
 		let c;
 		if ( sunUp ) c = new Color( T[ 0 ], T[ 1 ], T[ 2 ] ).multiplyScalar( SUN_ILLUMINANCE * horizonFade );
-		else c = new Color( 0.6, 0.7, 1.0 ).multiplyScalar( 0.12 * G.night.value );
+		else c = new Color( 0.6, 0.7, 1.0 ).multiplyScalar( 0.3 * G.night.value ); // moonlight: enough to read the shore by
 		G.sunColor.value.copy( c );
 		const irr = a.skyIrradiance;
-		const nightAmb = 0.012 * G.night.value;
+		const nightAmb = 0.04 * G.night.value; // night sky fill: the shore and the sea stay readable
 		G.skyIrradiance.value.setRGB( irr[ 0 ] + nightAmb * 0.6, irr[ 1 ] + nightAmb * 0.7, irr[ 2 ] + nightAmb );
 		G.horizonColor.value.setRGB( a.horizon[ 0 ], a.horizon[ 1 ], a.horizon[ 2 ] );
 
 	}
 
-	// T: let the day run (about 8 minutes per day) or stop it
+	// T: let the day run (about 50 real minutes of daylight, src/sky/DayClock.js) or stop it
 	toggleTime() {
 
 		const s = this.settings;
@@ -553,7 +556,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		} else {
 
-			s.timeSpeed = this._timeSpeed || 0.05;
+			s.timeSpeed = this._timeSpeed || DAY_RATE;
 
 		}
 
@@ -699,7 +702,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.updateFPS( dt );
 		G.dt.value = dt;
 		G.time.value += dt;
-		if ( s.timeSpeed !== 0 ) s.timeOfDay = ( s.timeOfDay + dt * s.timeSpeed + 24 ) % 24;
+		s.timeOfDay = advanceClock( s.timeOfDay, s.timeSpeed, dt );
 
 		// ---- player / boat (boat physics first so the cameras follow this frame's pose)
 		if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
