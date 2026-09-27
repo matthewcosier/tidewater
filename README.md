@@ -88,7 +88,7 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
 | I or Tab | Cooler / fish hold and the fish log |
 | F | Free camera |
 | L | Flashlight |
-| T | Pause time |
+| T | Pause time (in a car: repair) |
 | M | Mute |
 | H | Settings panel |
 | P | Photo mode |
@@ -122,6 +122,72 @@ Add these to the URL, for example `?fly&noAudio`:
 | `noSim` | Skip the swash (shallow-water) simulation |
 
 ## Running locally
+
+### Driving
+
+Pick a car in the lower-left card after entering the island, the **Aster RS** (a rear-drive
+rally coupe) or the **Black Jeep** (a lifted, Blender-built 4x4 with mud-terrain tyres and a
+recorded HEMI V8), and choose where to start: the beach, the coastal road, the town backroad,
+the mountain summit, or either beach entrance. The Cedar wagon and Ridge pickup stay parked
+near the village. All cars carry custom number plates.
+
+The road is a full circuit. A graded coastal loop runs west of the village, with textured
+asphalt, patched and crack-sealed seal, painted lines, sandy verges and steel guardrails. A
+1.1 km branch leaves it behind the town, climbs through switchbacks to a mountain ridge, and
+drops down a 17 percent descent into a sharp hairpin back onto the loop. Gravel ramps lead
+from the loop down onto the beach.
+
+The cars run on Tidewater's own physics, compiled to WebAssembly from Rust/Avian
+([car physics](docs/rally-physics.md)):
+- a slip-based tyre model per surface, so asphalt, gravel, soft and wet sand, grass and rock
+  each feel different
+- a 5-speed automatic, anti-roll bars, ABS, traction and stability control
+- a handbrake for slides
+
+Tyres leave tread impressions and ruts in sand, and rubber on asphalt only when they
+slide. Drive into the sea and the car floats and rides the swell; wheels in the shallows
+throw spray. Crashes dent the body and knock parts off, and hard enough ones damage the
+engine, steering and wheels, through steam and smoke to fire. **T** repairs.
+
+| Driving control | Keyboard | Gamepad |
+|---|---|---|
+| Throttle | W / Up | Right trigger |
+| Brake, then reverse when stopped | S / Down | Left trigger |
+| Steer | A D / Left Right | Left stick (analog) |
+| Handbrake | Space | A or right bumper |
+| Recover: back on its wheels on clear ground nearby | R | Y |
+| Bail out: jump from the moving car, tumble to a stop and walk (the car rolls on) | Y | B |
+| Repair the car | T | |
+| Leave the car | E | |
+| Free camera (press again to return) | F | |
+| Show or hide the key hints | K | |
+| Look around the car (settles back behind) | Mouse or drag | |
+
+The **Tidewater Spirit**, a 50 m car ferry, lies in the bay. Step onto her decks to come
+aboard, walk up to the bridge and press **E** at the wheel to take her helm: **A/D** turn the
+wheel, **W/S** work the throttles, **X** stops the engines, **C** centres the wheel,
+**Shift+A/D** runs the bow thruster, **H** sounds the horn, **V** swaps the bridge and chase
+views, **E** leaves the helm. Run her aground or into the pier and the hull takes damage; hole
+her and she floods. See `docs/ferry.md`.
+
+**Drive together** opens the local multiplayer lobby. Host a drive and share its room
+code, or join a listed drive. Up to eight players share visible cars with name tags,
+tyre effects, a driver list with direction and distance, and coloured minimap markers.
+Each browser simulates its own car, the server owns room membership and relays validated
+poses, and remote cars are drawn smoothly between buffered poses. Remote contacts use
+kinematic bodies, so collisions are not server-authoritative.
+
+The WebSocket server runs alongside Vite. For a built installation, run
+`npm run build` then `npm start`. Other computers need a reachable **HTTPS** origin
+for WebGPU and the same server for WebSockets. The default host is loopback;
+`HOST`, `PORT`, `HTTPS_CERT` and `HTTPS_KEY` configure the production server.
+Nothing is deployed publicly by the local setup.
+
+The browser-ready physics module is included, so playing only requires Node/npm and a
+WebGPU browser. `npm test` runs the physics, bridge, fishing, engine and real-product
+driving scenarios; the developer suite also requires Rust and a Playwright browser with
+GPU access. See [Rally integration](docs/rally-integration.md) and
+[car physics](docs/rally-physics.md) for rebuilding and verification details.
 
 ```sh
 npm install
