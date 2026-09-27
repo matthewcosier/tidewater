@@ -1,5 +1,4 @@
 import { Vector3, Quaternion, Euler } from '../engine/index.js';
-import { ContactShadows } from '../materials/ContactShadows.js';
 import { Colliders } from '../world/Colliders.js';
 import { loadVehicle } from './VehicleModel.js';
 import { Bailout } from './Bailout.js';
@@ -113,10 +112,8 @@ export class RallyDrive {
 		scene.add( aster.root );
 		scene.add( jeep.root );
 		jeep.root.visible = false;
-		ContactShadows.skipRoots.add( jeep.root );
 		this.tracks = new TyreTracks( scene, terrain );
 		this.damage = new Damage( this );
-		ContactShadows.skipRoots.add( aster.root );
 		this.cameraColliders = new Colliders();
 		this.cameraColliders.boxes = colliders.boxes.slice();
 		// Roofs have no walking collider: over each building footprint the chase boom also meets

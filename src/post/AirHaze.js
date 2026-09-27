@@ -93,6 +93,7 @@ export class AirHaze {
 			sunUV: [ 'vec2f', new Vector2( 0.5, 0.5 ) ],
 			ssFade: [ 'f32', 0 ], // light in view, low in the sky, camera in air
 			hasMedium: [ 'f32', 0 ],
+			histValid: [ 'f32', 0 ], // the shaft history holds a previous frame
 		}, { label: 'haze' } );
 		const U = this.uniforms.fields;
 		this.density = U.density;
@@ -103,8 +104,12 @@ export class AirHaze {
 		this.ssFade = U.ssFade;
 		this.mediumTexture = null; // lens medium (set by the post chain): water pixels are skipped
 
-		// half resolution march (x = lit in-scatter depth, y = unshadowed, z = view distance)
+		// half resolution march (x = lit share of the in-scatter, y = marched / exact in-scatter, z = view
+		// distance), and its temporal accumulation (ping-pong; the composite reads the latest)
 		this.low = new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'hazeShafts' } );
+		this.hist = [ 0, 1 ].map( ( i ) => new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'hazeShaftsHistory' + i } ) );
+		this._hc = 0;
+		this._histValid = false;
 		// screen-space god rays (GPU Gems 3 ch. 13 / UE4 light shafts) on top of the volumetric term:
 		// sky visibility around the key light (sun disc + aureole, times the cloud transmittance) at
 		// quarter resolution, blurred toward the light's screen position in three passes of 8 taps
@@ -130,6 +135,8 @@ export class AirHaze {
 
 		const s = this.scale;
 		this.low.setSize( Math.round( w * 0.5 * s ), Math.round( h * 0.5 * s ) );
+		for ( const r of this.hist ) r.setSize( Math.round( w * 0.5 * s ), Math.round( h * 0.5 * s ) );
+		this._histValid = false;
 		for ( const r of this.ssTargets ) r.setSize( Math.round( w * 0.25 * s ), Math.round( h * 0.25 * s ) );
 
 	}
@@ -167,6 +174,13 @@ export class AirHaze {
 		if ( ! this._passes ) this._build();
 		const p = this._passes;
 		p.march.render( { colorViews: [ this.low.texture ], clear: CLR } );
+		// accumulate: 16 jittered steps per pixel are noisy, and the final temporal resolve clamps the
+		// noisy history away, so the shafts flickered; here they settle over ~10 frames
+		const on = this.enabled.value > 0.5 && this.shafts.value > 0;
+		this.uniforms.fields.histValid.value = this._histValid && on ? 1 : 0;
+		p.temporal[ this._hc ].render( { colorViews: [ this.hist[ 1 - this._hc ].texture ], clear: CLR } );
+		this._hc = 1 - this._hc;
+		this._histValid = on;
 		// the god ray passes only matter while the light is in view (the composite skips them otherwise)
 		if ( this.ssFade.value > 0.001 ) {
 
@@ -226,6 +240,12 @@ fn hazeLayerDepth( sigma: f32, H: f32, hc: f32, vy: f32, d: f32 ) -> f32 {
 	return base * fk;
 }
 
+// unshadowed in-scatter depth of both layers from height hc along a ray (direction y component vy)
+// over distance d: 1 - their transmittance
+fn hazeInScatter( hc: f32, vy: f32, d: f32 ) -> f32 {
+	return 1.0 - exp( - ( hazeLayerDepth( HZ_MARINE_SIGMA, HZ_MARINE_H, hc, vy, d ) + hazeLayerDepth( HZ_AEROSOL_SIGMA, HZ_AEROSOL_H, hc, vy, d ) ) * hazeParams.density );
+}
+
 // Cornette-Shanks (strong forward lobe) plus a little isotropic scattering
 // (a softer lobe than coastal aerosol's ~0.76: toward the sun the haze glared over everything
 // in front of it and washed distant foliage out to white)
@@ -250,17 +270,48 @@ fn hazeRay( uv: vec2f ) -> HazeRay {
 	return r;
 }
 
-// sun visibility at world position P: shadow cascades, hills, clouds
-fn hazeVisibility( P: vec3f ) -> f32 {
-	var v = sunShadowHard( P );
+// the march's hill shadow: terrainSunShadowAt with one filtered fetch instead of four loads (the
+// texture is half float, filterable; the materials keep the loads: they are short of samplers)
+fn hazeTerrainSun( P: vec3f ) -> f32 {
 #if HZ_TERRAIN
-	v *= terrainSunShadowAt( P );
+	let s = textureSampleLevel( terrainSunShadowTex, smpLinearClamp, terrainUvOf( P.xz ), 0.0 );
+	let w = s.y * 0.012 + 0.35;
+	return mix( 1.0, smoothstep( -w, w, P.y - s.x ), terrainParams.sunBaked );
+#else
+	return 1.0;
+#endif
+}
+
+// the march's sun visibility after the shadow map (hills, clouds), only where light is left
+fn hazeVisibilityRest( P: vec3f, v0: f32 ) -> f32 {
+	var v = v0;
+#if HZ_TERRAIN
+	if ( v > 0.0 ) { v *= hazeTerrainSun( P ); }
 #endif
 #if HZ_CLOUDS
-	// the cloud shadow map is the ground's shadow along the key light: follow the light down
-	let L = frame.sunDir;
-	let g = P.xz - L.xz * ( max( P.y, 0.0 ) / max( L.y, 0.08 ) );
-	v *= cloudsShadow( g );
+	if ( v > 0.0 ) {
+		let L = frame.sunDir;
+		let g = P.xz - L.xz * ( max( P.y, 0.0 ) / max( L.y, 0.08 ) );
+		v *= cloudsShadow( g );
+	}
+#endif
+	return v;
+}
+
+// sun visibility at world position P: shadow cascades, hills, clouds
+fn hazeVisibility( P: vec3f ) -> f32 {
+	// (each lookup only where the ones before left some light)
+	var v = sunShadowHard( P );
+#if HZ_TERRAIN
+	if ( v > 0.0 ) { v *= terrainSunShadowAt( P ); }
+#endif
+#if HZ_CLOUDS
+	if ( v > 0.0 ) {
+		// the cloud shadow map is the ground's shadow along the key light: follow the light down
+		let L = frame.sunDir;
+		let g = P.xz - L.xz * ( max( P.y, 0.0 ) / max( L.y, 0.08 ) );
+		v *= cloudsShadow( g );
+	}
 #endif
 	return v;
 }
@@ -279,7 +330,7 @@ fn hazeVisibility( P: vec3f ) -> f32 {
 			name: 'haze-composite',
 			deps: [ this.module ],
 			bindings: {
-				hazeLow: { texture: () => this.low.texture },
+				hazeLow: { texture: () => this.hist[ this._hc ].texture },
 				hazeSS: { texture: () => this.ssShafts.texture },
 				hazeMedium: { texture: () => this.mediumTexture || this.low.texture },
 			},
@@ -343,8 +394,13 @@ fn hazeApply( uv: vec2f, c: vec4f ) -> vec4f {
 					acc += s.xy * wt;
 					wSum += wt;
 				}
+				// The upsample carries the lit share of the in-scatter and the march's ratio to the exact
+				// in-scatter; the exact in-scatter is then taken over this pixel's own ray. Upsampling the
+				// in-scatter itself gave a thin frond in front of the low sun, whose half resolution
+				// neighbours all lie far behind it, their long rays' in-scatter: bright, flickering specks.
 				let sh = acc / wSum;
-				let lit = sh.x; let all = max( sh.y, sh.x );
+				let all = sh.y * hazeInScatter( camH, dir.y, min( dist, ${ f( MARCH_DIST ) } ) );
+				let lit = sat( sh.x ) * all;
 				let near = Ep * lit * ( 1.0 - h ) * hazeParams.shafts;
 				let deficit = fog * fSun * ( all - lit ) * h;
 				out = max( out + near - deficit, vec3f( 0.0 ) );
@@ -388,6 +444,13 @@ fn fragment( in: FSIn ) -> vec4f {
 		let sigM = HZ_MARINE_SIGMA * hazeParams.density;
 		let sigA = HZ_AEROSOL_SIGMA * hazeParams.density;
 		var lit = 0.0; var all = 0.0; var tau = 0.0; var tPrev = 0.0;
+		// the ray in each cascade's light space is linear in t: its end points, once
+		let fwd = - vec3f( frame.view[ 0 ][ 2 ], frame.view[ 1 ][ 2 ], frame.view[ 2 ][ 2 ] );
+		var sc0: array<vec4f, 4>; var scd: array<vec4f, 4>;
+		for ( var c = 0; c < i32( shadowParams.count ); c++ ) {
+			sc0[ c ] = shadowParams.matrices[ c ] * vec4f( cam, 1.0 );
+			scd[ c ] = shadowParams.matrices[ c ] * vec4f( R.dir, 0.0 );
+		}
 		for ( var i = 0; i < ${ STEPS }; i++ ) {
 			// quadratic spacing: dense near the camera (palm and pier shafts), sparse far out (clouds, hills)
 			let u = ( f32( i ) + jitter ) / ${ f( STEPS ) };
@@ -400,10 +463,26 @@ fn fragment( in: FSIn ) -> vec4f {
 			tPrev = t;
 			let Tr = exp( - tau );
 			let w = sig * Tr * dt;
-			lit += w * hazeVisibility( P );
+			// sunShadowHard( P ) with the hoisted light-space ray
+			var v = 1.0;
+			if ( shadowParams.enabled > 0.5 ) {
+				let c = shadowCascadeOf( dot( P - frame.cameraPos, fwd ) );
+				if ( c >= 0 ) {
+					let sc = sc0[ c ] + scd[ c ] * t;
+					let suv = vec2f( sc.x * 0.5 + 0.5, 0.5 - sc.y * 0.5 );
+					if ( ! ( any( suv <= vec2f( 0.0 ) ) || any( suv >= vec2f( 1.0 ) ) || sc.z > 1.0 ) ) {
+						v = select( 0.0, 1.0, sc.z - 2e-5 <= _shadowDepth( suv, c ) );
+					}
+				}
+			}
+			lit += w * hazeVisibilityRest( P, v );
 			all += w;
 		}
-		out = vec4f( lit, all, R.dist, 1.0 );
+		// The lit share of the in-scatter (0..1) and the ratio of the marched in-scatter to its exact
+		// value over this ray: both smooth across depth edges, unlike the in-scatter itself, which
+		// grows with the distance (see the composite)
+		let exact = hazeInScatter( max( cam.y - frame.seaLevel, 0.0 ), R.dir.y, tMax );
+		out = vec4f( lit / max( all, 1e-12 ), all / max( exact, 1e-12 ), R.dist, 1.0 );
 	}
 	return out;
 }
@@ -424,7 +503,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		let uv = in.uv;
 		let dir = underwaterWorldDir( uv );
 #if HZ_CLOUDS
-		let cloudT = cloudsSampleView( dir ).a;
+		let cloudT = cloudsSunTransmittance( cloudsSampleView( dir ).a );
 #else
 		let cloudT = 1.0;
 #endif
@@ -449,7 +528,7 @@ fn fragment( in: FSIn ) -> vec4f {
 			for ( let j = 0; j < SS_TAPS; j ++ ) {
 
 				const w = Math.pow( decay, j );
-				taps += `\t\tacc += textureSampleLevel( hzSrc, smpLinearClamp, uv + step * ${ f( j ) }, 0.0 ).r * ${ f( w ) };\n`;
+				taps += `\t\tacc += textureSampleLevel( hzSrc, smpLinearClamp, uv + step * ( ${ f( j ) } + jit ), 0.0 ).r * ${ f( w ) };\n`;
 				wSum += w;
 
 			}
@@ -465,6 +544,10 @@ fn fragment( in: FSIn ) -> vec4f {
 	if ( hazeParams.ssFade > 0.001 ) {
 		let uv = in.uv;
 		let step = ( hazeParams.sunUV - uv ) * ${ f( span / SS_TAPS ) };
+		// taps shifted by a per pixel, per frame fraction of a step: the fixed taps drew hard radial
+		// streaks through cloud gaps and foliage; jittered, the temporal resolve blends them
+		// (centred on 0: the average over frames keeps the fixed taps' result)
+		let jit = fract( interleavedGradientNoise( in.pos.xy ) + hazeParams.frame * 0.61803398875 + ${ f( p * 0.37 ) } ) - 0.5;
 		var acc = 0.0;
 ${ taps }
 		out = vec4f( acc / ${ f( wSum ) }, 0.0, 0.0, 1.0 );
@@ -476,7 +559,47 @@ ${ taps }
 
 		} );
 
-		this._passes = { march, mask, blur };
+		// temporal accumulation of the march: last frame's result at this pixel's world point (its view
+		// distance must match: no history across disocclusions), clamped to this frame's 3x3
+		// neighbourhood, blended with the new march
+		const temporal = [ 0, 1 ].map( ( src ) => new FullscreenPass( {
+			label: 'haze shafts temporal',
+			modules: [ mod ],
+			defines,
+			bindings: { hzCur: { texture: () => this.low.texture }, hzPrev: { texture: () => this.hist[ src ].texture } },
+			colorFormats: [ 'rgba16float' ],
+			code: /* wgsl */`
+fn fragment( in: FSIn ) -> vec4f {
+	let size = vec2i( textureDimensions( hzCur ) );
+	let p = vec2i( in.pos.xy );
+	let cur = textureLoad( hzCur, p, 0 );
+	var out = cur;
+	if ( hazeParams.histValid > 0.5 ) {
+		var lo = cur.xy; var hi = cur.xy;
+		for ( var k = 0; k < 9; k++ ) {
+			let s = textureLoad( hzCur, clamp( p + vec2i( k % 3 - 1, k / 3 - 1 ), vec2i( 0 ), size - 1 ), 0 ).xy;
+			lo = min( lo, s ); hi = max( hi, s );
+		}
+		let R = hazeRay( in.uv );
+		let world = underwaterParams.camPos + R.dir * cur.z;
+		let clip = frame.prevViewProjNoJitter * vec4f( world, 1.0 );
+		if ( clip.w > 1e-4 ) {
+			let puv = clip.xy / clip.w * vec2f( 0.5, -0.5 ) + 0.5;
+			if ( all( puv >= vec2f( 0.0 ) ) && all( puv <= vec2f( 1.0 ) ) ) {
+				let prev = textureSampleLevel( hzPrev, smpLinearClamp, puv, 0.0 );
+				let expect = length( world - frame.prevCameraPos );
+				if ( abs( prev.z - expect ) < expect * 0.05 + 0.3 ) {
+					out = vec4f( mix( clamp( prev.xy, lo, hi ), cur.xy, 0.12 ), cur.z, 1.0 );
+				}
+			}
+		}
+	}
+	return out;
+}
+`,
+		} ) );
+
+		this._passes = { march, mask, blur, temporal };
 
 	}
 

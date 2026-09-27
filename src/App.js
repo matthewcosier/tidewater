@@ -46,7 +46,6 @@ import { installUnderwaterLighting } from './ocean/UnderwaterLighting.js';
 import { RefractionPass } from './ocean/RefractionPass.js';
 import { installGroundBounce } from './materials/GroundBounce.js';
 import { LocalLights, addVillageLights, addBoatLights } from './materials/LocalLights.js';
-import { installContactShadows, ContactShadows } from './materials/ContactShadows.js';
 import { WaterQuery } from './ocean/WaterQuery.js';
 import { Breakers } from './ocean/Breakers.js';
 import { SurfFoam } from './ocean/SurfFoam.js';
@@ -254,8 +253,6 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.refraction = new RefractionPass( { meshRenderer: engine.meshRenderer, scene, camera, sceneRenderer: this.sceneRenderer, scale: 0.5 } );
 		this.sceneRenderer.onBeforeWater = () => this.refraction.render( G.seaLevel.value );
 		if ( this.sky.background ) this.sceneRenderer.background = this.sky.background;
-		// screen-space contact shadows for the sun from last frame's opaque depth (foliage only casts)
-		installContactShadows( { depthTexture: this.sceneRenderer.opaqueCopy.depthTexture, skip: [ this.vegetation && this.vegetation.group, this.boat.group ] } );
 		// lanterns, lamp posts, path lights, lit windows, the boat's cabin / navigation lights and the
 		// flashlight (L): nearest few packed into one small uniform array each frame
 		this.localLights = new LocalLights();
@@ -271,7 +268,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// the sea is not drawn inside the boat (its hull volume masks the surface)
 		this.sceneRenderer.addHullMask( this.boat.createHullVolumeGeometry(), this.boat.group );
 		this.waterMaterial = new WaterMaterial( {
-			surface: this.surface, sky: this.sky, sceneCopy: this.sceneRenderer.opaqueCopy, refraction: this.refraction,
+			surface: this.surface, sky: this.sky, sceneCopy: this.sceneRenderer.opaqueCopy, sceneDepthHalf: this.sceneRenderer.opaqueDepthHalf.texture, refraction: this.refraction,
 			hullMask: this.sceneRenderer.hullMaskRT.texture, hullMaskActive: this.sceneRenderer.hullMaskActive,
 		} );
 		this.waterMaterial.clouds = this.clouds;
@@ -354,8 +351,6 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			village: this.village, colliders: this.colliders, vegetation: this.vegetation, boat: this.boatCtl, boatModel: this.boat,
 			query: this.query, spray: this.spray, csm: this.csm,
 		} );
-		// moving receivers: last frame's depth no longer lines up with them (see installContactShadows)
-		for ( const o of [ this.player.avatar && this.player.avatar.group, this.whale && this.whale.group, this.dolphins && this.dolphins.group, this.wildlife.birdBatch && this.wildlife.birdBatch.mesh, this.wildlife.critterBatch && this.wildlife.critterBatch.mesh ] ) if ( o ) ContactShadows.skipRoots.add( o );
 		this.freeCam = qs.has( 'fly' );
 
 		// ---------------------------------------------------------------- post
@@ -744,8 +739,6 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		this.atmosphere.update( dt, this.camera.position.y );
 		this.applyAtmosphereReadback();
-		if ( this.clouds ) this.clouds.update( dt, this.camera );
-		this.environment.update( dt );
 
 		// ---- water simulation
 		this.fft.update( dt );
@@ -771,6 +764,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.underwaterLighting.update( this.camera );
 		this.breakers.update( this.camera );
 		this.spray.update();
+		if ( this.clouds ) this.clouds.update( dt, this.camera );
+		this.environment.update( dt );
 
 		// ---- world
 		this.oceanLOD.update( this.camera );

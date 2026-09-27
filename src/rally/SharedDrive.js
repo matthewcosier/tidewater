@@ -1,5 +1,4 @@
 import { Quaternion, Euler } from '../engine/index.js';
-import { ContactShadows } from '../materials/ContactShadows.js';
 import { cloneVehicle } from './VehicleModel.js';
 import { RoomClient } from './RoomClient.js';
 import { VEHICLES } from './Vehicles.js';
@@ -68,7 +67,7 @@ export class SharedDrive {
 			if ( ! peer ) {
 				const model = cloneVehicle( this.rally.models[ player.vehicle ] );
 				model.root.visible = true;
-				this.app.scene.add( model.root ); ContactShadows.skipRoots.add( model.root );
+				this.app.scene.add( model.root );
 				peer = { ...player, model, color: COLORS[ player.slot ], wheels: WHEELS.map( name => model.pivots.get( name ) ),
 					spin: [ 0, 0, 0, 0 ], visual: Float32Array.from( player.state ), buffer: [] };
 				this.peers.set( player.id, peer );
@@ -112,7 +111,7 @@ export class SharedDrive {
 
 	remove( id ) {
 		const peer = this.peers.get( id ); if ( ! peer ) return;
-		this.app.scene.remove( peer.model.root ); ContactShadows.skipRoots.delete( peer.model.root );
+		this.app.scene.remove( peer.model.root );
 		this.rally.tracks.reset( id ); this.rally.physics.remove_remote( peer.slot + 1 );
 		peer.row?.remove(); this.peers.delete( id );
 		this.app.game.minimap?.setDrivers( [ ...this.peers.values() ] );

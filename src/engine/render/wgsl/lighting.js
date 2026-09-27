@@ -9,7 +9,6 @@ import { Matrix4, Vector4 } from '../../math/index.js';
 //   - scene hooks installed by systems (each defaults to a neutral stub):
 //       fn hookDirectModulation( P: vec3f, N: vec3f ) -> vec3f   caustics, water column, clouds, hill shadow
 //       fn hookAmbientModulation( P: vec3f, N: vec3f ) -> vec3f  underwater tint / attenuation
-//       fn hookContactShadow( P: vec3f, N: vec3f ) -> f32        screen-space contact shadow of the sun
 //       fn hookShadowPosition( P: vec3f, N: vec3f, pixel: vec2f ) -> vec3f   where the sun shadow map is
 //                                                  sampled for P (underwater: the light's entry point)
 //       fn hookBounce( P: vec3f, N: vec3f ) -> vec3f             ground bounce irradiance (already / PI)
@@ -43,7 +42,6 @@ export const SceneLighting = {
 const HOOK_DEFAULTS = {
 	directModulation: 'fn hookDirectModulation( P: vec3f, N: vec3f ) -> vec3f { return vec3f( 1.0 ); }',
 	ambientModulation: 'fn hookAmbientModulation( P: vec3f, N: vec3f ) -> vec3f { return vec3f( 1.0 ); }',
-	contactShadow: 'fn hookContactShadow( P: vec3f, N: vec3f ) -> f32 { return 1.0; }',
 	shadowPosition: 'fn hookShadowPosition( P: vec3f, N: vec3f, pixel: vec2f ) -> vec3f { return P; }',
 	bounce: 'fn hookBounce( P: vec3f, N: vec3f ) -> vec3f { return vec3f( 0.0 ); }',
 	localLights: 'fn hookLocalLights( s: Surface, P: vec3f, N: vec3f, V: vec3f, acc: ptr<function, LightAccum> ) {}',
@@ -288,6 +286,11 @@ fn defaultSurface( N: vec3f ) -> Surface {
 	return s;
 }
 
+// screen derivatives of the lit position, taken at the top of shadeSurface (every lane of the quad
+// is live there; the sun hooks run in a branch, where derivatives are undefined)
+var<private> lightDPdx: vec3f = vec3f( 0.0 );
+var<private> lightDPdy: vec3f = vec3f( 0.0 );
+
 struct LightAccum {
 	directDiffuse: vec3f,
 	directSpecular: vec3f,
@@ -395,29 +398,37 @@ fn shadeSurface( s: Surface, P: vec3f, V: vec3f, pixel: vec2f ) -> vec3f {
 	acc.directDiffuse = vec3f( 0.0 ); acc.directSpecular = vec3f( 0.0 );
 	acc.indirectDiffuse = vec3f( 0.0 ); acc.indirectSpecular = vec3f( 0.0 );
 
+	lightDPdx = dpdx( P );
+	lightDPdy = dpdy( P );
+
 	// ---- sun / moon
 	let L = frame.sunDir;
 	let dotNL = sat( dot( N, L ) );
 #if STUDIO_LIGHTING
 	let lightColor = frame.sunColor;
 #else
-	var lightColor = frame.sunColor * hookDirectModulation( P, N );
-#if MATERIAL_SUN_MODULATION
-	// per-material key-light multiplier (the former TerrainLightingModel: heightfield hill shadow)
-	lightColor *= materialSunModulation( P, N );
-#endif
-	let geomN = N;
-#if REFRACTION_CLIP
-	// the water's refraction source (seen blurred through the water): one hard shadow tap
-	let shadow = sunShadowHard( hookShadowPosition( P, geomN, pixel ) );
-#else
-	// faces turned away from the sun with no transmission get nothing from it: skip the filter
-	var shadow = 0.0;
+	// Faces turned away from the sun with no transmission get nothing from it: the modulation hooks
+	// (clouds, hill shadow, caustics) and the shadow filters only run for the rest, and the filters
+	// only where the hooks left light (their derivatives are taken ahead: lightDPdx / lightDPdy)
+	var lightColor = vec3f( 0.0 );
 	if ( dotNL > 0.0 || any( s.translucency > vec3f( 0.0 ) ) ) {
-		shadow = sunShadow( hookShadowPosition( P, geomN, pixel ), geomN, pixel ) * hookContactShadow( P, N );
-	}
+		lightColor = frame.sunColor * hookDirectModulation( P, N );
+#if MATERIAL_SUN_MODULATION
+		// per-material key-light multiplier (the former TerrainLightingModel: heightfield hill shadow)
+		lightColor *= materialSunModulation( P, N );
 #endif
-	lightColor *= shadow;
+		let geomN = N;
+		var shadow = 0.0;
+		if ( any( lightColor > vec3f( 0.0 ) ) ) {
+#if REFRACTION_CLIP
+			// the water's refraction source (seen blurred through the water): one hard shadow tap
+			shadow = sunShadowHard( hookShadowPosition( P, geomN, pixel ) );
+#else
+			shadow = sunShadow( hookShadowPosition( P, geomN, pixel ), geomN, pixel );
+#endif
+		}
+		lightColor *= shadow;
+	}
 #endif
 	let irradiance = dotNL * lightColor;
 	acc.directDiffuse += irradiance * diffuseColor * INV_PI;

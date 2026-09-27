@@ -4,7 +4,6 @@ import { icon } from './icons.js';
 import { ON_FOOT } from '../player/Player.js';
 import { G } from '../core/Globals.js';
 import { GroundBounce } from '../materials/GroundBounce.js';
-import { ContactShadows } from '../materials/ContactShadows.js';
 
 // Binds the Tidewater UI (panel + HUD) to the running app.
 const SEA = {
@@ -205,9 +204,7 @@ export class AppUI {
 		const P = app.post.params;
 		post.addSlider( { label: 'Ambient occlusion', object: s, key: 'ao', min: 0, max: 1.5, step: 0.01, onChange: ( v ) => { P.aoStrength.value = v; } } );
 		s.bounce = GroundBounce.strength.value;
-		s.contact = ContactShadows.strength.value;
 		post.addSlider( { label: 'Bounce light', object: s, key: 'bounce', min: 0, max: 2, step: 0.01, tooltip: 'Sunlight reflected off the ground (bright sand) onto undersides and shaded faces: pier, eaves, hulls, trunks. 0 = off.', onChange: ( v ) => { GroundBounce.strength.value = v; } } );
-		post.addSlider( { label: 'Contact shadows', object: s, key: 'contact', min: 0, max: 1, step: 0.01, tooltip: 'Screen-space sun shadows of small details the shadow maps miss (pebbles, shells, grass, rope). 0 = off.', onChange: ( v ) => { ContactShadows.strength.value = v; } } );
 		s.sharpen = P.sharpen.value;
 		post.addSlider( { label: 'Sharpen', object: s, key: 'sharpen', min: 0, max: 1, step: 0.01, tooltip: 'Contrast-adaptive sharpening after the temporal anti-aliasing.', onChange: ( v ) => { P.sharpen.value = v; } } );
 		if ( app.post.motionBlur ) {
@@ -245,7 +242,16 @@ export class AppUI {
 		quality.addSelect( { label: 'Resolution', object: s, key: 'resolution', options: [ { label: 'Auto (Retina)', value: 'auto' }, { label: 'Retina', value: 'retina' }, { label: 'Standard', value: 'standard' } ], tooltip: 'Auto renders at the Retina resolution and steps down when the frame rate drops.', onChange: ( v ) => gov.setMode( v ) } );
 		{ const kv = document.createElement( 'span' ); kv.className = 'tw-kv'; kv.innerHTML = '<span class="tw-k">res</span><span class="tw-v"></span>'; ui.statsEl.querySelector( '.tw-stats-sub' )?.append( kv ); this._resEl = kv.lastChild; }
 		quality.addSlider( { label: 'Render scale', object: s, key: 'renderScale', min: 0.5, max: 1, step: 0.05, format: ( v ) => `${ Math.round( v * 100 ) }%`, tooltip: 'Internal resolution; the temporal upscaler reconstructs the full output resolution.', onChange: ( v ) => { app.setRenderScale( v ); gov.setUserScale( app.settings.renderScale ); } } );
-		quality.addToggle( { label: 'Shadows', object: s, key: 'shadows', onChange: ( v ) => { app.sun.castShadow = v; } } );
+		// anti-aliasing: the TAA with 2..16 jitter positions averaged per pixel, or none
+		s.aa = app.post.aaMode === 'none' ? 0 : app.post.taau.jitterPhaseOverride;
+		quality.addSelect( { label: 'Anti-aliasing', object: s, key: 'aa', tooltip: 'Temporal anti-aliasing: each pixel averages this many sub-pixel sample positions over successive frames (it also smooths dithered fades and shadow noise). More samples cost nothing per frame but take a few more frames to settle.', options: [ { label: 'Off', value: 0 }, { label: '2x', value: 2 }, { label: '4x', value: 4 }, { label: '8x', value: 8 }, { label: '16x', value: 16 } ], onChange: ( v ) => {
+
+			const n = Number( v );
+			app.post.aaMode = n > 0 ? 'taa' : 'none';
+			if ( n > 0 ) app.post.taau.jitterPhaseOverride = n;
+
+		} } );
+		quality.addToggle( { label: 'Shadows', object: s, key: 'shadows', onChange: ( v ) => { app.shadows.enabled = v; } } );
 		s.ssr = true;
 		quality.addToggle( { label: 'Water reflections', object: s, key: 'ssr', tooltip: 'Screen-space reflections of the pier, boats and hills on the water.', onChange: ( v ) => { app.waterMaterial.params.ssr.value = v ? 1 : 0; } } );
 

@@ -531,7 +531,16 @@ export class SkyProClouds {
 // cloud shadow transmittance (1 = clear) at a world position. Manual bilinear filtering of an
 // unfilterable texture: costs no sampler in the (sampler hungry) scene materials.
 fn cloudsShadowTap( i: vec2i ) -> f32 { return textureLoad( cloudsShadowMap, clamp( i, vec2i( 0 ), vec2i( ${ SHADOW_RES - 1 } ) ), 0 ).x; }
+// (the last lookup is remembered: the scene lighting hooks ask for the same point several times)
+var<private> cloudsShadowMemoXZ: vec2f = vec2f( 3.0e38 );
+var<private> cloudsShadowMemo: f32 = 1.0;
 fn cloudsShadow( worldXZ: vec2f ) -> f32 {
+	if ( all( worldXZ == cloudsShadowMemoXZ ) ) { return cloudsShadowMemo; }
+	cloudsShadowMemoXZ = worldXZ;
+	cloudsShadowMemo = _cloudsShadow( worldXZ );
+	return cloudsShadowMemo;
+}
+fn _cloudsShadow( worldXZ: vec2f ) -> f32 {
 	let uv = ( worldXZ - cloudsParams.shadowCenter ) / cloudsParams.shadowSize + 0.5;
 	let st = uv * ${ f( SHADOW_RES ) } - 0.5;
 	let i0 = vec2i( floor( st ) );
@@ -564,6 +573,11 @@ fn cloudsSample( dir: vec3f ) -> vec4f {
 	let below = smoothstep( -0.07, -0.03, dir.y );
 	return vec4f( s.rgb * below, mix( 1.0, s.a, below ) );
 }
+
+// Transmittance for the sun's disc behind the clouds. The cloud march stops once less than 0.3 % of
+// the light gets through and reports that remainder, which (noisy from frame to frame) let a
+// clamped sun disc of 2500x the sky shine and sparkle through thick cloud: below ~0.4 % it is dark.
+fn cloudsSunTransmittance( T: f32 ) -> f32 { return T * smoothstep( 0.004, 0.04, T ); }
 
 // The main view's clouds: the temporally reconstructed half resolution history, looked up with the
 // camera it was resolved for; outside it (or before any trace) the panorama

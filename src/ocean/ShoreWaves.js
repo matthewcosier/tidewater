@@ -106,6 +106,8 @@ ${ mode === 'normal' ? `	{
 		let sx = u * lam; // rest position along the wave direction (m, seaward)
 		let t = frame.time;
 		let mW = floor( ph.s + 0.5 );
+		// (the lumps only exist on the roller: amp is 0 elsewhere)
+		if ( roller != 0.0 ) {
 		let lumpy = sat( perlin2( vec2f( along * 0.045, mW * 3.7 ) ) * 1.2 + 0.55 );
 		let amp = roller * mix( 0.25, 0.7, lumpy );
 		let q1 = vec2f( along * 0.28, sx * 0.7 - t * 0.8 );
@@ -122,6 +124,9 @@ ${ mode === 'normal' ? `	{
 		let dShore = - dSx; // d/d(shoreward) = - d/dsx
 		let g = ( vec2f( - dir.y, dir.x ) * dAlong + dir * dShore ) * amp * n.y;
 		nShore = normalize( vec3f( n.x - g.x, max( n.y, 0.04 ), n.z - g.y ) );
+		} else {
+			nShore = normalize( vec3f( n.x, max( n.y, 0.04 ), n.z ) );
+		}
 	}` : '' }
 
 	// ---- swash: run-up of the most recent wave on the sand
@@ -154,7 +159,8 @@ ${ mode === 'normal' ? `	{
 	var o: ShoreSample;
 	// the churn of a bore is uneven along the crest: dense in some stretches, torn into patches and
 	// lace in others (different for every wave, drifting slowly along it)
-	let wwPatch = smoothstep( -0.5, 0.45, perlin2( vec2f( along * 0.06 + frame.time * 0.05, m * 2.9 + 0.4 ) ) );
+	var wwPatch = 0.0;
+	if ( s0.z * env != 0.0 ) { wwPatch = smoothstep( -0.5, 0.45, perlin2( vec2f( along * 0.06 + frame.time * 0.05, m * 2.9 + 0.4 ) ) ); }
 	o.disp = disp; o.nShore = nShore; o.env = env; o.foam = s0.z * env * mix( 0.3, 1.0, wwPatch ); o.breaking = s0.w; o.u = u; o.dir = dir;
 	o.exposure = exposure; o.swashLevel = swashLevel; o.swashCovered = select( 0.0, 1.0, covered ); o.thick = thick;
 	o.swashFoam = swashFoam; o.runup = swr.Rt; o.inland = swr.inland; o.dRdt = dRdt; o.tau = swr.tau;
@@ -605,13 +611,20 @@ fn shoreSwashRunup( sh: vec4f, along: f32, groundH: f32 ) -> ShoreRunup {
 // thin, so the sheet ends on the analytic front instead of the mesh triangles at ~no cost.
 fn shoreSwashEdge( p: vec2f, t: f32 ) -> vec4f {
 	var out = vec4f( t, 1e3, 0.0, 0.0 );
-	if ( t < 0.2 ) {
+	if ( t < 0.3 ) {
 		let g = terrainHeightAt( p );
-		if ( g > frame.seaLevel ) {
+		if ( g > frame.seaLevel - 0.8 ) {
 			let ph = shorePhaseAt( p );
 			let r = shoreSwashRunup( ph.sh, ph.along, g );
 			let front = r.Rt - r.inland;
-			out = vec4f( min( t, front * 0.08 ), front, r.tau, r.Rt );
+			// The lapping region reaches down the beach face past where the sea's edge sits in the trough
+			// of the backwash (it stopped at sea level: a strip in between with a straight edge across the
+			// draining water), and fades in from there and from 0.3 m of film instead of switching on.
+			// The front distance is divided by the weight so the effects at the front recede with it.
+			let w = smoothstep( frame.seaLevel - 0.8, frame.seaLevel - 0.4, g ) * smoothstep( 0.3, 0.15, t );
+			if ( w > 0.0 ) {
+				out = vec4f( mix( t, min( t, front * 0.08 ), w ), front / max( w, 1e-3 ), r.tau, r.Rt * w );
+			}
 		}
 	}
 	return out;

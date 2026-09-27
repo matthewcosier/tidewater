@@ -6,8 +6,9 @@ import { FullscreenPass } from '../engine/render/FullscreenPass.js';
 import { FrameUniforms, G, setFrameCamera } from '../engine/render/Frame.js';
 import { LENS_REACH } from './Underwater.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
-import { MathUtils, Matrix4, Vector2, Vector3 } from '../engine/math/index.js';
+import { Matrix4, Vector2, Vector3 } from '../engine/math/index.js';
 import { GTAO } from './GTAO.js';
+import { AntiAlias } from './AntiAlias.js';
 import { TemporalUpscale } from './TemporalUpscale.js';
 import { LensDroplets } from './LensDroplets.js';
 import { LensFlare } from './LensFlare.js';
@@ -102,17 +103,23 @@ export class PostFX {
 
 		// ---- ambient occlusion on the opaque depth (normals reconstructed from depth)
 		// GTAO reads a half-resolution depth copy (one texel per AO pixel): its horizon taps spread
-		// over a large screen radius, and the full-res reads were mostly cache misses
-		this.aoDepth = new RenderTarget( 1, 1, { colors: [ 'r32float' ], label: 'aoDepth' } );
+		// over a large screen radius, and the full-res reads were mostly cache misses. Half float: the
+		// taps are bandwidth bound, and reversed-Z depth keeps its relative precision in fp16 (~5 mm at
+		// 10 m) where the AO radius matters
+		this.aoDepth = new RenderTarget( 1, 1, { colors: [ 'r16float' ], label: 'aoDepth' } );
 		this._aoDepthPass = new FullscreenPass( {
 			label: 'AO depth',
-			colorFormats: [ 'r32float' ],
-			bindings: { aoFullDepth: { texture: () => this.opaqueDepth } },
+			colorFormats: [ 'r16float' ],
+			bindings: { aoFullDepth: { texture: () => this.opaqueDepth }, aoFinalDepth: { texture: () => this.finalDepth } },
 			code: /* wgsl */`
+// negative where the water covers the opaque surface: its AO is never shown (the beauty pass skips
+// covered pixels), so GTAO leaves those texels alone; everything else reads the magnitude
 fn fragment( in: FSIn ) -> vec4f {
 	let s = vec2i( textureDimensions( aoFullDepth ) );
 	let p = min( vec2i( in.pos.xy ) * 2, s - 1 );
-	return vec4f( textureLoad( aoFullDepth, p, 0 ), 0.0, 0.0, 1.0 );
+	let d = textureLoad( aoFullDepth, p, 0 );
+	let covered = textureLoad( aoFinalDepth, p, 0 ) > d + 1e-7;
+	return vec4f( select( d, - d, covered ), 0.0, 0.0, 1.0 );
 }
 `,
 		} );
@@ -150,7 +157,7 @@ fn fragment( in: FSIn ) -> vec4f {
 				code: /* wgsl */`
 fn postDepthOpaque( uv: vec2f ) -> f32 {
 	let s = vec2i( textureDimensions( postAODepth ) );
-	return textureLoad( postAODepth, clamp( vec2i( floor( uv * vec2f( s ) ) ), vec2i( 0 ), s - 1 ), 0 ).r;
+	return abs( textureLoad( postAODepth, clamp( vec2i( floor( uv * vec2f( s ) ) ), vec2i( 0 ), s - 1 ), 0 ).r );
 }
 fn fragment( in: FSIn ) -> vec4f {
 	let size = vec2f( textureDimensions( aoSrc ) );
@@ -176,11 +183,18 @@ ${ taps }
 		this.beauty = new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'beauty' } );
 
 		// ---- temporal anti-aliasing + upscale
-		this.taau = new TemporalUpscale( () => this.beauty.texture, this.finalDepth, sceneRenderer.velocityTexture, camera, sceneRenderer.waterMaskTexture );
+		// 'smaataa' (SMAA T2x style): SMAA on each jittered frame, the TAA accumulates the result
+		this.smaaIn = new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'smaaBeforeTAA' } );
+		this.taau = new TemporalUpscale( () => ( this.aaMode === 'smaataa' ? this.smaaIn.texture : this.beauty.texture ), this.finalDepth, sceneRenderer.velocityTexture, camera, sceneRenderer.waterMaskTexture, this.exposure );
+		// anti-aliasing: 'taa' (the temporal upscaler, jittered camera), 'smaataa' (SMAA, then the TAA:
+		// crisp stable geometric edges from SMAA, sub-pixel detail and dithering from the TAA) or a
+		// spatial filter ('smaa', 'fxaa', 'none') writing the same resolved image (AntiAlias.js)
+		this.aaMode = 'taa';
+		this.aa = new AntiAlias( { src: () => this.beauty.texture, exposure: this.exposure } );
 
 		// ---- camera + object motion blur on the resolved image (gathered in the final pass, before
 		// bloom and the screen-fixed lens effects)
-		this.motionBlur = new MotionBlur( { velocityTexture: sceneRenderer.velocityTexture, depthTexture: sceneRT.depthTexture, color: () => this.taau.texture } );
+		this.motionBlur = new MotionBlur( { velocityTexture: sceneRenderer.velocityTexture, depthTexture: sceneRT.depthTexture, color: () => this.taau.output } );
 
 		// ---- sun flare in the lens (screen-fixed, after the temporal resolve; its visibility is measured
 		// from the scene depth by a compute pass the app runs after the scene)
@@ -248,6 +262,8 @@ fn postColorAO( uv: vec2f ) -> vec3f {
 	// reversed depth: sky = 0; water in front of the opaque surface has a larger depth value
 	let isSky = dO < 1e-7;
 	let covered = dF > dO + 1e-7;
+	// no AO there (k = 0 below): skip the upsample
+	if ( isSky || covered ) { return c; }
 	// depth-aware upsample of the half-res AO: the 4 nearest AO texels, weighted by how close
 	// their depth is to this pixel's (no dark halos bleeding across depth edges)
 	// (the AO texels' depths: the half resolution copy the AO was computed from)
@@ -259,7 +275,7 @@ fn postColorAO( uv: vec2f ) -> vec3f {
 	for ( var k = 0; k < 4; k++ ) {
 		let o = vec2i( k & 1, k >> 1u );
 		let pT = clamp( vec2i( i0 ) + o, vec2i( 0 ), aoSizeI - 1 );
-		let dT = textureLoad( postAODepth, pT, 0 ).r;
+		let dT = abs( textureLoad( postAODepth, pT, 0 ).r );
 		let wBil = select( 1.0 - fr.x, fr.x, o.x == 1 ) * select( 1.0 - fr.y, fr.y, o.y == 1 );
 		// reversed-Z depth ~ near / z, so the relative depth difference ~ |dT - dO| / dO
 		let rel = abs( dT - dO ) / max( dO, 1e-7 );
@@ -449,7 +465,7 @@ ${ reduce }
 			modules,
 			bindings: {
 				post: { uniform: this.uniforms },
-				postResolved: { texture: () => this.taau.texture },
+				postResolved: { texture: () => this.taau.output },
 				postBloom: { texture: () => this.bloomTex.texture },
 				postHalf: { texture: () => this.half.texture },
 				postExposure: { storage: this.exposure, access: 'read' },
@@ -547,6 +563,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		this._outW = ow; this._outH = oh; this._inW = iw; this._inH = ih;
 		this.sceneRenderer.setSize( iw, ih );
 		this.beauty.setSize( iw, ih );
+		this.smaaIn.setSize( iw, ih );
 		this.medium.setSize( iw, ih );
 		if ( this.underwater.setSize ) this.underwater.setSize( iw, ih );
 		// rtt resolution scales of the original are relative to the drawing buffer (output) size
@@ -577,8 +594,6 @@ fn fragment( in: FSIn ) -> vec4f {
 		this.scale = s;
 		this.sceneRenderer.scale = s;
 		if ( this.haze ) this.haze.setScale( s );
-		// upscaling needs more frames to fill the output grid; at 1:1 respond faster (less smear)
-		this.taau.frameWeight.value = MathUtils.lerp( 0.035, 0.06, MathUtils.clamp( ( s - 0.6 ) / 0.4, 0, 1 ) );
 
 	}
 
@@ -612,7 +627,7 @@ fn fragment( in: FSIn ) -> vec4f {
 		if ( cam.matrixWorldInverse ) cam.matrixWorldInverse.copy( cam.matrixWorld ).invert();
 		this.motionBlur.updateCamera( cam );
 		this.taau.advance();
-		const [ jx, jy ] = this.taau.jitter();
+		const [ jx, jy ] = this.aaMode === 'taa' || this.aaMode === 'smaataa' ? this.taau.jitter() : [ 0, 0 ];
 		// three's setViewOffset( w, h, jx, jy, w, h ) moves the view window by +jx px right / +jy px down,
 		// i.e. a clip-space translation of ( -2 jx / w, +2 jy / h )
 		setFrameCamera( cam, this._inW, this._inH, {
@@ -649,7 +664,20 @@ fn fragment( in: FSIn ) -> vec4f {
 		}
 
 		this._beautyPass.render( { colorViews: [ this.beauty.texture ], clear: CLR } );
-		this.taau.render();
+		if ( this.aaMode === 'taa' || this.aaMode === 'smaataa' ) {
+
+			if ( this.aaMode === 'smaataa' ) this.aa.render( 'smaa', this.smaaIn.texture );
+			this.taau.render();
+
+		} else {
+
+			// into the upscaler's other history target (the resolved image); it restarts when TAA returns
+			const t = this.taau, dst = 1 - t._cur;
+			this.aa.render( this.aaMode, t.history[ dst ].textures[ 0 ] );
+			t._cur = dst;
+			t._needsRestart = true;
+
+		}
 		for ( const [ pass, rt ] of this._bloomPasses ) pass.render( { colorViews: [ rt.texture ], clear: CLR } );
 		const out = this.outputTexture ? this.outputTexture.view( { dimension: '2d', mipLevelCount: 1 } ) : GPU.context.getCurrentTexture().createView();
 		this._finalPass.render( { colorViews: [ out ], clear: CLR } );

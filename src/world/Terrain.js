@@ -289,10 +289,15 @@ const TERRAIN_SURFACE = /* wgsl */`
 		// texture stretched vertically on the two vertical projection planes
 		let sw4 = pow( abs( N0.xz ), vec2f( 4.0 ) );
 		let swN = sw4 / ( sw4.x + sw4.y + 1e-5 );
-		let stA = terDetail( vec2f( p.z / 9.3, h / 37.0 ) );
-		let stB = terDetail( vec2f( p.x / 9.3 + 0.5, h / 37.0 + 0.3 ) );
-		let streak = stA.w * swN.x + stB.w * swN.y;
-		let scar = stA.y * swN.x + stB.y * swN.y;
+		// (everything they shape is weighted by the slope and vanishes at 0.28 or less: explicit
+		// gradients in the branch, the same as the implicit ones of the full-screen quad)
+		var streak = 0.5; var scar = 0.5;
+		if ( slope > 0.28 ) {
+			let stA = textureSampleGrad( terrainDetailTex, smpAniso4Repeat, vec2f( p.z / 9.3, h / 37.0 ), vec2f( dpx.z / 9.3, dpx.y / 37.0 ), vec2f( dpy.z / 9.3, dpy.y / 37.0 ) );
+			let stB = textureSampleGrad( terrainDetailTex, smpAniso4Repeat, vec2f( p.x / 9.3 + 0.5, h / 37.0 + 0.3 ), vec2f( dpx.x / 9.3, dpx.y / 37.0 ), vec2f( dpy.x / 9.3, dpy.y / 37.0 ) );
+			streak = stA.w * swN.x + stB.w * swN.y;
+			scar = stA.y * swN.x + stB.y * swN.y;
+		}
 
 		// ---- rock: only evaluated where the rock mask or the slope allow it. Exposure follows the
 		// form: steep faces, convex spurs and ridges (high AO) go bare, gully floors (low AO,
@@ -304,13 +309,17 @@ const TERRAIN_SURFACE = /* wgsl */`
 		// cut banks and faces steeper than ~37 deg: grass cannot hold there and the planar grass / sand
 		// mapping stretches, so they go to scree, bare earth and triplanar rock
 		let bankK = smoothstep( 0.2, 0.42, slope );
-		if ( nr.z > 0.06 || slope > 0.2 ) {
+		let cliffK = smoothstep( 0.28, 0.55, slope );
+		let convex = smoothstep( 0.5, 0.85, nr.w );
+		// rv below, without the rock's own relief term, which adds at most 0.1925 (R.height <= 1): where
+		// even that can't reach the scree band (0.28), rock and scree weigh 0 and the rock isn't shaded
+		let rvBound = nr.z * 0.7 + smoothstep( 0.3, 0.62, slope ) * 0.5 + bankK * 0.42 + smoothstep( 0.2, 0.34, slope ) * 0.4 + convex * 0.14 - gully * 0.4 * ( 1.0 - bankK * 0.6 )
+			+ ( dM.w - 0.5 ) * 0.34 + ( dN.w - 0.5 ) * 0.22 + ( streak - 0.5 ) * 1.0 * cliffK + 0.2;
+		if ( ( nr.z > 0.06 || slope > 0.2 ) && rvBound > 0.28 ) {
 
 			var g: RockGrad;
 			g.dpdx = dpx; g.dpdy = dpy; g.fwY = fwY; g.useGrad = true;
 			let R = terrainRockSurface( p, N0, h, mcr, 0.5, 1.0, g );
-			let cliffK = smoothstep( 0.28, 0.55, slope );
-			let convex = smoothstep( 0.5, 0.85, nr.w );
 			let rv = nr.z * 0.7 + smoothstep( 0.3, 0.62, slope ) * 0.5 + bankK * 0.42 + smoothstep( 0.2, 0.34, slope ) * 0.4 + convex * 0.14 - gully * 0.4 * ( 1.0 - bankK * 0.6 )
 				+ ( R.height - 0.45 ) * 0.35 + ( dM.w - 0.5 ) * 0.34 + ( dN.w - 0.5 ) * 0.22
 				+ ( streak - 0.5 ) * 1.0 * cliffK;
@@ -390,37 +399,42 @@ const TERRAIN_SURFACE = /* wgsl */`
 			* smoothstep( 0.2, 0.5, macroB + dM.w * 0.3 );
 		sand = sand * ( ( rip1 - 0.5 ) * 0.12 * windK + 1.0 );
 
-		// ---- seabed: sand with ripple fields, seagrass meadows, rubble heads
+		// ---- seabed: sand with ripple fields, seagrass meadows, rubble heads (only below the berm:
+		// everything here is weighted by underW, 0 on land)
 		let depth = -h;
-		let reefD = length( xz - rc );
-		let reefW = 1.0 - smoothstep( ${ WORLD.reef.radius * 0.5 }, ${ WORLD.reef.radius * 1.15 }, reefD + ( mcr - 0.5 ) * 30.0 );
-		var under = mix( ${ S( 0.84, 0.78, 0.64 ) }, ${ S( 0.72, 0.7, 0.58 ) }, smoothstep( 1.0, 9.0, depth ) );
-		under = under * ( ( dM.w - 0.5 ) * 0.14 + 1.0 ) * ( ( grain - 0.45 ) * 0.25 + 1.0 );
-		// megaripple fields (~0.75 m) across the swell, troughs collect darker shell hash; not in
-		// the swash zone or the first metre of depth
-		let fieldW = smoothstep( 0.42, 0.62, macroB + ( dM.w - 0.5 ) * 0.35 ) * smoothstep( 0.9, 2.0, depth ) * ( 1.0 - reefW );
-		under = under * ( ( rip2 - 0.55 ) * 0.22 * fieldW * fade2 + 1.0 );
-		// small wave ripples (~0.16 m) everywhere below the swash
-		// seagrass meadows: ragged edges, blade streaks leaning with the wave surge, epiphyte tips
-		// (the fringe breaks up into clumps: noise at three scales thresholds the soft splat edge)
-		let clumps = ( dM.w - 0.5 ) * 0.5 + ( dN.y - 0.45 ) * 0.4 + ( macroB - 0.5 ) * 0.3;
-		let seagrassW = smoothstep( 0.3, 0.55, sp.z + clumps ) * underW * smoothstep( 0.3, 0.9, depth );
-		let swPerp = vec2f( -swDir.y, swDir.x );
-		let blades = terDetail( vec2f( dot( xz, swDir ) / 2.6, dot( xz, swPerp ) / 0.35 ) ).y;
-		var meadow = mix( ${ S( 0.12, 0.16, 0.07 ) }, ${ S( 0.27, 0.29, 0.15 ) }, smoothstep( 0.35, 0.75, blades ) );
-		meadow = mix( meadow, ${ S( 0.24, 0.2, 0.11 ) }, smoothstep( 0.55, 0.8, dM.y + ( macroB - 0.5 ) * 0.4 ) * 0.5 );
-		// sparse at the fringe: sand shows between the blades; thinner, paler patches inside
-		meadow = mix( under, meadow, smoothstep( 0.3, 0.85, sp.z + clumps * 0.5 ) * 0.35 + 0.65 );
-		meadow = mix( meadow, mix( meadow, under, 0.45 ), smoothstep( 0.58, 0.8, macroB + ( dM.w - 0.5 ) * 0.4 ) );
-		under = mix( under, meadow, seagrassW );
-		// rubble heads: coral rubble and rock turfed with algae, pink coralline crusts
-		let rubbleW = smoothstep( 0.3, 0.6, sp.w + ( dN.x - 0.5 ) * 0.4 + ( dM.w - 0.5 ) * 0.3 ) * underW;
-		var rubble = mix( ${ S( 0.2, 0.19, 0.15 ) }, ${ S( 0.36, 0.33, 0.26 ) }, smoothstep( 0.3, 0.7, dN.x ) );
-		rubble = mix( rubble, ${ S( 0.2, 0.24, 0.1 ) }, smoothstep( 0.5, 0.7, dF.y ) * 0.6 );
-		rubble = mix( rubble, ${ S( 0.58, 0.38, 0.44 ) }, smoothstep( 0.62, 0.74, dM.x ) * 0.6 );
-		under = mix( under, rubble, rubbleW );
-		// reef flat: coral rubble and pink crusts toward the reef
-		under = mix( under, mix( ${ S( 0.56, 0.50, 0.44 ) }, ${ S( 0.60, 0.43, 0.46 ) }, smoothstep( 0.45, 0.7, dM.x ) ), reefW * 0.7 * smoothstep( 0.4, 0.6, dN.x ) );
+		var fieldW = 0.0; var seagrassW = 0.0; var blades = 0.0; var rubbleW = 0.0;
+		var under = sand;
+		if ( underW > 0.0 ) {
+			let reefD = length( xz - rc );
+			let reefW = 1.0 - smoothstep( ${ WORLD.reef.radius * 0.5 }, ${ WORLD.reef.radius * 1.15 }, reefD + ( mcr - 0.5 ) * 30.0 );
+			under = mix( ${ S( 0.84, 0.78, 0.64 ) }, ${ S( 0.72, 0.7, 0.58 ) }, smoothstep( 1.0, 9.0, depth ) );
+			under = under * ( ( dM.w - 0.5 ) * 0.14 + 1.0 ) * ( ( grain - 0.45 ) * 0.25 + 1.0 );
+			// megaripple fields (~0.75 m) across the swell, troughs collect darker shell hash; not in
+			// the swash zone or the first metre of depth
+			fieldW = smoothstep( 0.42, 0.62, macroB + ( dM.w - 0.5 ) * 0.35 ) * smoothstep( 0.9, 2.0, depth ) * ( 1.0 - reefW );
+			under = under * ( ( rip2 - 0.55 ) * 0.22 * fieldW * fade2 + 1.0 );
+			// small wave ripples (~0.16 m) everywhere below the swash
+			// seagrass meadows: ragged edges, blade streaks leaning with the wave surge, epiphyte tips
+			// (the fringe breaks up into clumps: noise at three scales thresholds the soft splat edge)
+			let clumps = ( dM.w - 0.5 ) * 0.5 + ( dN.y - 0.45 ) * 0.4 + ( macroB - 0.5 ) * 0.3;
+			seagrassW = smoothstep( 0.3, 0.55, sp.z + clumps ) * underW * smoothstep( 0.3, 0.9, depth );
+			let swPerp = vec2f( -swDir.y, swDir.x );
+			blades = terDetail( vec2f( dot( xz, swDir ) / 2.6, dot( xz, swPerp ) / 0.35 ) ).y;
+			var meadow = mix( ${ S( 0.12, 0.16, 0.07 ) }, ${ S( 0.27, 0.29, 0.15 ) }, smoothstep( 0.35, 0.75, blades ) );
+			meadow = mix( meadow, ${ S( 0.24, 0.2, 0.11 ) }, smoothstep( 0.55, 0.8, dM.y + ( macroB - 0.5 ) * 0.4 ) * 0.5 );
+			// sparse at the fringe: sand shows between the blades; thinner, paler patches inside
+			meadow = mix( under, meadow, smoothstep( 0.3, 0.85, sp.z + clumps * 0.5 ) * 0.35 + 0.65 );
+			meadow = mix( meadow, mix( meadow, under, 0.45 ), smoothstep( 0.58, 0.8, macroB + ( dM.w - 0.5 ) * 0.4 ) );
+			under = mix( under, meadow, seagrassW );
+			// rubble heads: coral rubble and rock turfed with algae, pink coralline crusts
+			rubbleW = smoothstep( 0.3, 0.6, sp.w + ( dN.x - 0.5 ) * 0.4 + ( dM.w - 0.5 ) * 0.3 ) * underW;
+			var rubble = mix( ${ S( 0.2, 0.19, 0.15 ) }, ${ S( 0.36, 0.33, 0.26 ) }, smoothstep( 0.3, 0.7, dN.x ) );
+			rubble = mix( rubble, ${ S( 0.2, 0.24, 0.1 ) }, smoothstep( 0.5, 0.7, dF.y ) * 0.6 );
+			rubble = mix( rubble, ${ S( 0.58, 0.38, 0.44 ) }, smoothstep( 0.62, 0.74, dM.x ) * 0.6 );
+			under = mix( under, rubble, rubbleW );
+			// reef flat: coral rubble and pink crusts toward the reef
+			under = mix( under, mix( ${ S( 0.56, 0.50, 0.44 ) }, ${ S( 0.60, 0.43, 0.46 ) }, smoothstep( 0.45, 0.7, dM.x ) ), reefW * 0.7 * smoothstep( 0.4, 0.6, dN.x ) );
+		}
 		sand = mix( sand, under, underW );
 
 		// ---- ground: tall-grass meadow (tone shared with the grass field), forest floor and, from
