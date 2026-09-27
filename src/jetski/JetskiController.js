@@ -61,11 +61,12 @@ export const SKI = {
 	riderShift: [ 0.36, 0.22 ], // lateral / fore-aft reach of his weight shift (m)
 	popTorque: 3400, popTime: 0.2, airPitch: 900, airRoll: 380,
 	chopL: 1.8, chopT: 0.06, // hull filter on the water: chop much shorter than the hull is bridged (m of track, s at rest)
+	pushSpeed: 0.45, pushGrip: 0.9, pushGain: 50, groundHold: 0.4, // (pushGain 1/s: stiff enough to hold the pace against the sand's pull) // beached push-off: m/s he walks it back at, the most push as a fraction of its weight (sand friction ~0.45 of the load on the sand), s a contact counts as aground
 	primeHold: 0.2, // s: the pump keeps its water this long after the intake leaves the surface
 	faceK: 1.0, // how much of the surface rise under a panel moving across a wave face counts as entry (planing on the face)
 	heaveFade: [ 4, 14 ], // m/s: heave radiation damping fades as the hull planes (the planing term damps it)
 	landBank: 55 * DEG, // landing rolled past this with a hard entry throws him
-	landFlat: 11.5, // m/s: a flat-ish landing (nose within 15 deg down, bank within 30 deg) holds up to this entry
+	landFlat: 14, // m/s: a flat or stern-first landing (nose within 15 deg down, bank within 30 deg) holds up to this entry: he takes it on his legs
 	landFast: [ 25, 60, 18 ], // ...rising to [2] m/s between [0] and [1] m/s of speed: a flat hull at rocket speed skims in on a long footprint
 	solidK: 6e5, solidC: 1.6e4, solidMu: 0.1, // floating solids (kicker ramps): N/m and N s/m over the whole bottom, wet plastic friction
 	jetOut: [ 0, - 0.14, - 1.58 ], intake: [ 0, - 0.26, - 0.35 ],
@@ -77,6 +78,12 @@ export const SKI = {
 	// (his full 9 kN m at 8 km/h with the bucket down and full lock rolled the ski over)
 	lowRoll: [ 3, 9 ], lowRollMin: 1, // (1: off. Not reproduced in game, see docs/jetski.md Rocket; 0.2 is the candidate)
 	airHold: [ 1400, 420, 700 ], // airborne attitude hold: N m per rad, N m per rad/s, clamp (N m) (the 56 deg nose-up launch is not reproduced yet)
+	// airborne: the pitch (rad, nose up) he holds the ski at for the landing with no input, stern first as riders land,
+	// and how much higher (rad) he holds it with the throttle open: he sits back on the bars and the primed pump's thrust,
+	// below the centre of gravity, lifts the nose (W is held for speed over a crest, it is not a push on the bars)
+	// airMatch: the share of the water's slope under him (along the heading) he matches as he comes down, so the hull meets
+	// the face it lands on flat to it instead of slapping it (riders spot the landing), within airMatchMax (rad)
+	airTrim: 3 * DEG, airThrottleTrim: 4 * DEG, airMatch: 1, airMatchMax: 20 * DEG,
 	// aero (round 4, rocket stability): every term grows with airspeed, so below ~100 km/h they are small.
 	// finK: the pod's four fins in an X plus the hull's aft body, as one tail: effective area x lift slope (m^2 per rad),
 	// its centre of pressure at finAt (ski frame), 1.5 m behind the centre of gravity, so it weathervanes the nose back
@@ -87,6 +94,11 @@ export const SKI = {
 	finK: 2, finAt: [ 0, 0.42, - 1.8 ], aeroDamp: [ 30, 14, 12 ], hullAero: [ 3, 0.6 ], hullAt: [ 0, 0, - 0.1 ],
 	faceFade: [ 30, 55, 0.9 ],
 	plough: 20, // 1/s: heave damping of the whole ski while its bottom is wet, over the aeroOn band (see the plough in step)
+	ploughFace: 0, // how much of the surface rising along the ski's track (running up a face) the plough lets through (1 lets the rocket fly: 0.95 s to 1.4 s flights)
+	// the bow's reserve buoyancy: the deck (the top of each panel's water column) rises by bowDeck (m) towards the bow and
+	// the flare above the chine adds flare x the panel's area for water more than 0.12 m up the bow, so a face ahead
+	// lifts the nose instead of burying it; the nose-dive drag starts past the raised deck (faded out over aeroOn)
+	bowDeck: 0, flare: 0, bowFrom: [ 0.2, 1.65 ], // (0, 0: off. 0.3, 0.8 is the candidate, see docs/jetski.md Wave riding)
 	aeroOn: [ 26, 42 ], // m/s: the tuned fin and hull terms blend in over this band (above the 30 m/s jet-only top speed), so the
 	// ride, the turns and the hops below 95 km/h stay as they were tuned
 };
@@ -475,6 +487,7 @@ export class JetskiController {
 		const heaveD = 1 - 0.85 * sstep( au, S.heaveFade[ 0 ], S.heaveFade[ 1 ] );
 		const faceK = S.faceK * ( 1 - S.faceFade[ 2 ] * sstep( au, S.faceFade[ 0 ], S.faceFade[ 1 ] ) );
 		const cfH = 0.5 * RHO * S.cf;
+		const bowR = 1 - sstep( au, S.aeroOn[ 0 ], S.aeroOn[ 1 ] ); // the bow's reserve fades over the rocket band (its hops and turns are tuned without it)
 		for ( let i = 0; i < this.samples.length; i ++ ) {
 
 			const s = this.samples[ i ];
@@ -484,7 +497,8 @@ export class JetskiController {
 			if ( self > 0 ) hw += self * skiWakeShape( s.p.x, s.p.z, this.speed );
 			const pb = this.toWorld( s.p, _p );
 			// the water column from the panel to the deck above it (either way up)
-			_v.set( s.p.x, S.deckY, s.p.z );
+			const bowK = sstep( s.p.z, S.bowFrom[ 0 ], S.bowFrom[ 1 ] ) * bowR;
+			_v.set( s.p.x, S.deckY + S.bowDeck * bowK, s.p.z );
 			const pd = this.toWorld( _v, _pd );
 			const low = pb.y < pd.y ? pb : pd, high = pb.y < pd.y ? pd : pb;
 			const span = Math.max( high.y - low.y, 0.05 );
@@ -503,7 +517,7 @@ export class JetskiController {
 			// the surface under the panel rises with the water's own motion and as the panel runs up a face
 			const vy = _vp.y - wv * 0.7 - ( _vp.x * sx + _vp.z * sz ) * faceK;
 			// buoyancy (vertical: the column) + heave damping against the water's motion (fades on the plane)
-			_f.set( 0, RHO * GRAV * s.area * sub - ( 1500 * vy + 700 * vy * Math.abs( vy ) ) * s.area * wetK * heaveD, 0 );
+			_f.set( 0, RHO * GRAV * s.area * sub * ( 1 + S.flare * bowK * clamp( ( sub - 0.12 ) / 0.2, 0, 1 ) ) - ( 1500 * vy + 700 * vy * Math.abs( vy ) ) * s.area * wetK * heaveD, 0 );
 			addAt( _f, _c1 );
 
 			// ---- hydrodynamics of the panel itself (only while its face is in the water)
@@ -550,9 +564,10 @@ export class JetskiController {
 			const fl = - 0.5 * RHO * aw * ( grip * us * ws + S.crossFlow * ws * Math.abs( ws ) );
 			addAt( _f.copy( side ).multiplyScalar( fl ), pb );
 			// buried past the chine (nose-dive): the deck pushes water
-			if ( d > 0.3 ) {
+			const buryAt = 0.3 + S.bowDeck * bowK;
+			if ( d > buryAt ) {
 
-				const bd = 0.5 * RHO * S.bury * s.area * Math.min( 1, ( d - 0.3 ) / 0.2 );
+				const bd = 0.5 * RHO * S.bury * s.area * Math.min( 1, ( d - buryAt ) / 0.2 );
 				addAt( _f.copy( _vp ).multiplyScalar( - bd * vm ), _c1 );
 
 			}
@@ -571,9 +586,13 @@ export class JetskiController {
 		const pk = S.plough * sstep( au, S.aeroOn[ 0 ], S.aeroOn[ 1 ] ) * wetD;
 		if ( pk > 0 ) {
 
-			let wv = 0;
-			for ( let j = 0; j < this.qpts.length; j ++ ) wv += this.waterV[ j ];
-			F.y -= m * pk * Math.max( 0, this.velocity.y - wv / Math.max( 1, this.qpts.length ) ); // rising only: the landing itself is the slam's
+			// the surface under the ski rises with the water's own motion and as the ski runs up a face: rising with it is
+			// riding the wave, only rising faster than it (a take-off) is damped
+			let wv = 0, gx = 0, gz = 0;
+			const nq = Math.max( 1, this.qpts.length );
+			for ( let j = 0; j < this.qpts.length; j ++ ) { wv += this.waterV[ j ]; gx += this.sgx[ j ]; gz += this.sgz[ j ]; }
+			const rise = ( wv + S.ploughFace * ( this.velocity.x * gx + this.velocity.z * gz ) ) / nq;
+			F.y -= m * pk * Math.max( 0, this.velocity.y - rise ); // rising only: the landing itself is the slam's
 
 		}
 
@@ -690,10 +709,20 @@ export class JetskiController {
 				// little. With no input his body soaks up the pitch and roll he left the face with and holds the
 				// nose a touch up for the landing (bounded: he cannot stop a real over-rotation)
 				const I = this.input;
-				const pin = clamp( I.tuck + 0.3 * I.throttle, 0, 1 ) - clamp( I.brake + I.back, 0, 1 );
+				const pin = clamp( I.tuck, 0, 1 ) - clamp( I.brake + I.back, 0, 1 );
 				const hold = 1 - Math.min( 1, Math.abs( pin ) + Math.abs( I.steer ) );
-				const ah = S.airHold;
-				tl.x += S.airPitch * pin + clamp( ( - 6 * DEG - this.pitchAngle ) * ah[ 0 ] * hold - _a.x * ah[ 1 ], - ah[ 2 ], ah[ 2 ] );
+				let gf = 0;
+				if ( S.airMatch > 0 ) {
+
+					const fh = Math.hypot( fwd.x, fwd.z ) || 1, nq = Math.max( 1, this.qpts.length );
+					for ( let j = 0; j < this.qpts.length; j ++ ) gf += ( this.sgx[ j ] * fwd.x + this.sgz[ j ] * fwd.z ) / fh;
+					gf = clamp( Math.atan( gf / nq ) * S.airMatch, - S.airMatchMax, S.airMatchMax );
+
+				}
+
+				const ah = S.airHold, trim = S.airTrim + S.airThrottleTrim * clamp( I.throttle, 0, 1 ) + gf;
+				// (+x torque is nose down: below the trim he pushes the nose up, above it he lets it down)
+				tl.x += S.airPitch * pin + clamp( ( this.pitchAngle - trim ) * ah[ 0 ] * hold - _a.x * ah[ 1 ], - ah[ 2 ], ah[ 2 ] );
 				tl.z += - S.airRoll * I.steer + clamp( - bank * 900 * hold - _a.z * 160, - 400, 400 );
 
 			}
@@ -864,6 +893,27 @@ export class JetskiController {
 
 		}
 
+		// beached (the hull on the ground, the intake dry, all but stopped): S has him walk it back off the sand
+		// stern first at a slow push (pushSpeed), until the intake is wet again; the push beats the sand's friction
+		// (at most pushGrip of the weight, rider and mate included) and puts no turn on the hull
+		// (the hull rocks on and off the sand from one substep to the next: aground counts for groundHold s after a contact)
+		const I = this.input;
+		this.groundAge = lift > 0 ? 0 : ( this.groundAge ?? 1 ) + H;
+		this.beached = this.driven && this.groundAge < SKI.groundHold && this.prime < 0.5 && this.speed < 1.2;
+		this.pushing = this.beached && I.brake > 0.5 && I.throttle < 0.1;
+		if ( this.pushing ) {
+
+			const back = _c1.set( 0, 0, - 1 ).applyQuaternion( this.quaternion ).setY( 0 );
+			if ( back.lengthSq() > 1e-4 ) {
+
+				back.normalize();
+				const vb = this.velocity.x * back.x + this.velocity.z * back.z;
+				F.addScaledVector( back, clamp( this.mass * ( SKI.pushSpeed - vb ) * SKI.pushGain, 0, this.mass * 9.81 * SKI.pushGrip ) );
+
+			}
+
+		}
+
 		// never tunnel: a deep penetration is resolved positionally
 		if ( lift > 0.22 ) {
 
@@ -937,7 +987,7 @@ export class JetskiController {
 		return {
 			kmh: r1( this.speed * 3.6, 10 ), u: r1( this.forwardSpeed ), rpm: r1( this.rev ), throttle: r1( this.throttle ), brake: r1( this.brake ),
 			steer: r1( this.steer ), bank: r1( this.bank / DEG, 10 ), pitch: r1( this.pitchAngle / DEG, 10 ), slip: r1( this.slip / DEG, 10 ),
-			yawRate: r1( this.yawRate, 1000 ), passenger: Math.round( this.massMate || 0 ), mass: Math.round( this.mass ), wet: r1( this.wetFraction ), prime: r1( this.prime ), thrust: Math.round( this.thrust ),
+			yawRate: r1( this.yawRate, 1000 ), passenger: Math.round( this.massMate || 0 ), mass: Math.round( this.mass ), wet: r1( this.wetFraction ), beached: !! this.beached, pushing: !! this.pushing, prime: r1( this.prime ), thrust: Math.round( this.thrust ),
 			air: this.airborne, onSolid: this.onSolid, airTime: r1( this.airTime ), lastAir: this.lastAir, maxAirHeight: r1( this.maxAirHeight ),
 			driven: this.driven, engineOn: this.engineOn, capsized: this.capsized, y: r1( this.position.y ), ms: r1( this.stats.ms, 1000 ),
 			fuel: r1( this.fuel ), boosting: this.boosting, boost: r1( this.boostLevel ), rocketN: Math.round( this.rocketForce ), subSteps: this.subSteps, rollT: Math.round( this.rollT ),

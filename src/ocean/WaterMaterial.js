@@ -78,6 +78,11 @@ export class WaterMaterial extends Material {
 				ssr: [ 'f32', 1 ], // screen-space reflections on/off
 				debugMode: [ 'i32', 0 ],
 				hullActive: [ 'f32', 0 ],
+				// the ridden jetski's headlamp on the sea (src/jetski/JetskiLights.js pool()): xyz world position,
+				// w intensity (0 = off, the term is skipped); aim xyz, w the cos of the cone's edge; colour rgb, w range (m)
+				headPos: [ 'vec4f', [ 0, 0, 0, 0 ] ],
+				headDir: [ 'vec4f', [ 0, 0, 1, 0.9 ] ],
+				headCol: [ 'vec4f', [ 1.0, 0.92, 0.8, 55 ] ],
 			},
 		} );
 		this.isWaterMaterial = true;
@@ -563,7 +568,25 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 		// a thin bright rim just behind the edge: the rounded bead catches the sky
 		let rim = smoothstep( 0.0, 0.025, frontD ) * smoothstep( 0.1, 0.035, frontD ) * uprush;
 		let water = mix( transmitted, reflCol, F ) + sunSpec + skyRefl * ( 0.22 * rim );
-		let shaded = mix( water, foamCol + sunSpec * 0.05, sat( foam ) );
+		// ---- the ridden jetski's headlamp (a spot, same falloff as the scene's local lights): a pool on the
+		// foam and the water body ahead of the bow, and a GGX glint on each wave facing back along the beam
+		var lampCol = vec3f( 0.0 );
+		if ( mat.headPos.w > 0.0 ) {
+			let lv = mat.headPos.xyz - pos;
+			let ld2 = max( dot( lv, lv ), 0.04 );
+			let Lh = lv * inverseSqrt( ld2 );
+			let cone = smoothstep( mat.headDir.w, mix( mat.headDir.w, 1.0, 0.6 ), dot( - Lh, mat.headDir.xyz ) );
+			let rr = ld2 / ( mat.headCol.w * mat.headCol.w );
+			let win = sat( 1.0 - rr * rr );
+			let Eh = mat.headCol.rgb * ( mat.headPos.w * cone * win * win / ld2 );
+			let NdLh = max( dot( N, Lh ), 0.0 );
+			let Hh = normalize( Lh + V );
+			let specH = _waterDGGX( max( dot( N, Hh ), 0.0 ), alpha2 ) * _waterVSmithGGX( NdLh, NdV, alpha2 ) * fresnelDielectric( max( dot( V, Hh ), 0.0 ), ${ IOR } ) * NdLh;
+			// the water column's backscatter (dim blue-green), foam a bright diffuse scatterer (albedo ~0.85)
+			let bodyR = vec3f( 0.008, 0.021, 0.025 ) * ( 1.0 - F );
+			lampCol = Eh * ( mix( bodyR, vec3f( 0.85 * INV_PI ) * mat.foamIntensity, sat( foam ) ) * NdLh + min( specH, 200.0 ) * ( 1.0 - sat( foam ) ) );
+		}
+		let shaded = mix( water, foamCol + sunSpec * 0.05, sat( foam ) ) + lampCol;
 		// fade into the sand right at the leading edge (anti-aliased by the film thickness)
 		let edgeAA = smoothstep( 0.0, max( fwidth( thickness ) * 1.5, 0.004 ), thickness );
 		// contact shadow: the sand just ahead of the advancing edge is darkened (the bead's

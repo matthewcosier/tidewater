@@ -1,6 +1,7 @@
 import * as THREE from '../engine/index.js';
 import { SkinnedModel } from '../engine/render/Skinning.js';
 import { parseGLB } from '../engine/loaders/GLTF.js';
+import { loadVest, poseVest } from '../jetski/Vest.js';
 
 // The player's own animated character: seen over the shoulder in third person, and worn in
 // first person (head and neck collapsed) so you have legs when you look down and a body shadow.
@@ -27,6 +28,7 @@ const BASE = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'model
 export const AVATAR_URLS = [ BASE + 'player.glb', BASE + 'joe.glb' ];
 const SPEEDS = { walk: 1.4, run: 3.8, sprint: 6.0 }; // m/s when the model carries no clipSpeeds
 const CULL = 90;
+const HAT_VEST = 0.028; // m the hat and its cord stand off his back (rest -z) over the ski vest's foam (poseHat; the vest's back is 1.7 cm proud of the hat's rest)
 const COLLAPSE = 1e-3; // head joints scaled to a point at the neck (not 0: the normals stay valid)
 
 const _up = new THREE.Vector3( 0, 1, 0 );
@@ -149,6 +151,7 @@ export class Avatar {
 		// riding a jetski (src/jetski/Jetski.js rideFrame): the ski clips, blended by weight
 		this.rideClips = new Map();
 		for ( const n of [ 'ski_sit', 'ski_lean_l', 'ski_lean_r', 'ski_stand', 'ski_tuck' ] ) if ( has( n ) ) this.rideClips.set( n, layer( n ) );
+		if ( has( 'walk' ) ) this.rideClips.set( 'walk', layer( 'walk' ) ); // walking the beached ski back off the sand (rideFrame w.walk, walkRate)
 		const sx = extras.swim || {};
 		this.hasSwim = has( 'tread' ) && has( 'swim' );
 		this.swimPitch = THREE.MathUtils.degToRad( sx.pitch || 78 );
@@ -194,7 +197,7 @@ export class Avatar {
 				const fold = M().makeTranslation( st.x, st.y, st.z ).multiply( M().makeScale( COLLAPSE, COLLAPSE, COLLAPSE ) ).multiply( M().makeTranslation( - st.x, - st.y, - st.z ) );
 				const h = this.hat = { jh, js, jhead, jc: hx.cord ? jn( hx.cord ) : - 1, back: M().fromArray( hx.back ), fold,
 					pivot: V( hx.pivot ), lat: V( hx.lateral ).normalize(), nrm: V( hx.normal ).normalize(), centre: V( hx.centre ),
-					off: 0, lift: 0, liftV: 0, roll: 0, rollV: 0, yaw: 0, v: 0, t: 0, liftSign: 1,
+					off: 0, vest: 0, V: M(), lift: 0, liftV: 0, roll: 0, rollV: 0, yaw: 0, v: 0, t: 0, liftSign: 1,
 					q: Q(), q2: Q(), q0: Q(), q1: Q(), S: M(), M1: M(), M2: M(), M3: M(), C: M(),
 					p0: V( [ 0, 0, 0 ] ), p1: V( [ 0, 0, 0 ] ), s0: V( [ 1, 1, 1 ] ), s1: V( [ 1, 1, 1 ] ),
 					c0: V( [ 0, 0, 0 ] ), c1: V( [ 0, 0, 0 ] ), pm: V( [ 0, 0, 0 ] ), pc: V( [ 0, 0, 0 ] ), pv: V( [ 0, 0, 0 ] ), v3: V( [ 0, 0, 0 ] ) };
@@ -252,6 +255,10 @@ export class Avatar {
 		this.eyeAboveNeck = head >= 0 && neck >= 0 ? W[ head * 16 + 13 ] - W[ neck * 16 + 13 ] + 0.09 : 0.17;
 		this.model = model;
 		this.group.add( model.group );
+		// the ski vest (src/jetski/Vest.js): worn on the ski and after a throw while he is in the water or tumbling
+		this.vest = null;
+		this.vestOn = false;
+		loadVest( 'pfd_rider', model ).then( ( v ) => { this.vest = v; } ).catch( ( e ) => console.warn( 'Avatar: no ski vest', e ) );
 
 	}
 
@@ -272,6 +279,7 @@ export class Avatar {
 
 			this.group.visible = this.visible = true;
 			this.poseHat( dt, false, f );
+			poseVest( this.vest, m, this.vestOn );
 			this.headHidden = !! f.headcam && this.hideJoints.length > 0;
 			if ( this.headHidden ) this.collapseHead();
 			return;
@@ -383,7 +391,9 @@ export class Avatar {
 
 		}
 
+		if ( ! swim ) this.vestOn = false; // on land the vest comes off
 		this.poseHat( dt, swim, f );
+		poseVest( this.vest, m, this.vestOn );
 		this.headHidden = fp && this.hideJoints.length > 0;
 		if ( this.headHidden ) this.collapseHead();
 
@@ -405,7 +415,7 @@ export class Avatar {
 		for ( const n in r.w ) {
 
 			const l = this.rideClips && this.rideClips.get( n );
-			if ( l && r.w[ n ] > 1e-3 ) { l.weight = l.target = r.w[ n ]; layers.push( l ); }
+			if ( l && r.w[ n ] > 1e-3 ) { l.weight = l.target = r.w[ n ]; if ( n === 'walk' ) l.speed = r.walkRate || 1; layers.push( l ); }
 
 		}
 
@@ -413,7 +423,9 @@ export class Avatar {
 		m.layers = layers;
 		this.clip = layers[ 0 ].clip.name;
 		m.update( dt );
+		this.vestOn = true;
 		this.poseHat( dt, false, f );
+		poseVest( this.vest, m, true );
 		this.headHidden = !! r.hideHead && this.hideJoints.length > 0;
 		if ( this.headHidden ) this.collapseHead();
 
@@ -653,7 +665,10 @@ export class Avatar {
 			h.q.setFromAxisAngle( h.lat, h.liftSign * h.lift ).multiply( h.q2.setFromAxisAngle( h.nrm, h.roll ) );
 			h.S.makeRotationFromQuaternion( h.q );
 			h.S.setPosition( h.pv.copy( h.pivot ).sub( h.v3.copy( h.pivot ).applyMatrix4( h.S ) ) );
-			const B = J( h.js, h.M1 ).multiply( h.S ).multiply( h.back );
+			// over the ski vest the hat rides out on the foam, off his back (rest -z, HAT_VEST m, eased)
+			h.vest += ( ( this.vestOn ? HAT_VEST : 0 ) - h.vest ) * ( 1 - Math.exp( - dtc * 8 ) );
+			h.V.makeTranslation( 0, 0, - h.vest );
+			const B = J( h.js, h.M1 ).multiply( h.S ).multiply( h.V ).multiply( h.back );
 			if ( w < 1 ) {
 
 				const A = J( h.jhead, h.M2 );
@@ -681,7 +696,7 @@ export class Avatar {
 			const wc = THREE.MathUtils.clamp( ( w - 0.5 ) * 2, 0, 1 );
 			if ( wc > 0 ) {
 
-				const S2 = J( h.js, h.M3 ).elements, e = C.elements;
+				const S2 = J( h.js, h.M3 ).multiply( h.V ).elements, e = C.elements;
 				for ( let i = 0; i < 16; i ++ ) e[ i ] += ( S2[ i ] - e[ i ] ) * wc;
 
 			}

@@ -37,12 +37,13 @@ export class Speech {
 	}
 
 	// `urgent` (a bump's line): past the gap and the cap, and it replaces the person's own bubble.
-	say( person, text, key, t, urgent = false ) {
+	// `range` (m): how far from the camera the line is still shown (a call across the beach carries further)
+	say( person, text, key, t, urgent = false, range = RANGE ) {
 
 		const own = this.live.find( b => b.who === person );
 		if ( ! urgent && ( this.live.length >= MAX || t < this.nextAt || own ) ) return false;
 		if ( own ) own.until = t;
-		if ( ! person.world || person.world.distanceTo( this.app.camera.position ) > RANGE ) return false;
+		if ( ! person.world || person.world.distanceTo( this.app.camera.position ) > range ) return false;
 		this.mount();
 		if ( ! this.el ) return false;
 		const el = document.createElement( 'div' );

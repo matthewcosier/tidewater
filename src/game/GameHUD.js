@@ -16,6 +16,12 @@ const CSS = /* css */`
 	transition: transform var(--tw-med) var(--tw-ease), right var(--tw-slow) var(--tw-ease); }
 .tw-root[data-panel='open'] .gm-purse { right: calc(var(--tw-panel-w) + 2 * var(--tw-3)); }
 .tw-root.is-photo .gm-panel { display: none; }
+.gm-pin { position: absolute; right: calc(var(--tw-edge) + 184 * var(--tw-u) + var(--tw-3)); bottom: var(--tw-edge); display: flex; gap: var(--tw-2); align-items: baseline;
+	padding: var(--tw-2) var(--tw-4); border-radius: 999px; font: 500 calc(12 * var(--tw-u)) var(--tw-font); color: var(--tw-ink); pointer-events: none; white-space: nowrap; }
+/* on the jetski the key legend runs along the bottom row: the chip sits over it (--jh-keys-h: the legend's height, Jetski.js) */
+:root:has(.jh:not([hidden])) .gm-pin { bottom: calc(var(--tw-edge) + var(--jh-keys-h, 28px) + var(--tw-2)); }
+.gm-pin-label { letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.72; }
+.gm-pin-num { font: 600 calc(15 * var(--tw-u)) var(--tw-mono); color: var(--tw-sun); letter-spacing: 0.14em; }
 .gm-purse.is-bump { animation: gm-bump 420ms var(--tw-ease); }
 @keyframes gm-bump { 30% { transform: scale(1.08); } }
 .gm-money { font-family: var(--tw-mono); color: var(--tw-sun); font-weight: 600; }
@@ -190,6 +196,9 @@ export class GameHUD {
 		this.sonarD = this.purse.querySelector( '.gm-sonar-d' );
 		this.sonarDots = this.purse.querySelector( '.gm-sonar-dots' );
 		this.moneyEl = this.purse.querySelector( '.gm-money' );
+		// the ATM card's PIN (GameState.pin), bottom right beside the minimap
+		this.pinChip = h( 'div', 'gm-pin tw-glass', '<span class="gm-pin-label">Card PIN</span><span class="gm-pin-num"></span>' );
+		this.pinNum = this.pinChip.querySelector( '.gm-pin-num' );
 		this.coolerEl = this.purse.querySelector( '.gm-cooler' );
 		this.coolerBar = this.purse.querySelector( '.gm-cooler-bar > span' );
 		this.coolerKg = this.purse.querySelector( '.gm-cooler-kg' );
@@ -214,7 +223,7 @@ export class GameHUD {
 		this.catchCard = h( 'div', 'gm-catch tw-glass' );
 		this.catchOpen = false;
 		const hud = ui.hud || ui.root;
-		hud.append( this.catchScrim, this.purse, this.fight, this.bite, this.cast, this.dot, this.catchCard );
+		hud.append( this.catchScrim, this.purse, this.pinChip, this.fight, this.bite, this.cast, this.dot, this.catchCard );
 
 		// panels (interactive)
 		this.inv = h( 'div', 'gm-panel tw-glass tw-interactive' );
@@ -236,6 +245,8 @@ export class GameHUD {
 
 	refresh() {
 
+		this.pinNum.textContent = this.game.state.pin;
+		this.pinChip.setAttribute( 'aria-label', `Card PIN ${ this.game.state.pin }` );
 		const s = this.game.state;
 		const st = s.stats;
 		this.moneyEl.textContent = `$${ s.money.toLocaleString() }`;

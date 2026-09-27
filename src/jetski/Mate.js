@@ -1,7 +1,8 @@
 import * as THREE from '../engine/index.js';
 import { SkinnedModel } from '../engine/render/Skinning.js';
 import { loadGLB } from '../engine/loaders/GLTF.js';
-import { fadeOptions, setFade } from '../people/Fade.js';
+import { fadeOptions, setFade, fadeCustomize, setGroupFade } from '../people/Fade.js';
+import { loadVest, poseVest } from './Vest.js';
 import { rootMotion } from '../ferry/Crowd.js';
 
 // Emily, the back-seat mate (docs/jetski.md "Back-seat mate"). She hangs about at the water's edge by the
@@ -22,7 +23,10 @@ export const MATE = {
 	mass: 80,                               // kg on the rear seat
 	behind: 0.46, up: 0.05,                 // m: her seat point from the ski's Seat pivot (back, up)
 	home: [ 40.5, - 40.0 ], homeYaw: 0.15,  // ankle deep at the water's edge by the beach hire skis
-	reach: 8, calm: 3 / 3.6, back: 6, drop: 30, // m pick-up range, m/s slow enough, m swim-back range, m drop-off range
+	// m pick-up range (she wades or swims out to the ski, so a ski stopped in knee-deep water, where the ski can float, is in
+	// reach), m/s slow enough (a coasting hull takes seconds to shed the last few km/h), m swim-back range, m drop-off range
+	reach: 16, calm: 5 / 3.6, back: 6, drop: 30,
+	call: 40, callEvery: 7,                 // m: she waves a ski in from this far (and calls out once in earshot), s between waves
 	side: 1.05,                             // m: the boarding point off the ski's left side, beside her seat
 	tread: 1.3,                             // m: feet below the surface treading water, until her chest height is measured on load
 	// treading water (no swim clip on the crowd rig: bone overrides in treadPose): rad/s of the sculling hands and
@@ -38,7 +42,7 @@ const CLIP = { idle: 'idle_neutral_01', look: 'idle_look_around_01', walk: 'walk
 const SKI = [ 'ski_sit', 'ski_lean_l', 'ski_lean_r', 'ski_tuck', 'ski_stand' ];
 // family-friendly, rare: a cool-down each (s) and a quiet gap between any two of her lines
 const LINES = {
-	hello: [ 'G\'day! Room for one more?', 60 ], aboard: [ 'Righto, let\'s go!', 60 ], bye: [ 'Cheers for the ride!', 60 ],
+	hello: [ 'G\'day! Room for one more?', 60 ], call: [ 'Over here! Give us a lift?', 14 ], aboard: [ 'Righto, let\'s go!', 60 ], bye: [ 'Cheers for the ride!', 60 ],
 	woo: [ 'Woo!', 20 ], rocket: [ 'Hang on, hang on!', 40 ], laugh: [ 'Ha ha! What a landing!', 30 ],
 	ferry: [ 'Mate, the ferry!', 90 ], dolphins: [ 'Look, dolphins!', 90 ], wet: [ 'I\'m right, mate!', 45 ],
 };
@@ -191,6 +195,7 @@ export class Mate {
 			const walk = rootMotion( gltf );
 			this.walkSpeed = walk > 0.4 ? walk : 1.3; // (a second strip of a shared glTF reads 0)
 			const m = this.model = await SkinnedModel.create( gltf, { materials: info => fadeOptions( info ) } );
+			loadVest( 'pfd_mate', m, { customize: fadeCustomize } ).then( ( v ) => { this.vest = v; } ).catch( () => {} ); // (src/jetski/Vest.js)
 			for ( const mm of m.materials ) mm.underwaterLighting = 'lite';
 			const nodes = gltf.nodes, find = n => nodes.findIndex( x => x.name === n );
 			const under = r => m.order.filter( i => { for ( let j = i; j >= 0; j = m.parent[ j ] ) if ( j === r ) return true; return false; } );
@@ -291,18 +296,19 @@ export class Mate {
 
 		if ( ! this.ready || ! this.enabled ) return null;
 		const js = this.js, c = js.ctl;
-		if ( c.speed > MATE.calm || c.capsized ) return null;
-		if ( this.mode === 'ashore' && this.flat( c.position, this.root.position ) < MATE.reach )
-			return { text: `Pick up ${ this.name }`, go: () => { this.ski = js.live; this.go( 'wade', 'home' ); } };
+		if ( c.capsized ) return null;
+		const near = this.mode === 'ashore' && this.flat( c.position, this.root.position ) < MATE.reach;
+		if ( c.speed > MATE.calm ) return near ? { key: 'S', text: `Slow down to pick up ${ this.name }`, go: null } : null;
+		if ( near ) return { text: `Pick up ${ this.name }`, go: () => { this.ski = js.live; this.go( 'wade', 'home' ); } };
 		if ( this.mode === 'aboard' && this.ski === js.live && Math.hypot( c.position.x - MATE.home[ 0 ], c.position.z - MATE.home[ 1 ] ) < MATE.drop )
 			return { text: `Drop ${ this.name } off`, go: () => this.go( 'off' ) };
 		return null;
 
 	}
 
-	prompt() { const a = this.action(); return a ? { key: 'G', text: `${ a.text }   ·   E  Get off` } : null; }
+	prompt() { const a = this.action(); return a ? { key: a.key || 'G', text: `${ a.text }   ·   E  Get off` } : null; }
 
-	key() { const a = this.action(); if ( a ) a.go(); }
+	key() { const a = this.action(); if ( a?.go ) a.go(); }
 
 	go( mode, abort = null ) {
 
@@ -348,7 +354,9 @@ export class Mate {
 
 		const L = LINES[ key ], t = this.t, hub = this.app.people;
 		if ( ! L || ! hub?.say || t < this.quietUntil || t < ( this.cool[ key ] || 0 ) ) return false;
-		if ( ! hub.say( this.person, L[ 0 ], 'mate-' + key ) ) return false;
+		// her call carries across the water: its bubble shows out to the range she calls from (+ 8 m: the chase camera behind the ski)
+		const said = key === 'call' && hub.speech?.say ? hub.speech.say( this.person, L[ 0 ], 'mate-' + key, hub.t, false, MATE.call + 8 ) : hub.say( this.person, L[ 0 ], 'mate-' + key );
+		if ( ! said ) return false;
 		this.quietUntil = t + QUIET;
 		this.cool[ key ] = t + L[ 1 ];
 		this.said.push( { t: + t.toFixed( 1 ), key, text: L[ 0 ] } );
@@ -395,10 +403,14 @@ export class Mate {
 
 				// watching the hire skis; turns to a ski that pulls up and waves it in once
 				const d = this.flat( c.position, this.root.position );
-				if ( js.riding && d < 14 ) this.turnTo( Math.atan2( c.position.x - this.root.position.x, c.position.z - this.root.position.z ), dt );
+				const seen = js.riding && ! c.capsized && d < MATE.call;
+				if ( seen ) this.turnTo( Math.atan2( c.position.x - this.root.position.x, c.position.z - this.root.position.z ), dt );
 				else this.turnTo( MATE.homeYaw, dt );
-				if ( js.riding && d < 12 && ! this.waved ) { this.waved = true; this.waveT = 2.2; this.say( 'hello' ); }
-				if ( d > 20 ) this.waved = false;
+				// a ski in sight: she waves it over every few seconds and calls out (the bubble shows once the camera is in
+				// earshot), until it is in reach; in reach she asks for the lift once
+				if ( seen && d > MATE.reach && ! ( this.waveT > 0 ) && this.t - ( this.calledAt ?? - 1e9 ) > MATE.callEvery ) { this.calledAt = this.t; this.waveT = 2.2; this.say( 'call' ); }
+				if ( seen && d < MATE.reach && ! this.waved ) { this.waved = true; this.waveT = 2.2; this.say( 'hello' ); }
+				if ( d > MATE.reach + 6 ) this.waved = false;
 				this.waveT = Math.max( 0, ( this.waveT || 0 ) - dt );
 				const look = Math.sin( this.t * 0.35 ) > 0.6 ? 1 : 0;
 				if ( this.waveT > 0 && this.L.wave ) want.wave = 1; else if ( look && this.L.look ) want.look = 1; else want.idle = 1;
@@ -438,7 +450,7 @@ export class Mate {
 			case 'aboard': {
 
 				this.ride( dt, want );
-				ik = 1; kg = MATE.mass;
+				ik = this.js?.ctl?.pushing ? 0 : 1; kg = MATE.mass; // (while he walks the ski off the sand she sits on alone)
 				this.person.posture = 'sit';
 				break;
 
@@ -464,7 +476,7 @@ export class Mate {
 				_h.set( MATE.home[ 0 ], 0, MATE.home[ 1 ] );
 				const swim = this.deep( this.root.position.x, this.root.position.z );
 				this.afloat = swim;
-				if ( this.walk( dt, _h, swim ? 0.9 : Math.min( this.walkSpeed, 1.3 ) ) ) { this.mode = 'ashore'; this.ski = null; this.waved = true; }
+				if ( this.walk( dt, _h, swim ? 0.9 : Math.min( this.walkSpeed, 1.3 ) ) ) { this.mode = 'ashore'; this.ski = null; this.waved = true; this.calledAt = this.t + 20; }
 				if ( swim ) want.idle = 1; else { want.walk = 1; this.L.walk.speed = 1.3 / this.walkSpeed; }
 				this.person.posture = 'stand';
 				break;
@@ -592,6 +604,7 @@ export class Mate {
 			upload( m );
 
 		}
+		poseVest( this.vest, m, this.wearsVest() );
 		// the eyes (speech bubbles) and the feet (the hub's range test)
 		at( W, R.head, this.person.head ).applyQuaternion( this.root.quaternion ).add( this.root.position );
 		this.person.world.copy( this.root.position );
@@ -654,6 +667,14 @@ export class Mate {
 		}
 		this.fade += ( want - this.fade ) * ( 1 - Math.exp( - dt * 10 ) );
 		setFade( this.model, this.fade < 0.02 ? 0 : + this.fade.toFixed( 2 ) );
+		if ( this.vest ) setGroupFade( this.vest.node, this.fade < 0.02 ? 0 : + this.fade.toFixed( 2 ) );
+
+	}
+
+	// the ski vest: on the ski (climbing on and off it too), thrown, and in the water
+	wearsVest() {
+
+		return [ 'climb', 'aboard', 'ride', 'off', 'thrown', 'tread' ].includes( this.mode ) || ( !! this.afloat && this.mode !== 'ashore' );
 
 	}
 
@@ -664,7 +685,7 @@ export class Mate {
 
 	limbs( W, k ) {
 
-		const ski = this.ski, S = ski.pivots.Seat, R = this.rig, rider = this.onLive() && this.mode !== 'off' ? this.app.player.avatar?.model : null;
+		const ski = this.ski, S = ski.pivots.Seat, R = this.rig, rider = this.onLive() && this.mode !== 'off' && ! this.js?.ctl?.pushing ? this.app.player.avatar?.model : null;
 		const zs = S.z - MATE.behind;
 		// feet: on the footwell deck either side, a little ahead of her hips
 		for ( const g of R.legs ) {

@@ -7,6 +7,7 @@ import { SPRAY } from '../fx/Spray.js';
 import { JetskiController, skiWakeHead } from './JetskiController.js';
 import { JetskiCourse } from './Course.js';
 import { Mate } from './Mate.js';
+import { JetskiLights } from './JetskiLights.js';
 
 // The jetskis: parked at the beach hire stand and at Joey, ridden with E (src/jetski/JetskiController.js
 // is the physics, docs/jetski.md the model and the controls). One ski at a time runs the full physics on
@@ -33,7 +34,8 @@ const PIVOTS = { Seat: [ 0, 0.5, - 0.5 ], GripL: [ 0.3, 0.98, 0.2 ], GripR: [ - 
 	JetOut: [ 0, - 0.14, - 1.62 ], Bow: [ 0, 0.12, 1.72 ], SprayL: [ 0.5, - 0.12, 0.65 ], SprayR: [ - 0.5, - 0.12, 0.65 ] };
 
 const _v = new THREE.Vector3(), _t = new THREE.Vector3(), _w = new THREE.Vector3(), _u = new THREE.Vector3(), _s = new THREE.Vector3(), _f = new THREE.Vector3();
-const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _hq = new THREE.Quaternion(), _he = new THREE.Vector3();
+const SKI_BOW = 1.68; // m: the bow tip ahead of the hull origin (the controller's bow contact point)
 const _x = new THREE.Vector3( 1, 0, 0 ), _y = new THREE.Vector3( 0, 1, 0 ), _z = new THREE.Vector3( 0, 0, 1 );
 const _opts = { spread: 0.6, jitter: 0.1, life: 1.2, sizeJitter: 0.5 };
 const ROCKET_OUT = [ 0, 0.446, - 1.915 ]; // jetski_rocket.glb RocketOut (the bell exit) when the node is missing
@@ -502,6 +504,25 @@ export class Jetskis {
 
 	}
 
+	// The hood view rides at his eyes, in the ski's frame and eased: his posed neck (the avatar's anchor joint, this
+	// frame's ride frame) plus the eye height above it and a little forward. The cockatoo's first-person perch (out
+	// and back from his shoulder, Cockatoo.shoulder) is then behind the lens, as it is walking in first person.
+	hoodEye( dt, out ) {
+
+		const c = this.ctl, av = this.app.player?.avatar, m = av?.model, a = av?.anchorNode ?? - 1;
+		const h = this._hood || ( this._hood = new THREE.Vector3( 0, 1.55, - 0.55 ) );
+		if ( m && a >= 0 ) {
+
+			const W = m.world, rf = this.rideFrame();
+			_he.set( W[ a * 16 + 12 ], W[ a * 16 + 13 ] + ( av.eyeAboveNeck || 0.17 ), W[ a * 16 + 14 ] + 0.07 ).applyQuaternion( rf.q ).add( rf.pos )
+				.sub( c.position ).applyQuaternion( _hq.copy( c.quaternion ).invert() );
+			h.lerp( _he, 1 - Math.exp( - dt * 10 ) );
+
+		}
+		return out.copy( h );
+
+	}
+
 	// what the avatar does on the ski (Avatar.update: frame.ride)
 	rideFrame() {
 
@@ -518,6 +539,19 @@ export class Jetskis {
 		}
 
 		const ski = this.live;
+		if ( c.pushing ) {
+
+			// pushing it off the beach: he stands on the sand at the bow, facing it, and walks it back stern first
+			c.toWorld( _v.set( 0, 0, SKI_BOW + 0.42 ), out.pos );
+			out.pos.y = Math.max( this.app.terrainData.heightAt( out.pos.x, out.pos.z ), this.waterLevel() - 0.9 );
+			_w.set( 0, 0, 1 ).applyQuaternion( c.quaternion );
+			out.q.setFromAxisAngle( _y, Math.atan2( - _w.x, - _w.z ) );
+			out.w = { walk: 1 };
+			out.walkRate = THREE.MathUtils.clamp( Math.hypot( c.velocity.x, c.velocity.z ) / 1.4, 0.2, 1 );
+			out.hideHead = false;
+			return out;
+
+		}
 		const seat = _v.copy( ski.pivots.Seat ).sub( _w.fromArray( RIDER_PELVIS ) );
 		c.toWorld( seat, out.pos );
 		// his body leans into the turn and forward on a tuck (about his feet)
@@ -532,6 +566,7 @@ export class Jetskis {
 			ski_tuck: tuck * ( 1 - air ), ski_stand: air,
 		};
 		out.hideHead = this.camMode === 'hood';
+		out.walkRate = 1;
 		return out;
 
 	}
@@ -589,6 +624,9 @@ export class Jetskis {
 		if ( ski.bars ) ski.bars.quaternion.copy( ski.barsQ ).multiply( _q.setFromAxisAngle( _y, c.steer * 25 * DEG ) );
 		if ( ski.nozzle ) ski.nozzle.quaternion.copy( ski.nozzleQ ).multiply( _q.setFromAxisAngle( _y, - c.steer * 20 * DEG ) );
 		ski.group.updateMatrixWorld( true );
+		// its lamps from dusk while he rides it (or has just been thrown off it)
+		this.lamps ??= new JetskiLights( app.localLights, app.waterMaterial );
+		this.lamps.update( ski, p.mode === 'jetski' || p.mode === 'jetski-thrown', app.camera );
 		this.parked( dt );
 		this.spray( dt );
 		this.rocketFx( dt );
@@ -598,7 +636,7 @@ export class Jetskis {
 
 			// keep the walker with the ski (audio, queries, what he sees when he gets off)
 			c.toWorld( _v.copy( ski.pivots.FootL ).add( ski.pivots.FootR ).multiplyScalar( 0.5 ), p.position );
-			p.prompt = this.mate?.prompt() || { key: 'E', text: 'Get off   ·   C  camera' };
+			p.prompt = c.beached ? { key: 'S', text: 'Push off   ·   E  Get off' } : this.mate?.prompt() || { key: 'E', text: 'Get off   ·   C  camera' };
 
 		}
 
@@ -990,9 +1028,9 @@ export class Jetskis {
 		const sp = c.speed;
 		const water = this.waterLevel();
 		const target = this.thrown ? _u.copy( this.thrown.pos ) : _u.copy( c.position ).add( _w.set( 0, 0.95, 0 ) );
-		if ( this.camMode === 'hood' && ! this.thrown ) {
+		if ( this.camMode === 'hood' && ! this.thrown && ! c.pushing ) {
 
-			const eye = c.toWorld( _v.set( 0, 1.55, - 0.55 ), _w );
+			const eye = c.toWorld( this.hoodEye( dt, _v ), _w );
 			const f = _f.set( 0, 0, 1 ).applyQuaternion( c.quaternion );
 			const flat = _s.set( f.x, 0, f.z ).normalize();
 			f.lerp( flat, 0.55 ).normalize();
@@ -1118,7 +1156,15 @@ class JetskiHUD {
 			</div>`;
 		document.body.appendChild( root );
 		// its height (panel + key legend, which wraps on narrow screens) lifts the prompt pill above it
-		if ( typeof ResizeObserver === 'function' ) new ResizeObserver( () => { if ( root.offsetHeight ) document.documentElement.style.setProperty( '--jh-h', root.offsetHeight + 'px' ); } ).observe( root );
+		// and the legend's own height lifts the card PIN chip (GameHUD .gm-pin) over the legend row
+		if ( typeof ResizeObserver === 'function' ) new ResizeObserver( () => {
+
+			if ( ! root.offsetHeight ) return;
+			const s = document.documentElement.style, keys = root.querySelector( '.jh-keys' );
+			s.setProperty( '--jh-h', root.offsetHeight + 'px' );
+			s.setProperty( '--jh-keys-h', ( keys?.offsetHeight || 0 ) + 'px' );
+
+		} ).observe( root );
 		this.speedEl = root.querySelector( '.jh-speed b' );
 		this.rpmEl = root.querySelector( '.jh-rpm i' );
 		this.thrEl = root.querySelector( '.jh-thr i' );

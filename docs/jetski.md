@@ -264,8 +264,8 @@ Scratch harness `jpolish.mjs` (Playwright :5373, no-HMR vite, typical sea).
 
 Emily (`src/jetski/Mate.js`) waits ankle deep at the water's edge by the beach hire skis (`MATE.home`, 40.5, -40). She is a female crowd cast (`f03`, the swimwear re-dress in `models/characters/crowd/swim/` when it is there, the plain cast otherwise), loaded the way the beach crowd loads them (`SkinnedModel.create` with `fadeOptions`). She is not registered with the people hub (no brain, no LOD skipping): she is animated every frame and speaks through `app.people.say`.
 
-- **G** while riding under 3 km/h within 8 m of her: the prompt reads `Pick up Emily · E Get off`. She wades out to a point 1.05 m off the ski's left side, beside her seat, and climbs on in 1.4 s. Her weight ramps onto the ski as she climbs.
-- **G** under 3 km/h within 30 m of her spot: `Drop Emily off`. She climbs off the left side in 1.1 s and wades back to her spot.
+- **G** while riding under 5 km/h within 16 m of her (`MATE.reach`, `MATE.calm`; she stands ankle deep, 7 to 9 m inshore of the hire skis, so an 8 m range left the hire skis at its edge and the only way in was to beach the ski; a coasting hull also takes seconds to shed the last few km/h). Inside 16 m but faster, the prompt reads `S Slow down to pick up Emily`. From 40 m (`MATE.call`) she turns to a ski that is being ridden, waves it over every 7 s and calls `Over here! Give us a lift?` (the bubble shows once the camera is within the speech range, 24 m in src/people/Speech.js). In reach she: the prompt reads `Pick up Emily · E Get off`. She wades out to a point 1.05 m off the ski's left side, beside her seat, and climbs on in 1.4 s. Her weight ramps onto the ski as she climbs.
+- **G** under 5 km/h within 30 m of her spot: `Drop Emily off`. She climbs off the left side in 1.1 s and wades back to her spot.
 - **Wipeout** (`throwRider`): she goes on her own ballistic arc with a tumble and a splash, then waits in the water (on the bottom in the shallows). Stop the ski within 6 m of her and she swims to it and climbs back on. Ride off and she waits.
 
 Seat and pose: her pelvis sits 0.46 m behind the `Seat` pivot and 0.05 m higher. The pose is the rider's own ski clips (`ski_sit`, `ski_lean_l/r`, `ski_tuck`, `ski_stand` from player.glb) retargeted by bone name onto the crowd rig (both are Bip01 rigs; rotations plus the pelvis translation). They are weighted like the rider's: she leans with the turn (0.85 of his lean), ducks on the rocket (tuck 0.9 x boost) and half rises in the air. A damped spring (`sag`) sinks her into heave and landings. Then two-bone IK in model space puts her ankles on the footwell deck (0.34 m either side, 0.2 m ahead of her hips) and her palms on the rider's waist (his `Bip01 Spine`, 7 cm up, 0.155 m either side). With no rider aboard her hands rest on the seat strap. There is never a bind-pose frame: the idle is evaluated before she is first drawn and a clip always carries weight.
@@ -377,3 +377,57 @@ Rising only matters: a symmetric damper at 30 dug the hull in and rolled it in t
   gloss above the waterline, a scum and tide line at it, a Boston valve on the dome, webbing handles and a
   stainless tie-down ring under the ballast. Same size and outline; colliders unchanged. The mooring line is a
   three-strand laid rope. Triangles: red / yellow 5288 (was 5560), turn 6088 (was 6040), line 1320 (was 28).
+
+## Wave riding
+
+Headless: `wsim.mjs` (scratch) rides N = 20 passes of 30 s into a head swell (0.85, 0.5, 0.3 m at 38, 26, 16 m, +-25 deg,
+plus chop) at full throttle, at 0.6 throttle and at full throttle with the bars swung every 2.4 s. Per crest met: did the
+bow deck (0, `deckY`, 1.45) go under, time under, airtime per crest, wipeouts, and the entry speed of every landing.
+
+In the air (no Shift, S or Space) the rider holds the pitch: a spring of `airHold[0]` N m per rad towards the trim, damped by
+`airHold[1]`, bounded at `airHold[2]` (+x torque is nose down). The trim is `airTrim` (+3 deg, stern first), plus
+`airThrottleTrim` (+4 deg) with the throttle open (he sits back on the bars; the primed pump's thrust is below the centre of
+gravity), plus `airMatch` x the water's slope along the heading under the ski (within `airMatchMax`): he spots the face he
+will land on and meets it flat. A flat or stern-first landing (nose within 15 deg down, bank within 30 deg) holds up to an
+entry of `landFlat` (14 m/s): he takes it on his legs.
+
+| Full throttle into the swell | bow under per crest | air per crest | worst pitch | wipeouts |
+|---|---|---|---|---|
+| Before (the hold spring pushed away from the trim) | 0.0 % | 0.49 s | -81 deg | 16/20 |
+| Hold spring restoring, trim +3 / +4 deg | 0.0 % | 0.66 s | -14 deg | 18/20 (flat landings at 11.5 to 15 m/s) |
+| Plus `landFlat` 14 and `airMatch` 1 (shipped) | 0.0 % | 0.56 s | -17 deg | 2/20 |
+
+0.6 throttle stays 0/20. `rsim` straight 0/20, steer 0/20 (was 1/20); `hsim` longest flight 0.95, 0.95, 1.02 s at 150, 200,
+246 km/h (was 1.02, 0.88, 0.95). The slalom case (bars swung every 2.4 s at full throttle) is 16/20 (was 20/20): steering
+in the air hands the pitch to him, and those land nose down.
+
+- `bowDeck` 0.3, `flare` 0.8 (reserve buoyancy at the bow) on top: 6/20. Off (0, 0).
+- `ploughFace` 1 (the plough lets the ski rise with the surface along its track) lets the rocket fly: longest flight 0.95 to
+  1.40 s. Off (0).
+
+## Lamps, the ski vest and the beach push-off
+
+**Lamps** (`src/jetski/JetskiLights.js`, `SKI_LAMPS`). From dusk (`G.night`), while the ski is ridden or just after a throw:
+- A headlamp spot under the bow takes one of the eight local-light slots and lights the ski and rider. The sea does not take local lights, so the same spot feeds the water material's `headPos` / `headDir` / `headCol` uniforms (`src/ocean/WaterMaterial.js`, above-water branch). There it lights the foam and the water body ahead as a pool, with a GGX glint on each wave facing back along the beam. `pool` is the fraction of the lamp's intensity used on the water. With `headPos.w` at 0 the term is skipped.
+- Navigation lights are a lens, a white-hot core halo (at least `haloPx`) and a coloured glare (at least `glarePx`, faded in from `glareNear` to `glareFar` m). Each shows only over its own arc of the camera's bearing: the sidelights from dead ahead to 112.5 deg on their own side, the stern light 67.5 deg either side of dead astern, and the headlamp lens over the forward half. The port lamp's halo and glare are multiplied by `RED_LIFT`, because red reads darker than green at the same value. Checked at 150 to 200 m: green from starboard, red from port-forward, white from dead astern.
+- The stern light sits on a mast: a black pole in a deck socket on the transom centreline, with the lens in a white housing on top. It is at least `mast` m tall and clears the rocket pod's top by `mastClear`, which is 0.465 m on the current model, so the pod and the rider never hide it from astern. The mast shows with the lamps.
+
+**Ski vest** (`src/jetski/Vest.js`; model `public/models/jetski_pfd.glb` from `tools/jetski/pfd_build.py`). It is a neon high-vis PFD:
+- quilted foam panels with bound, rounded edges and a curved hem;
+- 25 mm webbing with side-release buckles and ladder-lock adjusters;
+- a zip, a collar and a webbing grab loop;
+- retroreflective tape (`PFD_Reflective`).
+
+The nodes `pfd_rider` and `pfd_mate` are each wearer's `Bip01 Spine2` rest frame, in centimetres under the rig's 0.01 scale. Worn, each node's matrix is that joint's posed model-space matrix (`SkinnedModel.world`), written every frame after the pose. The tape's emissive follows `G.night` (`VEST.tape`).
+- The rider (`Avatar`) wears it on the ski and after a throw while ragdolling or swimming. It comes off on land.
+- Emily (`Mate.wearsVest`) wears it while climbing on or off, aboard, thrown, treading water or afloat. It fades with her.
+- In the water his hat hangs down his back. While he wears the vest, the hat and its chin cord stand `HAT_VEST` (2.8 cm) off his back, along rest -z, so they sit on the foam instead of in it (`Avatar.poseHat`).
+
+**Hood camera.** It rides at his eyes: the posed neck, plus the eye height and 7 cm forward, in the ski's frame and eased (`Jetskis.hoodEye`). The cockatoo's first-person perch, out and back from the shoulder, is then behind the lens.
+
+**Beached push-off** (`JetskiController.contacts`).
+- **When it applies.** The hull counts as aground for `groundHold` s after any ground contact. With the rider aboard, the intake dry (`prime < 0.5`) and the ski below 1.2 m/s, the prompt reads "S Push off".
+- **What S does.** Holding S pushes the hull stern first, flat, along its own axis. The push holds `pushSpeed` (0.45 m/s): a stiff drive with gain `pushGain`, capped at `pushGrip` of the weight, which beats the sand's friction of about 0.45 of the load. It puts no turn on the hull.
+- **When it stops.** It ends when the intake is wet again. From there S is reverse thrust as before.
+- **The rider.** While pushing he stands on the sand at the bow, facing the ski, and walks it back (`rideFrame`, walk clip at the ski's pace). Emily stays seated on her own.
+- **Measured, two-up.** A ski run up the sand at 16 km/h moved 3.48 m in 10.0 s before the intake was wet (about 0.35 m/s).
