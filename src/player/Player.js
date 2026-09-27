@@ -1,6 +1,9 @@
 import * as THREE from '../engine/index.js';
 import { WORLD } from '../world/WorldLayout.js';
 import { HOUSE } from '../world/boat/Wheelhouse.js';
+import { Avatar } from './Avatar.js';
+import { ThirdPersonCamera } from './ThirdPersonCamera.js';
+import { Ragdoll } from './Ragdoll.js';
 
 const HOUSE_HELM = { x: HOUSE.helmX, z: HOUSE.seatZ };
 
@@ -25,6 +28,29 @@ const _wish = new THREE.Vector3();
 const DECK_RADIUS = 0.24;
 const DECK_STEP = 0.36; // highest ledge you step up onto
 const HELM_REACH = 0.75; // m from the helm seat to take the wheel
+// on foot: first person, or over the shoulder (V, or the HUD button); remembered per browser
+export const ON_FOOT = new Set( [ 'walk', 'swim', 'deck', 'ferry' ] );
+const VIEW_KEY = 'tidewater.view';
+// the ragdoll (src/player/Ragdoll.js): the modes it can start from (not aboard the ferry or the boat:
+// their decks move and are not in it), and a big fall on foot: a drop over FALL_DROP m, or landing faster
+// than HARD_LANDING m/s
+const RAG_MODES = new Set( [ 'walk', 'swim', 'rally', 'jetski', 'jetski-thrown' ] );
+const FALL_DROP = 3, HARD_LANDING = 8.5;
+function loadView() {
+
+	try {
+
+		return localStorage.getItem( VIEW_KEY ) === 'third' ? 'third' : 'first';
+
+	} catch ( e ) {
+
+		return 'first';
+
+	}
+
+}
+
+const _frame = { show: false, pos: new THREE.Vector3(), q: new THREE.Quaternion(), vel: new THREE.Vector3(), viewHeading: 0, grounded: true, vy: 0, swim: false, view: 'first', attached: true, pitch: 0, cam: null };
 
 // First-person walker / swimmer / boat captain.
 //   walk : capsule on terrain + walkable colliders, wading slows you down
@@ -34,7 +60,7 @@ const HELM_REACH = 0.75; // m from the helm seat to take the wheel
 //   boat : at the helm, driving; V toggles helm (1st person) / chase (3rd person) camera, E stands up
 export class Player {
 
-	constructor( { camera, input, terrain, colliders, query, boat, reef = null, audio = null } ) {
+	constructor( { camera, input, terrain, colliders, query, boat, reef = null, audio = null, scene = null } ) {
 
 		this.camera = camera;
 		this.input = input;
@@ -88,6 +114,258 @@ export class Player {
 		this._ashoreT = 0;
 		// set by the fishing game: while a line is out the helm / step ashore prompts give way
 		this.busy = false;
+		this.jetskis = null; // src/jetski/Jetski.js (set by the app)
+
+		// the player's own character and the on-foot view
+		this.view = loadView();
+		this.boom = new ThirdPersonCamera();
+		this.eye = new THREE.Object3D();   // the first-person eye pose, kept in third person (the rod aims from it)
+		this.thirdPerson = false;
+		this.avatar = scene ? new Avatar( scene ) : null;
+		this.rag = new Ragdoll( this );
+		this.ragHeadCam = false;  // the car yeet in first person: the view rides the tumbling head
+		this.airTop = null;       // highest point of this fall (null: not armed, e.g. just dropped from the free camera)
+		this._walkEnd = null;
+		this._ragFocus = null;
+		this._camOut = null; // the camera height this player last left (first person or the boom)
+
+	}
+
+	// ------------------------------------------------------------------ view
+
+	setView( view ) {
+
+		this.view = view === 'third' ? 'third' : 'first';
+		try {
+
+			localStorage.setItem( VIEW_KEY, this.view );
+
+		} catch ( e ) {
+
+			// storage blocked: the choice lasts this visit
+
+		}
+
+	}
+
+	toggleView() {
+
+		this.setView( this.view === 'third' ? 'first' : 'third' );
+
+	}
+
+	// After the mode placed the camera at the eyes: swing it out over the shoulder in third person.
+	finishView( dt ) {
+
+		const onFoot = ON_FOOT.has( this.mode );
+		const wheel = onFoot ? this.input.consumeWheel() : 0;
+		this.thirdPerson = onFoot && this.view === 'third';
+		if ( this.thirdPerson ) {
+
+			this.eye.position.copy( this.camera.position );
+			this.eye.quaternion.copy( this.camera.quaternion );
+			this.boom.apply( this, dt, wheel );
+
+		} else this.boom.reset();
+		this._camOut = this.camera.position.y;
+
+	}
+
+	// The character, every frame (also while the car or the free camera has the view).
+	updateAvatar( dt, { attached = true, hidden = false } = {} ) {
+
+		const a = this.avatar;
+		if ( ! a ) return;
+		const f = _frame;
+		const riding = this.mode === 'jetski' || this.mode === 'jetski-thrown';
+		// ragdolling (also out of the car: the app hides him while the bailout runs) he is always drawn
+		f.rag = this.mode === 'ragdoll' ? this.rag : null;
+		f.headcam = this.ragHeadCam;
+		if ( f.rag ) hidden = false;
+		f.show = ! hidden && ( ON_FOOT.has( this.mode ) || riding || !! f.rag );
+		f.ride = riding && this.jetskis ? this.jetskis.rideFrame() : null;
+		f.view = this.view;
+		f.attached = attached;
+		f.pitch = this.pitch;
+		f.cam = this.camera;
+		f.swim = this.mode === 'swim';
+		if ( this.mode === 'ferry' && this.vessel ) {
+
+			// her frame: feet on her deck, turned with her
+			const d = this.vessel, ship = d.ferry.ship;
+			ship.toWorld( d.local, f.pos );
+			f.q.copy( ship.quaternion );
+			f.vel.copy( d.vel );
+			f.viewHeading = d.yaw;
+			f.grounded = d.grounded;
+			f.vy = d.vel.y;
+
+		} else if ( this.mode === 'deck' ) {
+
+			const b = this.boat;
+			b.toWorld( this.deckPos, f.pos );
+			f.q.copy( b.quaternion );
+			f.vel.copy( this.deckVel );
+			f.viewHeading = this.deckYaw;
+			f.grounded = this.deckGrounded;
+			f.vy = this.deckVel.y;
+
+		} else {
+
+			f.pos.copy( this.position );
+			// swimming, f.pos is the feet of an upright body with its eyes at the swimmer's eyes (the stand-in
+			// model treads like that); the swim clips hang the body from the neck by eyeY and waterY instead
+			if ( f.swim ) f.pos.y += SWIM_EYE - EYE;
+			f.eyeY = this.position.y + SWIM_EYE;
+			f.waterY = this.waterH;
+			f.floating = this.floating;
+			f.q.identity();
+			f.vel.copy( this.velocity );
+			f.viewHeading = this.yaw + Math.PI;
+			f.grounded = this.grounded;
+			f.vy = this.velocity.y;
+
+		}
+
+		a.update( dt, f );
+
+	}
+
+	// ------------------------------------------------------------------ ragdoll (src/player/Ragdoll.js)
+
+	// Throw him down as a ragdoll: impulse (kg m/s, world; 75 kg body) at a world point (null: the chest).
+	// opts: velocity (the body's, default his own), at (pelvis, world) + heading (model yaw) + pose (a clip
+	// name) to place him (the car yeet), spin (world rad/s), yeet (first person keeps the view in his head;
+	// otherwise the camera goes third person on the pelvis until he is up). Already ragdolling, the impulse
+	// is added. Returns false where it cannot (no character yet, aboard the ferry or the boat).
+	ragdoll( impulse = null, point = null, opts = {} ) {
+
+		const a = this.avatar;
+		if ( this.mode === 'ragdoll' ) {
+
+			this.rag.push( impulse, point );
+			return true;
+
+		}
+
+		if ( ! a || ! a.model || ! RAG_MODES.has( this.mode ) ) return false;
+		if ( ! this.rag.start( a, a.group.position, a.group.quaternion, opts.velocity || this.velocity, { ...opts, impulse, point } ) ) return false;
+		this.ragFrom = this.mode;
+		this.mode = 'ragdoll';
+		this.ragHeadCam = !! opts.yeet && this.view === 'first';
+		this.prompt = null;
+		this.grounded = false;
+		this._ragFocus = null;
+		return true;
+
+	}
+
+	// every frame while ragdolling (Player.update, or the car's Bailout while the app skips the player)
+	updateRagdoll( dt ) {
+
+		const r = this.rag, inp = this.input, cam = this.camera;
+		const look = inp.consumeLook();
+		this.yaw -= look.x * 0.0022;
+		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
+		r.waterY = this.waterH;
+		r.update( dt );
+		const f = r.focus;
+		this.query.setPoint( this.slot, f.x, f.z );
+		this.waterH = this.waterHeight();
+		this.position.set( f.x, r.floorY, f.z );
+		if ( this.ragHeadCam ) {
+
+			r.headCam( cam.position, cam.quaternion, dt );
+			this.thirdPerson = false;
+			this.boom.reset();
+
+		} else {
+
+			// third person (first person switches to it for the tumble): a smoothed boom on the pelvis
+			if ( ! this._ragFocus ) this._ragFocus = f.clone();
+			else {
+
+				// eased, but never more than half a metre behind (a fast fall stays in frame)
+				const k = this._ragFocus.lerp( f, 1 - Math.exp( - dt * 8 ) ).distanceTo( f );
+				if ( k > 0.5 ) this._ragFocus.lerp( f, 1 - 0.5 / k );
+
+			}
+			cam.position.copy( this._ragFocus );
+			cam.position.y += 0.45;
+			cam.quaternion.setFromEuler( _e.set( this.pitch, this.yaw, 0 ) );
+			this.eye.position.copy( cam.position );
+			this.eye.quaternion.copy( cam.quaternion );
+			this.thirdPerson = true;
+			this.boom.apply( this, dt, inp.consumeWheel() );
+			// never under the sea while he tumbles across it (the boom keeps its own clearance off the ground)
+			if ( this.ragWaterCam !== false ) cam.position.y = Math.max( cam.position.y, this.waterH + 0.35 );
+
+		}
+
+		this._camOut = cam.position.y;
+		if ( r.phase === 'done' ) this.finishRagdoll();
+
+	}
+
+	// back on his feet (or treading water) where the body came to rest
+	finishRagdoll() {
+
+		const r = this.rag, res = r.result, p = this.position;
+		p.copy( res.at );
+		if ( res.water ) {
+
+			this.mode = 'swim';
+			p.y = this.waterH - SWIM_EYE + 0.1;
+
+		} else {
+
+			this.mode = 'walk';
+			this.grounded = true;
+			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+
+		}
+
+		this.velocity.set( 0, 0, 0 );
+		this.yaw = res.yaw - Math.PI;
+		if ( this.ragHeadCam ) this.pitch = 0;
+		this.ragHeadCam = false;
+		this.airTop = p.y;
+		this._walkEnd = null;
+		this._camY = null;
+		r.phase = 'idle';
+		if ( this.avatar ) { this.avatar.heading = res.yaw; this.avatar._headingSet = true; }
+
+	}
+
+	// DEBUG HOOK for probes and captures only (the game never calls it): put him at (x, y, z) in 'walk' or 'swim' the way
+	// the game lands him there (finishRagdoll's placement: on the ground through the capsule, or floating at the
+	// surface), with the velocity zeroed, the low-passed water level re-read on the next frame and the camera easing
+	// reset. y is only a hint on land. Returns the mode; update() then keeps or changes it by the usual depth rules.
+	debugPlace( x, y, z, mode = 'walk' ) {
+
+		const p = this.position;
+		p.set( x, y, z );
+		this.velocity.set( 0, 0, 0 );
+		if ( mode === 'swim' ) {
+
+			this.mode = 'swim';
+			this.floating = true;
+			p.y = this.waterH - SWIM_EYE + 0.1;
+
+		} else {
+
+			this.mode = 'walk';
+			this.grounded = true;
+			p.y = this.groundAt( x, z, y + 2 );
+			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+
+		}
+
+		this.waterMean = null;
+		this.airTop = p.y;
+		this._walkEnd = null;
+		this._camY = null;
+		return this.mode;
 
 	}
 
@@ -129,15 +407,64 @@ export class Player {
 
 	}
 
+	// A non-finite position (a NaN teleport, a zero-length push or ground normal) must not reach the camera, the
+	// water query (the low-passed waterMean would keep it for good) or the renderer's temporal history: he goes
+	// back to where he last stood, still, logged once. Same frame, so no NaN pose is ever drawn.
+	keepFinite( where ) {
+
+		const p = this.position, v = this.velocity;
+		if ( Number.isFinite( p.x + p.y + p.z ) ) {
+
+			if ( Number.isFinite( v.x + v.y + v.z ) ) ( this._good ??= new THREE.Vector3() ).copy( p );
+			else v.set( 0, 0, 0 );
+			return true;
+
+		}
+		if ( ! this._nanWarned ) {
+
+			this._nanWarned = true;
+			console.warn( `Player: non-finite position (${ where }), back to the last good one`, { at: p.toArray(), good: this._good?.toArray() } );
+
+		}
+		if ( this._good ) p.copy( this._good ); else p.set( Number.isFinite( p.x ) ? p.x : 0, Number.isFinite( p.y ) ? p.y : 2, Number.isFinite( p.z ) ? p.z : 0 );
+		v.set( 0, 0, 0 );
+		this._camY = null;
+		return false;
+
+	}
+
 	// ------------------------------------------------------------------ update
 
 	update( dt ) {
 
 		const inp = this.input;
+		this.keepFinite( 'set from outside' );
 		this.query.setPoint( this.slot, this.position.x, this.position.z );
 		this.waterH = this.waterHeight();
-		this.waterMean = this.waterMean === null ? this.waterH : this.waterMean + ( this.waterH - this.waterMean ) * ( 1 - Math.exp( - dt / 4 ) );
+		this.waterMean = this.waterMean === null || ! Number.isFinite( this.waterMean ) ? this.waterH : this.waterMean + ( this.waterH - this.waterMean ) * ( 1 - Math.exp( - dt / 4 ) );
+		// on a jetski: src/jetski/Jetski.js drives him, the ski and the camera
+		if ( this.mode === 'jetski' || this.mode === 'jetski-thrown' ) return;
+		if ( this.mode === 'ragdoll' ) {
+
+			this.updateRagdoll( dt );
+			return;
+
+		}
+
 		this.prompt = null;
+		// V: first / third person on foot (the helms keep V for their own cameras)
+		if ( ON_FOOT.has( this.mode ) && inp.hit( 'KeyV' ) ) this.toggleView();
+
+		// Aboard the ferry: her decks and helm are walked in her own frame (src/ferry/FerryDeck.js).
+		if ( this.mode === 'ferry' || this.mode === 'ferry-helm' ) {
+
+			if ( this.vessel ) this.vessel[ this.mode === 'ferry' ? 'walk' : 'helm' ]( this, dt );
+			// people have bodies: pushed out of theirs, and a bump graded (src/people/Contact.js)
+			if ( this.mode === 'ferry' && this.vessel ) this.people?.contact.player( this, dt, this.vessel );
+			this.finishView( dt );
+			return;
+
+		}
 
 		if ( this.mode === 'boat' ) {
 
@@ -149,6 +476,7 @@ export class Player {
 		if ( this.mode === 'deck' ) {
 
 			this.updateDeck( dt );
+			this.finishView( dt );
 			return;
 
 		}
@@ -170,16 +498,35 @@ export class Player {
 
 		}
 
+		// jetskis (src/jetski/Jetski.js): ride one, climb aboard from the water, right a capsized one
+		if ( this.jetskis && ! this.busy && ! this.prompt ) {
+
+			const o = this.jetskis.offer( this );
+			if ( o ) {
+
+				this.prompt = { key: 'E', text: o.text };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					o.act();
+					return;
+
+				}
+
+			}
+
+		}
+
 		const prevMode = this.mode;
-		if ( this.mode === 'walk' ) this.updateWalk( dt );
+		if ( this.mode === 'walk' ) { this.updateWalk( dt ); this.people?.contact.player( this, dt ); }
 		else this.updateSwim( dt );
+		this.keepFinite( this.mode );
 
 		// camera. Wading out of your depth, finding your feet again or climbing out on a ladder
 		// changes the eye height: ease the view there (critically damped) instead of jumping
 		const eye = this.position.clone();
 		if ( this.mode === 'walk' ) eye.y += EYE + Math.sin( this.bob ) * 0.035 * ( 1 - 0.6 * this.wade );
 		else eye.y += SWIM_EYE;
-		if ( this._camY === null || this.camera.position.y !== this._camY ) {
+		if ( this._camY === null || this.camera.position.y !== this._camOut ) {
 
 			// something else drove the camera since our last frame (free camera, boat): start fresh
 			this.camOff = 0;
@@ -198,6 +545,7 @@ export class Player {
 		this.camera.position.copy( eye );
 		this._camY = this.camera.position.y;
 		this.camera.quaternion.setFromEuler( _e.set( this.pitch, this.yaw, 0 ) );
+		this.finishView( dt );
 
 	}
 
@@ -236,6 +584,9 @@ export class Player {
 
 		const p = this.position;
 		const old = p.clone();
+		// moved by something else since last frame (the free camera, a respawn): no fall counted from there
+		if ( this._walkEnd && old.distanceToSquared( this._walkEnd ) > 4 ) this.airTop = null;
+		const vyIn = this.velocity.y, wasGrounded = this.grounded;
 		p.addScaledVector( this.velocity, dt );
 		this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
 		const g = this.groundAt( p.x, p.z, p.y + 0.45 );
@@ -251,14 +602,33 @@ export class Player {
 
 		}
 
+		// a big fall: the ragdoll takes over in the air once the drop passes FALL_DROP, or on a hard landing
+		( this._walkEnd || ( this._walkEnd = new THREE.Vector3() ) ).copy( p );
+		if ( this.airTop !== null ) {
+
+			const drop = this.airTop - p.y, landed = this.grounded && ! wasGrounded;
+			if ( ( ! this.grounded && drop > FALL_DROP && vyIn < - 6 ) || ( landed && vyIn < - HARD_LANDING ) ) {
+
+				if ( this.ragdoll( null, null, { velocity: _v.set( this.velocity.x, vyIn, this.velocity.z ) } ) ) return;
+
+			}
+
+		}
+
+		this.airTop = this.grounded ? p.y : this.airTop === null ? null : Math.max( this.airTop, p.y );
+
 		// head bob + footsteps
 		const moved = Math.hypot( p.x - old.x, p.z - old.z );
+		// with a walk cycle playing, the bob and the footfalls follow the character's own feet
+		// (head lowest as each foot lands); the stand-in avatar has none: bob by distance
+		const phase = this.avatar ? this.avatar.stepPhase() : null;
 		if ( this.grounded ) {
 
-			this.bob += moved * 2.4;
+			if ( phase !== null ) this.bob = phase * Math.PI * 4 - Math.PI / 2;
+			else this.bob += moved * 2.4;
 			this.stepDist += moved;
 			const stride = sprint ? 0.9 : 0.62;
-			if ( this.stepDist > stride ) {
+			if ( phase !== null ? this.avatar.takeStep() : this.stepDist > stride ) {
 
 				this.stepDist = 0;
 				this.surface = this.surfaceType( depth );

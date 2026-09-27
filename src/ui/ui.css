@@ -548,7 +548,12 @@ body {
 .tw-root.is-idle .tw-mark,
 .tw-root.is-idle .tw-brand-name,
 .tw-root.is-idle .tw-mode {
-	opacity: 0.5;
+	opacity: 0.8;
+}
+
+/* developer readout, off by default (Settings > Performance, or ?stats); display: grid below would beat [hidden] */
+.tw-stats[hidden] {
+	display: none;
 }
 
 .tw-stats {
@@ -641,11 +646,22 @@ body {
 }
 
 .tw-brand-name {
+	display: inline-flex;
+	align-items: center;
+	height: calc(26 * var(--tw-u));
+	/* the tracking leaves a trailing gap after the last letter: less padding on the right */
+	padding: 0 calc(7 * var(--tw-u)) 0 calc(11 * var(--tw-u));
+	border: 1px solid var(--tw-line);
+	border-radius: 999px;
+	/* same backdrop as the mode chip beside it, so the wordmark reads over bright sky and spray */
+	background: rgba(12, 18, 26, 0.55);
+	-webkit-backdrop-filter: blur(12px) saturate(1.5);
+	backdrop-filter: blur(12px) saturate(1.5);
 	font-size: var(--tw-fs-sm);
 	font-weight: 600;
 	letter-spacing: 0.34em;
 	color: rgba(255, 255, 255, 0.94);
-	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 14px rgba(0, 0, 0, 0.3);
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 .tw-mode {
@@ -799,6 +815,11 @@ body {
 .tw-prompt.is-on {
 	opacity: 1;
 	transform: translate(-50%, 0);
+}
+
+/* third person: the character stands at the bottom centre; the prompt sits clear to its right */
+.tw-prompt.is-third {
+	left: calc(50% + 14vw);
 }
 
 .tw-root .tw-prompt-key {
@@ -1382,8 +1403,9 @@ body {
 		visibility 0s linear var(--tw-slow);
 }
 
+/* idle dims, but the rail must still read as live controls over bright sky and sand */
 .tw-root.is-idle .tw-rail {
-	opacity: 0.45;
+	opacity: 0.8;
 }
 
 .tw-rail:hover {
@@ -2596,6 +2618,10 @@ body {
 	.tw-help-grid {
 		grid-template-columns: 1fr;
 	}
+
+	/* the frame-rate readout shrinks to its number so it clears the cooler pill */
+	.tw-stats { grid-template-columns: auto; grid-template-areas: 'main'; }
+	.tw-stats .tw-spark, .tw-stats .tw-stats-sub { display: none; }
 
 	.tw-boat {
 		transform-origin: 0 100%;

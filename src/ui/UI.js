@@ -147,6 +147,8 @@ const CARDINALS = [ 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW' ];
 function modeIcon( label ) {
 
 	const s = String( label || '' ).toLowerCase();
+	if ( s.includes( 'jetski' ) ) return 'boat';
+	if ( s.includes( 'thrown' ) ) return 'swim';
 	if ( s.includes( 'boat' ) ) return 'boat';
 	if ( s.includes( 'div' ) ) return 'dive';
 	if ( s.includes( 'swim' ) ) return 'swim';
@@ -2148,7 +2150,8 @@ export class UI {
 					<section>
 						<h3>Interact</h3>
 						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade</small>' ) }
-						${ row( k( 'V' ), 'Boat camera<small>1st / 3rd person</small>' ) }
+						${ row( k( 'V' ), 'Camera<small>1st / 3rd person, on foot and at the helm</small>' ) }
+						${ row( k( 'B' ), 'Whistle<small>Call the cockatoo back to your shoulder</small>' ) }
 						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
 						${ row( k( 'LMB' ), 'Cast, strike, reel<small>Hold to wind up / reel</small>' ) }
 						${ row( k( 'RMB' ), 'Reel in an empty line' ) }

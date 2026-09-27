@@ -8,6 +8,7 @@ export class Colliders {
 
 		this.boxes = [];
 		this.cylinders = [];
+		this.boom = [];     // camera-only capsules (ThirdPersonCamera): braces, stringers; nothing collides with them
 		this._v = new THREE.Vector3();
 
 	}
@@ -31,6 +32,18 @@ export class Colliders {
 
 		const c = { x, z, radius, yMin, yMax, tag };
 		this.cylinders.push( c );
+		return c;
+
+	}
+
+	// A camera-only proxy for thin structure (a brace, a stringer): the third-person boom avoids the
+	// capsule a -> b of this radius; the character and boats never touch it.
+	addBoomCapsule( a, b, radius, { tag = '' } = {} ) {
+
+		const c = { a: new THREE.Vector3( a[ 0 ] ?? a.x, a[ 1 ] ?? a.y, a[ 2 ] ?? a.z ), b: new THREE.Vector3( b[ 0 ] ?? b.x, b[ 1 ] ?? b.y, b[ 2 ] ?? b.z ), radius, tag };
+		c.lo = c.a.clone().min( c.b ).subScalar( radius );
+		c.hi = c.a.clone().max( c.b ).addScalar( radius );
+		this.boom.push( c );
 		return c;
 
 	}

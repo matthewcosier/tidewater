@@ -545,6 +545,18 @@ export function gablePart( w, h, depth ) {
 // ---------------------------------------------------------------------------
 // Batch: merged geometry for one material
 
+// Vertex ranges owned by one prop (src/physics/Props.js), so it can be moved inside a merged
+// batch: everything emitted inside tagSpans( tag, fn ) is recorded against tag, the spans follow
+// append(), and build() hands each tag its range of the built geometry (tag.bind).
+let spanTag = null;
+export function tagSpans( tag, fn ) {
+
+	const previous = spanTag;
+	spanTag = tag;
+	try { fn(); } finally { spanTag = previous; }
+
+}
+
 export class Batch {
 
 	constructor() {
@@ -556,12 +568,21 @@ export class Batch {
 		this.data = [];
 		this.idx = [];
 		this.vcount = 0;
+		this.spans = [];
 
 	}
 
 	get triangles() {
 
 		return this.idx.length / 3;
+
+	}
+
+	span( tag, start, count ) {
+
+		const last = this.spans[ this.spans.length - 1 ];
+		if ( last && last.tag === tag && last.start + last.count === start ) last.count += count;
+		else this.spans.push( { tag, start, count } );
 
 	}
 
@@ -604,13 +625,14 @@ export class Batch {
 
 		}
 
+		if ( spanTag ) this.span( spanTag, base, nv );
 		this.vcount += nv;
 
 	}
 
 	// Stamp another batch (a prop prototype) into this one: positions / normals transformed by m,
 	// tint multiplied by tintMul, the per-vertex seed (vdata.x) offset so every copy looks different.
-	addBatch( src, m, tintMul = null, seedOffset = 0 ) {
+	addBatch( src, m, tintMul = null, seedOffset = 0, tag = spanTag ) {
 
 		_m3.getNormalMatrix( m );
 		const e = m.elements, ne = _m3.elements;
@@ -649,6 +671,7 @@ export class Batch {
 
 		}
 
+		if ( tag ) this.span( tag, base, nv );
 		this.vcount += nv;
 
 	}
@@ -671,6 +694,7 @@ export class Batch {
 		}
 
 		for ( let i = 0; i < src.idx.length; i ++ ) this.idx.push( base + src.idx[ i ] );
+		for ( const sp of src.spans ) this.span( sp.tag, base + sp.start, sp.count );
 		this.vcount += src.vcount;
 
 	}
@@ -687,6 +711,7 @@ export class Batch {
 		g.setIndex( new Idx( this.idx, 1 ) );
 		g.computeBoundingBox();
 		g.computeBoundingSphere();
+		for ( const sp of this.spans ) sp.tag.bind( g, sp.start, sp.count );
 		return g;
 
 	}

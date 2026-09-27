@@ -102,6 +102,7 @@ class Obstacles {
 	// clearance (m) from the padded obstacles; values beyond ~2.5 m are clamped
 	dist( x, z, ignore = null ) {
 
+		if ( this.clear && this.clear( x, z ) ) return - 1;
 		const c = this.cell;
 		const l = this.map.get( Math.floor( x / c ) * 73856093 ^ Math.floor( z / c ) * 19349663 );
 		if ( ! l ) return 2.5;
@@ -172,6 +173,8 @@ export class DebrisPlacer {
 		this.detail = detail;
 		this.ground = ( x, z ) => this.T.heightAt( x, z );
 		this.obs = new Obstacles();
+		// built sites (the ferry terminal) keep their ground clear: no clearance anywhere inside
+		if ( terrain.inClearZone ) this.obs.clear = ( x, z ) => terrain.inClearZone( x, z );
 		this.occ = new Occupancy();
 		this.counts = {};
 		this.log = [];

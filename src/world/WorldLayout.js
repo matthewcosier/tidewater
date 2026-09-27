@@ -31,6 +31,13 @@ export const WORLD = {
 	// where the player starts: on the boardwalk up from the pier foot, looking down it toward the pier
 	start: { position: new THREE.Vector3( 53.6, 0, - 77 ), yaw: Math.PI },
 
+	// The ferry terminal (src/ferry/Terminal.js): where its glTF frame's origin (the docked ferry's
+	// stern-ramp hinge line at sea level) sits, and its yaw (0: the berth opens south, out to sea).
+	ferryTerminal: { position: new THREE.Vector3( 150, 0, 300 ), yaw: 0 },
+	// Joey Island's terminal across the strait: the same terminal, its berth opening north-west
+	// (yaw 220 degrees), its fill on the island's north-west corner; bow to bow 445 m from Tidewater's.
+	joeyTerminal: { position: new THREE.Vector3( - 176, 0, 652 ), yaw: 220 * Math.PI / 180 },
+
 	// Incoming swell direction (unit, travel direction)
 	swellDir: new THREE.Vector2( - 0.12, - 1 ).normalize(),
 };

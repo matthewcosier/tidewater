@@ -2,3 +2,9 @@ node_modules
 dist
 .DS_Store
 *.log
+/rally-physics/target
+/test-results*
+/playwright-report
+__pycache__/
+*.blend
+*.blend1

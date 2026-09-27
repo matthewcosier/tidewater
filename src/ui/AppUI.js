@@ -1,5 +1,7 @@
 import * as THREE from '../engine/index.js';
 import { UI } from './UI.js';
+import { icon } from './icons.js';
+import { ON_FOOT } from '../player/Player.js';
 import { G } from '../core/Globals.js';
 import { GroundBounce } from '../materials/GroundBounce.js';
 import { ContactShadows } from '../materials/ContactShadows.js';
@@ -227,15 +229,66 @@ export class AppUI {
 		const perf = ui.addTab( 'performance', 'Performance', 'performance' );
 		const live = perf.addFolder( 'Live', { icon: 'gauge' } );
 		live.addInfo( { label: 'Frame rate', get: () => `${ ( app.fps || 0 ).toFixed( 0 ) } fps` } );
+		// the frame-rate panel (top left) is a developer readout: off unless asked for here or with ?stats
+		s.showStats = new URLSearchParams( location.search ).has( 'stats' );
+		ui.statsEl.hidden = ! s.showStats;
+		live.addToggle( { label: 'Frame-rate overlay', object: s, key: 'showStats', tooltip: 'Frame rate and frame time in the top-left corner.', onChange: ( v ) => { ui.statsEl.hidden = ! v; } } );
 		live.addInfo( { label: 'CPU per frame', get: () => `${ ( app.cpuMs || 0 ).toFixed( 2 ) } ms` } );
 		live.addInfo( { label: 'Render size', get: () => `${ app.sceneRenderer.width } × ${ app.sceneRenderer.height }` } );
 		const quality = perf.addFolder( 'Quality', { icon: 'layers' } );
-		quality.addSlider( { label: 'Render scale', object: s, key: 'renderScale', min: 0.5, max: 1, step: 0.05, format: ( v ) => `${ Math.round( v * 100 ) }%`, tooltip: 'Internal resolution; the temporal upscaler reconstructs the full output resolution.', onChange: ( v ) => app.setRenderScale( v ) } );
+		// output resolution: Retina (DPR, capped at 2) with the adaptive governor (src/engine/ResolutionGovernor.js);
+		// its lowest steps lower the render scale (never above the slider), each step cuts the TAA history
+		const gov = app.engine.resolution;
+		gov.onScale = ( v ) => { app.post.setScale( v ); if ( app.clouds ) app.clouds.resolutionScale = v; app.cameraCut(); };
+		gov.setUserScale( app.settings.renderScale );
+		s.resolution = gov.mode;
+		quality.addSelect( { label: 'Resolution', object: s, key: 'resolution', options: [ { label: 'Auto (Retina)', value: 'auto' }, { label: 'Retina', value: 'retina' }, { label: 'Standard', value: 'standard' } ], tooltip: 'Auto renders at the Retina resolution and steps down when the frame rate drops.', onChange: ( v ) => gov.setMode( v ) } );
+		{ const kv = document.createElement( 'span' ); kv.className = 'tw-kv'; kv.innerHTML = '<span class="tw-k">res</span><span class="tw-v"></span>'; ui.statsEl.querySelector( '.tw-stats-sub' )?.append( kv ); this._resEl = kv.lastChild; }
+		quality.addSlider( { label: 'Render scale', object: s, key: 'renderScale', min: 0.5, max: 1, step: 0.05, format: ( v ) => `${ Math.round( v * 100 ) }%`, tooltip: 'Internal resolution; the temporal upscaler reconstructs the full output resolution.', onChange: ( v ) => { app.setRenderScale( v ); gov.setUserScale( app.settings.renderScale ); } } );
 		quality.addToggle( { label: 'Shadows', object: s, key: 'shadows', onChange: ( v ) => { app.sun.castShadow = v; } } );
 		s.ssr = true;
 		quality.addToggle( { label: 'Water reflections', object: s, key: 'ssr', tooltip: 'Screen-space reflections of the pier, boats and hills on the water.', onChange: ( v ) => { app.waterMaterial.params.ssr.value = v ? 1 : 0; } } );
 
+		// ---------------------------------------------------------------- on-foot view (V)
+		// first / third person, at the foot of the rail; shown while on foot
+		const viewBtn = this.viewBtn = document.createElement( 'button' );
+		viewBtn.type = 'button';
+		viewBtn.className = 'tw-rail-btn tw-rail-view';
+		viewBtn.dataset.tipSide = 'left';
+		viewBtn.addEventListener( 'click', () => {
+
+			app.player.toggleView();
+			viewBtn.blur(); // Space (jump) must not press it again
+			this._syncView();
+
+		} );
+		this.viewSep = document.createElement( 'span' );
+		this.viewSep.className = 'tw-rail-sep';
+		ui.rail.append( this.viewSep, viewBtn );
+		this._syncView();
+
 		this._t = 0;
+
+	}
+
+	_syncView() {
+
+		const app = this.app, p = app.player, third = p.view === 'third';
+		const show = ON_FOOT.has( p.mode ) && ! app.freeCam && ! app.rally?.active;
+		if ( this._viewShown !== show || this._viewThird !== third ) this.ui.promptEl.classList.toggle( 'is-third', show && third );
+		if ( this._viewShown !== show ) {
+
+			this.viewBtn.hidden = this.viewSep.hidden = ! show;
+			this._viewShown = show;
+
+		}
+
+		if ( this._viewThird === third ) return;
+		this._viewThird = third;
+		const label = third ? 'First person' : 'Third person';
+		this.viewBtn.setAttribute( 'aria-label', label );
+		this.viewBtn.dataset.tip = `${ label } (V)`;
+		this.viewBtn.innerHTML = icon( third ? 'eye' : 'walking' );
 
 	}
 
@@ -245,21 +298,29 @@ export class AppUI {
 		const app = this.app;
 		const ui = this.ui;
 		ui.setStats( { fps: app.fps, frameMs: dt * 1000 } );
+		if ( this._resEl ) this._resEl.textContent = app.engine.resolution.label;
 		this.s.renderScale = app.post.scale;
 
 		const p = app.player;
+		this._syncView();
 		if ( app.freeCam ) {
 
 			ui.setMode( 'Free camera' );
-			ui.setPrompt( 'F', 'Walk' );
+			ui.setPrompt( 'F', app.rally?.active ? 'Return to car' : 'Walk' );
 			ui.setBoatGauges( { visible: false } );
 			ui.setDepth( { visible: false } );
 			return;
 
 		}
 
-		const mode = p.mode === 'boat' ? `Boat · ${ p.camMode === 'first' ? '1st' : '3rd' } person`
+		const mode = p.mode === 'rally' ? `Driving · ${ app.rally.profile.name }`
+			: p.mode === 'boat' ? `Boat · ${ p.camMode === 'first' ? '1st' : '3rd' } person`
 			: p.mode === 'deck' ? 'On deck'
+			: p.mode === 'ferry' ? 'Aboard the Tidewater Spirit'
+			: p.mode === 'ferry-helm' ? 'At the helm'
+			: p.mode === 'jetski' ? `Jetski · ${ app.jetskis?.camMode === 'hood' ? 'hood' : 'chase' } cam`
+			: p.mode === 'jetski-thrown' ? 'Thrown off'
+			: p.mode === 'ragdoll' ? ( p.rag?.phase === 'getup' ? 'Getting up' : p.rag?.phase === 'swim' ? 'Swimming' : 'Tumbling' )
 			: p.mode === 'swim' ? ( app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Diving' : 'Swimming' ) : 'Walking';
 		ui.setMode( mode );
 		if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
