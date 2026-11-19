@@ -18,6 +18,7 @@
 import { Group, Vector3 } from '../engine/index.js';
 import { pose } from '../people/Pose.js';
 import { People } from '../people/People.js';
+import { room } from '../people/Room.js';
 import { SmartObject } from '../people/SmartObjects.js';
 import { fadeOptions } from '../people/Fade.js';
 import { SkinnedModel } from '../engine/render/Skinning.js';
@@ -32,22 +33,139 @@ const CLIP = { idle: 'idle_neutral_01', look: 'idle_look_around_01', sit: 'sit_c
 const SITTING = new Set( [ 'sit', 'sitLook', 'sitRelax', 'sitThink', 'sitYawn' ] );
 const PER_CAST = 4;                    // instances of each avatar: 32 people at most
 const QUEUE = 12;                      // waiting at each gangway gate at most
-// Terminal frame: the hall by the ticket counter, out of its door, round the yard path to the stair
-// tower, up it, along the covered walkway to the gangway gate (the queue), over the gangway.
-const IN = [ [ 37.4, 3.35, - 16.2 ], [ 30.2, 3.35, - 7.4 ], [ 28.0, 3.35, - 6.8 ], [ 22.4, 3.36, - 8.5 ], [ 22.4, 3.36, - 33.4 ], [ 14.87, 3.2, - 33.4 ],
-	[ 14.87, 3.2, - 32.2 ], [ 14.87, 3.98, - 29.75 ], [ 11.4, 3.98, - 29.9 ], [ 11.4, 3.98, - 32.55 ], [ 14.2, 5.95, - 32.55 ], [ 14.87, 6.34, - 32.3 ],
-	[ 14.87, 7.0, - 29.9 ], [ 14.6, 7.0, - 28.4 ] ];
-const spot = k => [ k % 2 ? 15.05 : 14.25, 7.0, 6.2 - 1.3 * Math.floor( k / 2 ) ];
-const GANGWAY = [ [ 'T', 14.6, 7.0, 8.7 ], [ 'T', 13.2, 7.0, 9.7 ], [ 'T', 11.12, 7.0, 9.7 ], [ 'S', 9.32, 7.0, - 15.5 ], [ 'S', 7.7, 7.0, - 15.5 ] ];
-// Her frame: saloon seats (facing forward) and the sun deck's rail (facing out), per side (+ port).
-const BENCHES = [ [ 2.4, 3.6 ], [ 6.0, 7.0 ] ], ROWS = [ 3, 5, 7, 9, 11, 13 ];   // two seats a bench, x; rows, z
-const RAILS = [ 2, 3.5, 5, 9, 11, 13 ];
-const toSeat = ( side, [ x, z ] ) => { const a = x < 5 ? 1.2 : 4.8; return [ [ 'S', side * 7.7, 7.0, - 1.0 ], [ 'S', side * 4.8, 7.0, 1.8 ], [ 'S', side * a, 7.0, 1.8 ], [ 'S', side * a, 7.0, z - 0.7 ], [ 'S', side * x, 7.0, z - 0.7 ], [ 'S', side * x, 7.0, z ] ]; };
-const toRail = ( side, z ) => [ [ 'S', side * 7.7, 7.0, - 12.5 ], [ 'S', side * 7.4, 10.0, - 15.0 ], [ 'S', side * 7.75, 10.0, - 12 ], [ 'S', side * 7.75, 10.0, 0.2 ], [ 'S', side * 7.9, 10.0, z ], [ 'S', side * 8.2, 10.0, z ] ];
-// a driver from beside the car to the wing stair door and up it into the corridor
-const fromCar = ( side, z ) => [ [ 'S', side * 3.6, 2.6, z ], [ 'S', side * 3.6, 2.6, - 8.9 ], [ 'S', side * 6.9, 2.6, - 8.9 ], [ 'S', side * 7.25, 2.6, - 8.1 ], [ 'S', side * 7.25, 7.0, - 1.6 ], [ 'S', side * 7.7, 7.0, - 1.0 ] ];
+// Terminal frame (terminal_colliders.json): out of the ticket counter's queue lane, across the hall to its door
+// (BuildingDoor, x 27.7 to 30.3), along the front and down the yard path outside the hall's west wall, round
+// to the stair tower's door (JettyStairs), up its five flights round the well (each leg on its treads' own
+// rise, 0.131 m in 0.3 m) and out onto the covered walkway's middle (its walls at x 13.04 and 15.40). Every leg
+// keeps a body (0.27 m) clear of the walls, seats, posts and treads (test/walker-routes.mjs).
+const IN = [ [ 37.4, 3.35, - 16.2 ], [ 37.4, 3.35, - 14.9 ], [ 29.0, 3.35, - 10.0 ], [ 29.0, 3.35, - 6.8 ], [ 22.4, 3.36, - 6.8 ], [ 22.4, 3.36, - 33.4 ], [ 16.5, 3.2, - 34.2 ], [ 14.85, 3.2, - 34.2 ],
+	[ 14.85, 3.2, - 31.9 ], [ 14.85, 3.99, - 29.8 ], [ 12.07, 4.77, - 29.8 ], [ 12.07, 5.56, - 32.55 ], [ 14.85, 6.34, - 32.55 ], [ 14.85, 7.0, - 29.8 ],
+	[ 14.6, 7.0, - 28.4 ] ];
+// The gate queue: pairs side by side (x 14.25 and 15.05), rows 0.7 m apart (a person's depth and a little
+// room: Fruin queues at 0.45 to 0.5 m a person in single file) from the rotunda's mouth back to z 4.1, all of
+// it ahead of the ticket-check podium by the right wall (x 14.92 to 15.37, z 2.6 to 3.1), which the right
+// file would otherwise stand in.
+const ROW0 = 7.6, ROW = 0.7;   // m, the front row's z and the rows' spacing
+const spot = k => [ k % 2 ? 15.05 : 14.25, 7.0, ROW0 - ROW * Math.floor( k / 2 ) ];
+// Up the walkway's middle past the podium (x 14.6 clears it by 0.05 m) to behind the queue, then straight up
+// the file to the spot, so an arrival never walks through the pair beside its place and a claim moved up the
+// queue only lengthens the last leg (update(): the queue closes up).
+const toSpot = k => [ [ 14.6, 7.0, 3.0 ], ...( k % 2 ? [ [ 14.6, 7.0, 3.4 ], [ 15.05, 7.0, 3.6 ] ] : [ [ 14.25, 7.0, 3.4 ] ] ), spot( k ) ];
+// Over the gangway: from the queue's front to the rotunda's mouth, across to the gangway's shore end and over it
+// in her port door (x 8.8, z -16.25 to -14.75) to her side corridor's lane (x 7.95: clear of the benches by the
+// hull at 8.25 and over the floor beside the wing stairwell, which opens at x 7.8).
+const GANGWAY = [ [ 'T', 14.6, 7.0, 8.7 ], [ 'T', 13.2, 7.0, 9.7 ], [ 'T', 11.12, 7.0, 9.7 ], [ 'S', 9.32, 7.0, - 15.5 ], [ 'S', 7.95, 7.0, - 15.3 ] ];
+// Her frame (+x port; ferry_colliders.json). Her saloon's seat rows are 0.63 m deep, 0.95 m apart from z 3.07,
+// with two seats a bench at x 2.18 to 3.82 and 5.68 to 7.32: every other row is used, sat 0.25 m forward of the
+// row's back (facing forward).
+const BENCHES = [ [ 2.6, 3.4 ], [ 6.1, 6.9 ] ], ROWS = [ 3.0, 4.9, 6.8, 8.7, 10.6, 12.5 ];   // two seats a bench, x; rows, z
+// The sun deck's rail, per side (+1 port): gaps between the side deck's benches (x 7.55 to 8.35) and, to port, the
+// open deck forward of them (z 0.5 to 5.4). To starboard a locker fills the side deck from z -5.5 to -0.3, so her
+// starboard spots are all aft of it. The deck ahead of z 5.4 is behind the wheelhouse screen and planters.
+const RAILS = { 1: [ - 10.6, - 8.2, - 5.8, 1.2, 2.6, 4.0 ], [ - 1 ]: [ - 13.6, - 10.6, - 8.2, - 7.0, - 5.9 ] };
+// To a seat: from the corridor's lane into the saloon's outer aisle (x 8.06), and for the inner bench across to the
+// middle aisle (x 4.75): to port along the front of the first row (z 2.43: 0.33 m from the bar at z 2.1, 0.32 m
+// from the row), to starboard round the far end of the rows (z 13.6), because her starboard kiosk reaches z 2.4.
+// Then up the aisle to the row, sideways along its legroom (0.32 m between rows: a person sidles, chest first)
+// and down onto the seat.
+const toSeat = ( side, [ x, z ] ) => {
 
-const _v = new Vector3(), _w = new Vector3(), _d = new Vector3(), _c = new Vector3();
+	const a = x < 5 ? 4.75 : 8.06, g = z + 0.54;   // m: the aisle's middle; the legroom in front of the seat
+	const across = x > 5 ? [] : side > 0 ? [ [ 4.75, 2.43 ] ] : [ [ 8.06, 13.6 ], [ 4.75, 13.6 ] ];
+	return [ [ 7.95, - 1.2 ], [ 8.06, 2.43 ], ...across, [ a, g ], [ x, g ], [ x, z ] ].map( ( [ u, w ] ) => [ 'S', side * u, 7.0, w ] );
+
+};
+// To the rail: aft along the corridor past the sun deck stair (x 6.74 to 7.75) to its foot (z -19.9), up it
+// (forward, to 10 m at z -15.74), out of its housing's door (x 6.95 to 7.8) and forward along the side deck
+// inside the benches (x 7.15) to the spot, then out to the rail (x 8.3: the rail's face is at 8.65 to 8.72).
+const toRail = ( side, z ) => [ [ 'S', side * 7.95, 7.0, - 15.3 ], [ 'S', side * 8.27, 7.0, - 16.1 ], [ 'S', side * 8.27, 7.0, - 20.3 ], [ 'S', side * 7.25, 7.0, - 20.3 ],
+	[ 'S', side * 7.25, 7.0, - 19.9 ], [ 'S', side * 7.25, 10.0, - 15.74 ], [ 'S', side * 7.375, 10.0, - 14.3 ], [ 'S', side * 7.15, 10.0, - 13.7 ], [ 'S', side * 7.15, 10.0, z ], [ 'S', side * 8.3, 10.0, z ] ];
+// her car deck's parking slots' z (Traffic.js SLOTS), where the drivers get out
+const SLOTS_Z = [ - 19.5, - 14, - 4.5, 1, 6.5 ];
+// A driver from beside the car, on its inboard side (x 3.3: between a centre-lane car's body at 2.97 and a parked
+// car's at 3.68, mirrors included), to the wing stair's door (x 6.55 to 6.72, z -9.5 to -8.3), in, up its flight
+// (z -8.2 to -1.96, 2.6 m to 7.0 m) and into the corridor's lane.
+const fromCar = ( side, z ) => [ [ 'S', side * 3.3, 2.6, z ], [ 'S', side * 3.3, 2.6, - 8.9 ], [ 'S', side * 7.26, 2.6, - 8.9 ], [ 'S', side * 7.26, 2.6, - 8.2 ], [ 'S', side * 7.26, 7.0, - 1.96 ], [ 'S', side * 7.95, 7.0, - 1.2 ] ];
+
+// Off her gangway and out through the terminal to its hall (terminal frame): the gangway's terminal half, then down
+// the walkway's free side (x 13.6: 0.65 m from the queue's left file, 0.56 m from the wall), so a leaver never
+// walks between the waiting pairs, and the way in, walked back.
+const LEAVE = [ [ 'T', 11.12, 7.0, 9.7 ], [ 'T', 13.2, 7.0, 9.7 ], [ 'T', 13.6, 7.0, 8.4 ], [ 'T', 13.6, 7.0, - 27.0 ] ];
+const OFF = () => [ ...LEAVE, ...[ ...IN ].reverse().map( w => [ 'T', ...w ] ) ];
+
+// Every route the crowd walks, for test/walker-routes.mjs, built by the same tables the crowd walks
+// them by: ashore [ name, points ] as [ x, y, z ] in the terminal's frame; aboard [ name, points, seated ]
+// as Vector3s in her frame, `seated` when the route's last two legs are the sidle along a row's legroom and
+// the step down onto the seat (toSeat).
+export const ROUTES = {
+
+	* terminal() {
+
+		const T = route => route.map( w => w[ 0 ] === 'T' ? w.slice( 1 ) : w );
+		for ( let k = 0; k < QUEUE; k ++ ) yield [ `the way in to the gate queue's spot ${ k }`, [ ...IN, ...toSpot( k ) ] ];
+		for ( let k = 0; k < QUEUE; k ++ ) yield [ `from the queue's spot ${ k } to her gangway`, T( [ [ 'T', ...spot( k ) ], ...GANGWAY.slice( 0, 3 ) ] ) ];
+		yield [ 'off her gangway out to the hall', T( OFF() ) ];
+
+	},
+
+	// the gate queue's places, terminal frame
+	* queue() { for ( let k = 0; k < QUEUE; k ++ ) yield spot( k ); },
+
+	* ship() {
+
+		const V = route => route.map( w => new Vector3( w[ 1 ], w[ 2 ], w[ 3 ] ) );
+		const seats = [];
+		for ( const z of ROWS ) for ( const pair of BENCHES ) for ( const x of pair ) seats.push( [ x, z ] );
+		for ( const side of [ 1, - 1 ] ) {
+
+			// foot passengers board to port only (aboard()); drivers to their car's side (spawnDriver)
+			const ways = side === 1 ? [ [ 'from her port door', GANGWAY.slice( 3 ) ] ] : [];
+			for ( const z of SLOTS_Z ) ways.push( [ `from the car parked at her ${ side > 0 ? 'port' : 'starboard' } z ${ z }`, fromCar( side, z ) ] );
+			for ( const [ from, start ] of ways ) {
+
+				for ( const seat of seats ) yield [ `${ from } to the seat ${ side * seat[ 0 ] }, ${ seat[ 1 ] }`, V( [ ...start, ...toSeat( side, seat ) ] ), true ];
+				for ( const z of RAILS[ side ] ) yield [ `${ from } to the rail at z ${ z }`, V( [ ...start, ...toRail( side, z ) ] ), false ];
+
+			}
+
+		}
+
+	},
+
+};
+
+// The kerb (docs/people.md, Solid trunks, cars and room). A walker whose next step (KERB_LOOK ahead along its leg) is
+// in the road a moving car will drive in its next few seconds (Traffic.roadAhead: from the car's middle to SEE s
+// ahead), or beside the body of a car going by (its drawn extent and a body round it, behind its middle too, where
+// roadAhead no longer looks), waits where it stands, but only while it stands outside the band the car itself stops
+// for (Traffic.personInWay: the car's half width and a body, widened here by KERB_GAP). There the car drives on and
+// the walker crosses behind it. A walker already inside that band walks on, and the car waits for it, so the two
+// never wait for each other; a car below 0.3 m/s is not coming (roadAhead skips it), so a car waiting for someone
+// never holds a walker either. Before this a walker stepped into a moving car's road, and the car braked for it.
+const KERB_LOOK = 0.6;     // m: a walker's next step, about a stride (Fruin 1971: 0.6 to 0.75 m at 1.3 m/s)
+const KERB_GAP = 0.15;     // m outside the car's own stopping band where a walker still waits (declared margin)
+const BODY_R = 0.27;       // m: a person's body (Contact.js BODY_R)
+//   atKerb( traffic, w, dx, dz ): w the walker's world position, ( dx, dz ) its leg's heading (any length)
+export function atKerb( traffic, w, dx, dz ) {
+
+	const cars = traffic?.cars, l = Math.hypot( dx, dz );
+	if ( ! cars?.length || l < 0.05 ) return false;
+	const ax = w.x + dx / l * KERB_LOOK, az = w.z + dz / l * KERB_LOOK;
+	let coming = traffic.roadAhead( ax, w.y, az, BODY_R );
+	for ( let i = 0; ! coming && i < cars.length; i ++ ) {
+
+		// the body of one going by: car.dir is its heading on the ground (Traffic.blocked), either way along it
+		const car = cars[ i ], o = car.world, d = car.dir;
+		if ( ! o || ! d || car.v < 0.3 || Math.abs( o.y - w.y ) > 2 ) continue;
+		const e = traffic.extent( car.name ), rx = ax - o.x, rz = az - o.z;
+		coming = Math.abs( rx * d.z - rz * d.x ) < e.half + BODY_R && Math.abs( rx * d.x + rz * d.z ) < Math.max( e.max.z, - e.min.z ) + BODY_R;
+
+	}
+	return coming && ! traffic.roadAhead( w.x, w.y, w.z, BODY_R + KERB_GAP );
+
+}
+
+const _v = new Vector3(), _w = new Vector3(), _d = new Vector3(), _c = new Vector3(), _a = new Vector3(), _b = new Vector3(), _s = new Vector3();
 const rand = ( a, b ) => a + Math.random() * ( b - a );
 const pick = a => a[ Math.floor( Math.random() * a.length ) ];
 const wrap = a => Math.atan2( Math.sin( a ), Math.cos( a ) );
@@ -70,7 +188,7 @@ export class Crowd {
 		for ( const side of [ 1, - 1 ] ) {
 
 			for ( const z of ROWS ) for ( const pair of BENCHES ) this.hub.objects.add( new SmartObject( { kind: 'seat', tag: side, slots: pair.map( ( x, i ) => ( { x, z, mates: [ 1 - i ] } ) ) } ) );
-			this.hub.objects.add( new SmartObject( { kind: 'rail', tag: side, slots: RAILS.map( ( z, i ) => ( { z, mates: [ i - 1, i + 1 ].filter( j => j >= 0 && j < RAILS.length && Math.abs( RAILS[ j ] - z ) <= 1.6 ) } ) ) } ) );
+			this.hub.objects.add( new SmartObject( { kind: 'rail', tag: side, slots: RAILS[ side ].map( ( z, i, R ) => ( { z, mates: [ i - 1, i + 1 ].filter( j => j >= 0 && j < R.length && Math.abs( R[ j ] - z ) <= 1.6 ) } ) ) } ) );
 
 		}
 
@@ -164,7 +282,7 @@ export class Crowd {
 		const body = this.take();
 		if ( ! body ) return;
 		const q = spot( k );
-		const p = this.add( { ...body, kind: 'foot', terminal, spot: k, state: placed ? 'queue' : 'in', path: placed ? null : [ ...IN.map( w => [ 'T', ...w ] ), [ 'T', ...q ] ], at: [ 'T', ...q ] } );
+		const p = this.add( { ...body, kind: 'foot', terminal, spot: k, state: placed ? 'queue' : 'in', path: placed ? null : [ ...IN, ...toSpot( k ) ].map( w => [ 'T', ...w ] ), at: [ 'T', ...q ] } );
 		queue.claim( k, p );
 		if ( placed ) this.idle( p );
 
@@ -193,7 +311,7 @@ export class Crowd {
 		const s = ( Math.random() >= railChance && objects.claim( 'seat', mine, p ) ) || objects.claim( 'rail', mine, p ) || objects.claim( 'seat', mine, p );
 		p.side = side;
 		p.seat = s && s.x !== undefined ? [ s.x, s.z ] : null;
-		return p.seat ? toSeat( side, p.seat ) : toRail( side, s ? s.z : pick( RAILS ) );
+		return p.seat ? toSeat( side, p.seat ) : toRail( side, s ? s.z : pick( RAILS[ side ] ) );
 
 	}
 
@@ -211,10 +329,11 @@ export class Crowd {
 			if ( ! stop.filled && this.free.length >= 6 ) { stop.filled = true; for ( let i = 0; i < 6; i ++ ) this.spawnFoot( t, true ); }
 			const queued = this.people.filter( p => p.terminal === t && p.kind === 'foot' && ! p.aboard );
 			if ( stop.filled && ! ( boarding && t === here ) && queued.length < stop.want && ( stop.spawn -= dt ) <= 0 ) { this.spawnFoot( t, false ); stop.spawn = rand( 3, 7 ); }
+			this.closeUp( stop.queue );
 			// boarding: the queue files over the gangway, the front pairs first
 			if ( boarding && t === here && ( stop.next -= dt ) <= 0 ) {
 
-				const p = queued.filter( p => p.state === 'queue' ).sort( ( a, b ) => a.spot - b.spot )[ 0 ];
+				const p = this.boarder( queued );
 				if ( p ) {
 
 					const q = spot( p.spot );
@@ -246,7 +365,7 @@ export class Crowd {
 					p.state = 'leave'; p.s = 0; p.seat = null;
 					this.hub.objects.release( p );
 					p.path = [ ...p.out ].reverse();
-					if ( p.kind === 'foot' ) p.path.push( ...[ ...GANGWAY.slice( 0, 3 ) ].reverse(), ...[ ...IN ].reverse().map( w => [ 'T', ...w ] ) );
+					if ( p.kind === 'foot' ) p.path.push( ...OFF() );
 					p.terminal = here || p.terminal;
 					p.model.play( CLIP.walk, { fade: 0.3 } );
 
@@ -273,6 +392,38 @@ export class Crowd {
 		}
 		this.people = this.people.filter( p => p.state !== 'gone' );
 		this.hub.charge( performance.now() - t0 );
+
+	}
+
+	// The gate queue closes up as its front pair boards: front to back, whoever is next in their file behind a free
+	// place moves up into it (a 0.7 m walk forward); someone still on their way to a place has their claim moved up
+	// with the queue (the last leg of their way runs up their own file, toSpot(), so it only lengthens). Before this
+	// the queue kept its gaps: the places nearest the gate emptied and new arrivals walked up past the people waiting.
+	closeUp( queue ) {
+
+		for ( let k = 2; k < QUEUE; k ++ ) {
+
+			const p = queue.slots[ k ].who;
+			if ( ! p || queue.slots[ k - 2 ].who || p.knock || ( p.state !== 'queue' && p.state !== 'in' ) ) continue;
+			queue.claim( k - 2, p );
+			p.spot = k - 2;
+			const to = [ 'T', ...spot( k - 2 ) ];
+			if ( p.path ) p.path[ p.path.length - 1 ] = to;
+			else { p.path = [ [ 'T', ...spot( k ) ], to ]; p.s = 0; }
+			p.at = to;
+
+		}
+
+	}
+
+	// The next to board: the front-most foot passenger standing in their place. Someone still walking up to a place
+	// the queue closed up to waits until they stand in it, because the way over the gangway starts from that place:
+	// boarding them on the way would jump them up the file in one frame.
+	boarder( queued ) {
+
+		let next = null;
+		for ( const p of queued ) if ( p.state === 'queue' && ! p.path && ( ! next || p.spot < next.spot ) ) next = p;
+		return next;
 
 	}
 
@@ -307,6 +458,7 @@ export class Crowd {
 
 		const ship = this.ferry.ship, m = p.model, b = p.brain, t = this.hub.t, knocked = !! p.knock;
 		if ( p.based ) p.world.copy( p.base );   // their place, without last frame's knock offset
+		p.walkV = 0;                              // m/s this frame: set by the room while they walk (others read it, Room.js)
 		// the brain's gesture: a one-shot clip (walkers pause for it); seated, none that would stand them up; none while knocked
 		if ( b.gesture && ! p.gesture && ! knocked ) {
 
@@ -321,14 +473,25 @@ export class Crowd {
 		if ( p.path && ! p.gesture && ! knocked ) {
 
 			const P = p.path;
-			let a = this.world( p, P[ 0 ], new Vector3() ), b = this.world( p, P[ 1 ], new Vector3() ), seg = a.distanceTo( b );
+			let a = this.world( p, P[ 0 ], _a ), b = this.world( p, P[ 1 ], _b ), seg = a.distanceTo( b );
 			const hx = Math.sin( p.heading ?? 0 ), hz = Math.cos( p.heading ?? 0 );
 			let wait = this.fallen.length > 0 && !! p.world && this.fallen.some( q => q !== p && q.world.distanceToSquared( p.world ) < 1.2 && ( q.world.x - p.world.x ) * hx + ( q.world.z - p.world.z ) * hz > 0 );
 			if ( P[ 0 ][ 0 ] !== P[ 1 ][ 0 ] && ! this.gangwayConnected( p ) ) {
 				wait = true;
 				if ( p.s > 0 && ! this.hub.contact.boards( p.world, p.base ) && ! this.ferry.deck?.supportAt( p.world ) ) this.hub.contact.environment?.( p );
 			}
-			if ( ! wait ) p.s += p.pace * dt;
+			// the kerb (atKerb): a car coming through their next step, and them outside the band it stops for
+			if ( ! wait && p.world && atKerb( this.ferry.traffic, p.world, b.x - a.x, b.z - a.z ) ) wait = true;
+			// room between people (src/people/Room.js): the pace they may walk among the others and their side step
+			if ( ! wait ) {
+
+				const lx = b.x - a.x, lz = b.z - a.z, l = Math.hypot( lx, lz );
+				// (a walker just out of the hall has no place yet on its first frame: the lerp below gives it one)
+				if ( l > 0.05 && p.world ) room( this.hub, p, lx / l, lz / l, ( seg - p.s ) * l / seg, b.x, b.z, P.length === 2, dt, this );
+				else p.walkV = p.pace;
+				p.s += p.walkV * dt;
+
+			}
 			while ( ! wait && p.path && p.s >= seg ) {
 
 				p.s -= seg;
@@ -345,7 +508,14 @@ export class Crowd {
 				const f = seg > 1e-4 ? Math.min( 1, p.s / seg ) : 1;
 				// A disconnected bridge cannot drag an in-progress passenger through
 				// open water as its remote endpoint moves away.
-				if ( ! wait || P[ 0 ][ 0 ] === P[ 1 ][ 0 ] ) p.world = ( p.world || new Vector3() ).copy( a ).lerp( b, f );
+				if ( ! wait || P[ 0 ][ 0 ] === P[ 1 ][ 0 ] ) {
+
+					p.world = ( p.world || new Vector3() ).copy( a ).lerp( b, f );
+					// their side step off the route's line (Room.js), along the leg's left normal
+					const lx = b.x - a.x, lz = b.z - a.z, l = Math.hypot( lx, lz );
+					if ( p.lat && l > 0.05 ) { p.world.x += lz / l * p.lat; p.world.z -= lx / l * p.lat; }
+
+				}
 				if ( seg > 0.05 && Math.hypot( b.x - a.x, b.z - a.z ) > 0.05 ) p.heading = Math.atan2( b.x - a.x, b.z - a.z );
 				p.local = P[ 0 ][ 0 ] === 'S' && P[ 1 ][ 0 ] === 'S' ? ship.toLocal( p.world, p.local || new Vector3() ) : null;
 				if ( wait ) { if ( m.current !== CLIP.idle ) m.play( CLIP.idle, { fade: 0.3 } ); }
@@ -417,6 +587,10 @@ export class Crowd {
 
 	}
 
+	// For Room.js: may p's body stand at ( x, z ), a side step off their route? As for a knock's step (canStand),
+	// from where they are.
+	clear( p, x, z ) { return this.canStand( p, _s.set( x, p.world.y, z ), p.world ); }
+
 	// Walkable, for a knock's step (Contact.js): aboard, never out past her rail; ashore, the planks under
 	// them (the pier, the terminal), never through a rail or off an edge.
 	canStand( p, w, base ) {
@@ -474,7 +648,7 @@ export class Crowd {
 
 	arrive( p ) {
 
-		p.path = null; p.s = 0; p.chat = 0;
+		p.path = null; p.s = 0; p.chat = 0; p.lat = 0; p.walkV = 0;
 		if ( p.state === 'in' ) p.state = 'queue';
 		else if ( p.state === 'leave' ) { if ( p.kind === 'driver' ) p.car.driverIn = true; p.state = 'gone'; }
 		else if ( p.state === 'board' ) p.state = p.seat ? 'seated' : 'stand';

@@ -333,6 +333,9 @@ export class FerryDeck {
 		ship.lever = Math.max( - 1, Math.min( 1, ship.lever + lever * LEVER_RATE * dt ) );
 		if ( inp.hit( 'KeyX' ) ) ship.lever = 0;
 		if ( inp.hit( 'KeyC' ) ) ship.wheel = 0;
+		// G runs the engines up to boost rating or back to service (FerryShip BOOST_POWER). Not B:
+		// B whistles the cockatoo in every mode (Cockatoo.js), so it would do two things here.
+		if ( inp.hit( 'KeyG' ) ) ship.boost = ! ship.boost;
 		if ( inp.hit( 'KeyH' ) ) this.ferry.horn( 'long' );
 		// Berth work: R lowers or raises the stern ramp, L casts off or makes fast.
 		if ( inp.hit( 'KeyR' ) ) this.ferry.toggleRamp();

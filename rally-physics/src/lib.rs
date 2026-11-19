@@ -40,6 +40,17 @@ pub const CATCH_UP_MAX_STEPS: u32 = 12;
 const STATIC_CELL: f32 = 64.0;
 /// Length of `snapshot()`; the layout is documented there.
 pub const SNAPSHOT_LEN: usize = 96;
+/// A kinematic pose further than this from the last one is a teleport, not motion (m/s, rad/s):
+/// the body keeps the velocity the game gave with it.
+const KINEMATIC_JUMP: (f32, f32) = (60.0, 20.0);
+/// Poses further apart than this in game time (s, a hitch or a pause) keep the given velocity.
+const KINEMATIC_GAP: f64 = 0.25;
+
+/// One kinematic body's poses for `derive_kinematic_velocities`: the pose the last `advance` used
+/// and the game clock then, the latest pose, the velocity the game gave with it, and whether it was
+/// posed since the last `advance`.
+#[derive(Clone, Copy)]
+struct KinematicPose { last: Option<(Vec3, Quat, f64)>, pose: (Vec3, Quat), given: (Vec3, Vec3), posed: bool }
 
 #[wasm_bindgen]
 pub struct RallyPhysics {
@@ -59,6 +70,11 @@ pub struct RallyPhysics {
     pusher: Option<Entity>,
     anchors: HashMap<u32,Entity>,
     connections: std::collections::BTreeMap<u32,structures::Connection>,
+    /// Game seconds handed to `advance` so far, before the step cap (s): the time base of the
+    /// kinematic poses, which the game moves in its own frame time.
+    game_clock: f64,
+    /// Each kinematic body's poses (0 platform, 1 remote car, by id): see `derive_kinematic_velocities`.
+    kinematic: HashMap<(u8,u32),KinematicPose>,
 }
 
 impl Default for RallyPhysics { fn default() -> Self { Self::new() } }
@@ -95,12 +111,11 @@ impl RallyPhysics {
         app.finish();
         app.cleanup();
         app.update();
-        Self { app, car, remainder: 0.0, max_steps: CATCH_UP_MAX_STEPS, previous: [0.0,100.0,0.0,0.0,0.0,0.0,1.0], vehicle: 0, remotes: HashMap::new(), platforms: HashMap::new(), props: HashMap::new(), pusher: None, anchors: HashMap::new(), connections: std::collections::BTreeMap::new() }
+        Self { app, car, remainder: 0.0, max_steps: CATCH_UP_MAX_STEPS, previous: [0.0,100.0,0.0,0.0,0.0,0.0,1.0], vehicle: 0, remotes: HashMap::new(), platforms: HashMap::new(), props: HashMap::new(), pusher: None, anchors: HashMap::new(), connections: std::collections::BTreeMap::new(), game_clock: 0.0, kinematic: HashMap::new() }
     }
 
     /// Switch physical bodies; world collisions and existing tracks remain.
     pub fn select_vehicle(&mut self, kind:u8)->bool {
-        // L9 cars: kinds come from VehicleConfig::of (vehicle.rs); was `kind>1` before the item 7 cars.
         if kind>=VehicleConfig::COUNT { return false; }
         let config=VehicleConfig::of(kind);
         self.app.world_mut().despawn(self.car);
@@ -115,12 +130,12 @@ impl RallyPhysics {
     /// This enables contact without claiming a global server-authoritative solver.
     /// The collider is only rebuilt when the remote driver changes vehicle.
     pub fn update_remote(&mut self,id:u32,kind:u8,state:&[f32]) {
-        if kind>=VehicleConfig::COUNT || state.len()<8 || state[..8].iter().any(|v| !v.is_finite()) { return; }
+        if kind>1 || state.len()<8 || state[..8].iter().any(|v| !v.is_finite()) { return; }
         let q=Quat::from_xyzw(state[3],state[4],state[5],state[6]);
         if q.length_squared()<0.5 { return; }
         let q=q.normalize();
         let p=Vec3::new(state[0],state[1],state[2]);
-        let velocity=q*Vec3::Z*(state[7]/3.6);
+        self.pose_kinematic((1,id),p,q,(q*Vec3::Z*(state[7]/3.6),Vec3::ZERO));
         let world=self.app.world_mut();
         let entity=match self.remotes.get(&id) {
             Some(&(entity,old)) if old==kind => entity,
@@ -133,7 +148,37 @@ impl RallyPhysics {
             }
         };
         self.app.world_mut().entity_mut(entity).insert((Position(p),Rotation(q),
-            Transform::from_translation(p).with_rotation(q),LinearVelocity(velocity),AngularVelocity::ZERO));
+            Transform::from_translation(p).with_rotation(q)));
+    }
+
+    /// Keeps a kinematic body's latest pose and the velocity the game gave with it, for the next
+    /// `advance` to derive its motion from (`derive_kinematic_velocities`).
+    fn pose_kinematic(&mut self, key:(u8,u32), p:Vec3, q:Quat, given:(Vec3,Vec3)) {
+        let last=self.kinematic.get(&key).and_then(|k| k.last);
+        self.kinematic.insert(key,KinematicPose { last, pose:(p,q), given, posed:true });
+    }
+
+    fn derive_kinematic_velocities(&mut self, now:f64) {
+        for (key,k) in self.kinematic.iter_mut() {
+            if !k.posed { continue; }
+            let (p,q)=k.pose;
+            let (linear,angular)=match k.last {
+                // No game time has passed since the last advance (a zero-length call): wait for one that has.
+                Some((_,_,t0)) if now<=t0 => continue,
+                Some((p0,q0,t0)) if now-t0<=KINEMATIC_GAP => {
+                    let dt=(now-t0) as f32;
+                    let linear=(p-p0)/dt;
+                    let turn=q*q0.inverse();
+                    let angular=(if turn.w<0.0 { -turn } else { turn }).to_scaled_axis()/dt;
+                    if linear.length()>KINEMATIC_JUMP.0 || angular.length()>KINEMATIC_JUMP.1 { k.given } else { (linear,angular) }
+                }
+                _ => k.given,
+            };
+            k.last=Some((p,q,now));
+            k.posed=false;
+            let entity=match key.0 { 0 => self.platforms.get(&key.1).copied(), _ => self.remotes.get(&key.1).map(|&(entity,_)| entity) };
+            if let Some(entity)=entity { self.app.world_mut().entity_mut(entity).insert((LinearVelocity(linear),AngularVelocity(angular))); }
+        }
     }
 
     /// A moving platform the game drives (the ferry's vehicle deck, its ramp): boxes in the
@@ -153,7 +198,8 @@ impl RallyPhysics {
             .collect();
         if shapes.is_empty() { return false; }
         let friction = boxes[8].clamp(0.0, 2.0);
-        self.remove_platform(id);
+        // Rebuilt in place (the ramp lowering): keep its last pose for its velocity.
+        if let Some(entity) = self.platforms.remove(&id) { self.app.world_mut().despawn(entity); }
         let entity = self.app.world_mut().spawn((RigidBody::Kinematic, Collider::compound(shapes), Friction::new(friction),
             PropSurface(Surface::Asphalt), controller::MovingPlatform, CenterOfMass(Vec3::ZERO), NoAutoCenterOfMass,
             Transform::default())).id();
@@ -162,47 +208,90 @@ impl RallyPhysics {
     }
 
     /// The platform's pose and motion for the coming steps: position xyz, rotation xyzw,
-    /// linear velocity xyz, angular velocity xyz (about its origin). The solver carries it
-    /// along that motion until the next call.
+    /// linear velocity xyz, angular velocity xyz (about its origin). The next `advance` carries it
+    /// along its pose delta (`derive_kinematic_velocities`); the given velocity serves a first
+    /// pose, a teleport or a gap.
     pub fn set_platform(&mut self, id: u32, state: &[f32]) -> bool {
         if state.len() < 13 || state.iter().any(|v| !v.is_finite()) { return false; }
         let Some(&entity) = self.platforms.get(&id) else { return false; };
         let p = Vec3::new(state[0], state[1], state[2]);
         let q = Quat::from_xyzw(state[3], state[4], state[5], state[6]).normalize();
-        self.app.world_mut().entity_mut(entity).insert((Position(p), Rotation(q), Transform::from_translation(p).with_rotation(q),
-            LinearVelocity(Vec3::new(state[7], state[8], state[9])), AngularVelocity(Vec3::new(state[10], state[11], state[12]))));
+        self.pose_kinematic((0, id), p, q, (Vec3::new(state[7], state[8], state[9]), Vec3::new(state[10], state[11], state[12])));
+        self.app.world_mut().entity_mut(entity).insert((Position(p), Rotation(q), Transform::from_translation(p).with_rotation(q)));
         true
     }
 
     pub fn remove_platform(&mut self, id: u32) {
+        self.kinematic.remove(&(0, id));
         if let Some(entity) = self.platforms.remove(&id) { self.app.world_mut().despawn(entity); }
     }
 
     pub fn remove_remote(&mut self,id:u32) {
+        self.kinematic.remove(&(1,id));
         if let Some((entity,_))=self.remotes.remove(&id) { self.app.world_mut().despawn(entity); }
     }
 
-    /// The source is Tidewater's row-major (z then x) texel-centred height grid.
-    /// Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-    /// Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+    /// Square grid wrapper kept for the synthetic test terrains: `resolution` texels per side over
+    /// `size` metres from `origin` on both axes. The game uses set_terrain_grid.
     pub fn set_terrain(&mut self, heights: &[f32], resolution: usize, size: f32, origin: f32) -> bool {
-        if resolution < 2 || heights.len() != resolution * resolution || !size.is_finite() || size <= 0.0
-            || !origin.is_finite() || heights.iter().any(|v| !v.is_finite()) { return false; }
-        let columns: Vec<Vec<f32>> = (0..resolution).map(|x|
-            (0..resolution).map(|z| heights[z * resolution + x]).collect()).collect();
-        let extent = size * (resolution - 1) as f32 / resolution as f32;
-        let centre = origin + size * 0.5;
+        if resolution < 2 || !size.is_finite() || size <= 0.0 { return false; }
+        self.set_terrain_grid(heights, resolution, resolution, size / resolution as f32, origin, origin)
+    }
+
+    /// The source is Tidewater's row-major (z then x) texel-centred height grid, `heights[z * res_x + x]`,
+    /// res_x texels along x and res_z rows along z (the WORLD.terrain rectangle, 2048 x 3328 m at 1 m),
+    /// texel centres at origin + texel * (i + 0.5) per axis. Parry rows are Z and columns X, so the
+    /// matrix is built directly: Avian's Vec<Vec> helper only lays the data out right for square grids.
+    /// The vertices are the texel centres: extent per axis texel * (res - 1), centre per axis
+    /// origin + texel * res / 2 (the square case is the old size * (res - 1) / res and origin + size / 2).
+    pub fn set_terrain_grid(&mut self, heights: &[f32], res_x: usize, res_z: usize, texel: f32, origin_x: f32, origin_z: f32) -> bool {
+        if res_x < 2 || res_z < 2 || heights.len() != res_x * res_z || !texel.is_finite() || texel <= 0.0
+            || !origin_x.is_finite() || !origin_z.is_finite() || heights.iter().any(|v| !v.is_finite()) { return false; }
+        let matrix = avian3d::parry::na::DMatrix::from_fn(res_z, res_x, |z, x| heights[z * res_x + x]);
+        let extent_x = texel * (res_x - 1) as f32;
+        let extent_z = texel * (res_z - 1) as f32;
+        let centre_x = origin_x + texel * res_x as f32 * 0.5;
+        let centre_z = origin_z + texel * res_z as f32 * 0.5;
+        let shape = avian3d::parry::shape::SharedShape::heightfield(matrix, avian3d::parry::math::Vector::new(extent_x, 1.0, extent_z));
         self.app.world_mut().spawn((RigidBody::Static,road::TerrainSurface,
-            Collider::heightfield(columns, Vec3::new(extent, 1.0, extent)),
-            Friction::new(0.65), Transform::from_xyz(centre, 0.0, centre)));
-        self.app.insert_resource(TerrainMaterials { codes: Vec::new(), res: resolution, origin, texel: size / resolution as f32 });
+            Collider::from(shape), Friction::new(0.65), Transform::from_xyz(centre_x, 0.0, centre_z)));
+        self.app.insert_resource(TerrainMaterials { codes: Vec::new(), res_x, res_z, origin_x, origin_z, texel });
         true
+    }
+
+    /// Ground height (m) of the static terrain colliders at world (x, z), read from the heightfield's
+    /// own triangles (the surface the bodies collide with), NaN off the grid. A vertical ray cast was
+    /// tried first: it missed on shared vertices and edges, where a node test probes. Terrain
+    /// colliders are never rotated. Lets node tests prove the collider sits on TerrainData.heightAt.
+    pub fn terrain_height(&mut self, x: f32, z: f32) -> f32 {
+        const EDGE: f32 = 1e-4; // barycentric slack so a point on a shared edge or vertex still counts
+        let world = self.app.world_mut();
+        let mut query = world.query_filtered::<(&Collider, &Transform), With<road::TerrainSurface>>();
+        let mut best = f32::NAN;
+        for (collider, transform) in query.iter(world) {
+            let Some(field) = collider.shape_scaled().as_heightfield() else { continue };
+            let (lx, lz) = (x - transform.translation.x, z - transform.translation.z);
+            let Some((i, j)) = field.cell_at_point(&avian3d::parry::math::Point::new(lx, 0.0, lz)) else { continue };
+            let (first, second) = field.triangles_at(i, j);
+            for tri in [first, second].into_iter().flatten() {
+                let (p0, p1, p2) = (tri.a, tri.b, tri.c);
+                let d = (p1.z - p2.z) * (p0.x - p2.x) + (p2.x - p1.x) * (p0.z - p2.z);
+                if d.abs() < 1e-12 { continue; }
+                let l0 = ((p1.z - p2.z) * (lx - p2.x) + (p2.x - p1.x) * (lz - p2.z)) / d;
+                let l1 = ((p2.z - p0.z) * (lx - p2.x) + (p0.x - p2.x) * (lz - p2.z)) / d;
+                let l2 = 1.0 - l0 - l1;
+                if l0 < -EDGE || l1 < -EDGE || l2 < -EDGE { continue; }
+                let y = l0 * p0.y + l1 * p1.y + l2 * p2.y + transform.translation.y;
+                if !(y <= best) { best = y; }
+            }
+        }
+        best
     }
 
     /// Terrain material per height texel: 0 dry sand, 1 soil/grass, 2 rock, 7 wet sand.
     pub fn set_surface_map(&mut self, codes: &[u8]) -> bool {
         let mut materials=self.app.world_mut().resource_mut::<TerrainMaterials>();
-        if materials.res==0 || codes.len()!=materials.res*materials.res { return false; }
+        if materials.res_x==0 || codes.len()!=materials.res_x*materials.res_z { return false; }
         materials.codes=codes.to_vec();
         true
     }
@@ -290,8 +379,7 @@ impl RallyPhysics {
     /// left 0..1 and detached (non-zero). Non-finite values are ignored.
     pub fn set_damage(&mut self, engine:f32, pull:f32, wheels:&[f32]) -> bool {
         if wheels.len()!=12 || !engine.is_finite() || !pull.is_finite() || wheels.iter().any(|v| !v.is_finite()) { return false; }
-        let wing_lost=self.app.world().resource::<controller::Damage>().wing_lost;
-        let mut damage=controller::Damage { wing_lost, engine:engine.clamp(0.0,1.0), pull:pull.clamp(-0.2,0.2), ..default() };
+        let mut damage=controller::Damage { engine:engine.clamp(0.0,1.0), pull:pull.clamp(-0.2,0.2), ..default() };
         for w in 0..4 {
             damage.toe[w]=wheels[w].clamp(-0.3,0.3);
             damage.spring[w]=wheels[4+w].clamp(0.2,1.0);
@@ -299,11 +387,6 @@ impl RallyPhysics {
         }
         self.app.insert_resource(damage);
         true
-    }
-
-    /// The detachable RS wing changes the rear aero balance independently of wheel damage.
-    pub fn set_rear_wing(&mut self,attached:bool) {
-        self.app.world_mut().resource_mut::<controller::Damage>().wing_lost=!attached;
     }
 
     /// Hard hits on the body since the last call, each as car-local point xyz, car-local push
@@ -343,6 +426,9 @@ impl RallyPhysics {
         *self.app.world_mut().resource_mut::<DriveIntent>() = DriveIntent {
             throttle: throttle.clamp(0.0,1.0), brake: brake.clamp(0.0,1.0),
             steer: steer.clamp(-1.0,1.0), handbrake: handbrake.clamp(0.0,1.0) };
+        let now=self.game_clock+(seconds as f64).max(0.0);
+        self.derive_kinematic_velocities(now);
+        self.game_clock=now;
         self.remainder += (seconds as f64).clamp(0.0,0.1);
         let mut steps = 0;
         while self.remainder >= DT && steps < self.max_steps {

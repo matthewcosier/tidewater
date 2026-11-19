@@ -628,6 +628,24 @@ export class Player {
 
 		}
 
+		// hang glider (src/glider/Glider.js): E clips in at the summit launch deck
+		if ( this.glider && ! this.busy && ! this.prompt ) {
+
+			const o = this.glider.offer( this );
+			if ( o ) {
+
+				this.prompt = { key: 'E', text: o.text };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					o.act();
+					return;
+
+				}
+
+			}
+
+		}
+
 		// jetskis (src/jetski/Jetski.js): ride one, climb aboard from the water, right a capsized one
 		if ( this.jetskis && ! this.busy && ! this.prompt ) {
 
@@ -783,7 +801,8 @@ export class Player {
 			// The provider's full transform already carried us above, including a
 			// jump frame. Subtract its velocity exactly once across this whole sweep.
 			if ( carried ) p.addScaledVector( carrierVelocity, - h );
-			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+			// boxes, cylinders and the palm and tree trunks (Colliders.resolveWalker)
+			this.colliders.resolveWalker( p, RADIUS, HEIGHT, 0.4 );
 			for ( const provider of this.groundProviders ) provider.resolveCapsule?.( p, RADIUS, HEIGHT, 0.4 );
 			const g = this.groundAt( p.x, p.z, p.y + 0.45 );
 			// Supported walking can follow a small downward step. An intentional

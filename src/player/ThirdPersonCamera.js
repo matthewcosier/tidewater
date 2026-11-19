@@ -206,8 +206,10 @@ export class ThirdPersonCamera {
 			return;
 
 		}
-		// people between the lens and him fade (src/people/Fade.js); the boom stays where it is
+		// people between the lens and him fade (src/people/Fade.js); the boom stays where it is. So does a
+		// wing he stands under (GliderBody.occlude: the sail fades while it hides his head, chest or hips)
 		player.people?.occlude?.( cam.position, pivot );
+		if ( player.cameraObstacles ) for ( const obstacle of player.cameraObstacles ) obstacle.occlude?.( cam.position, pivot, dt );
 
 	}
 
@@ -347,6 +349,8 @@ export class ThirdPersonCamera {
 		this.y = player.position.y + 0.162;
 		this.dist = selected.eye.distanceTo( target );
 		player.people?.occlude?.( cam.position, target );
+		// a wing floating over the swimmer fades rather than hide his head (GliderBody.occlude)
+		if ( player.cameraObstacles ) for ( const obstacle of player.cameraObstacles ) obstacle.occlude?.( cam.position, target, dt );
 		return true;
 
 	}

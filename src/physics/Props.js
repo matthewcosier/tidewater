@@ -27,6 +27,7 @@ const LINKED = new Set( [ 'crate', 'trap', 'barrel' ] );
 const CELL = 8;
 export const MAX_AWAKE = 80;
 const BREAK_SPEED = 4; // m/s of the hitter
+const CAR_REACH = 3;   // m from a car's middle to a panel it is touching: half its length (2.3 m on the Aster) and a margin
 const REST = 0.6; // seconds at rest before a prop may sleep
 const EPS = 1e-4;
 const REACH = 0.15; // how far the walker may get ahead of their stopped body (m)
@@ -444,10 +445,14 @@ export class PropPhysics {
 
 	panelContact( panel, speed, flag, pushers ) {
 
+		// Only a vehicle breaks a panel: the car, itself faster than BREAK_SPEED, with its middle within
+		// CAR_REACH of the panel. The physics reports the fastest body touching the panel, and the
+		// walker's pusher is one: a sprint (6.2 m/s) broke a panel a passing car had woken. A person at
+		// any speed meets a solid fence (docs/people.md, Design: solid trunks, cars and room).
 		if ( flag === 3 && speed > BREAK_SPEED ) {
 
-			this.breakPanel( panel, pushers.find( h => h.car ) );
-			return;
+			const car = pushers.find( h => h.car && h.speed > BREAK_SPEED && ( h.x - panel.centre.x ) ** 2 + ( h.z - panel.centre.z ) ** 2 < ( CAR_REACH + panel.half.z ) ** 2 );
+			if ( car ) { this.breakPanel( panel, car ); return; }
 
 		}
 		const solid = flag === 3;

@@ -4,7 +4,7 @@ import { Scene } from '../src/engine/index.js';
 import { TyreTracks } from '../src/rally/TyreTracks.js';
 import { VEHICLES } from '../src/rally/Vehicles.js';
 
-const terrain = rock => ( { res: 16, texel: 1, origin: - 8,
+const terrain = rock => ( { resX: 16, resZ: 16, texel: 1, originX: - 8, originZ: - 8,
 	sand: new Uint8Array( 256 ).fill( rock ? 0 : 255 ), rock: new Float32Array( 256 ).fill( rock ? 1 : 0 ),
 	heightAt: () => 2, normalAt: ( x, z, out ) => out.set( 0, 1, 0 ) } );
 function sample( x, { grounded = true, load = 3000, height = 2, slip = 0 } = {} ) {
@@ -163,21 +163,15 @@ test( 'Resetting a car starts a fresh strip instead of bridging to the recovery 
 	assert.ok( quads( tracks ).every( q => Math.hypot( q.end[ 0 ][ 0 ] - q.start[ 0 ][ 0 ], q.end[ 0 ][ 1 ] - q.start[ 0 ][ 1 ] ) < 0.5 ) );
 } );
 
-test( 'stationary spinning rear tyres leave two contact patches without filling the ring buffer', () => {
-	const tracks = new TyreTracks( new Scene(), terrain( false ), 128 );
-	const s = new Float32Array( 96 );
-	s.set( sample( 0 ) );
-	s[ 93 ] = -1000;
-	for ( let w = 0; w < 4; w ++ ) {
-		s[ 89 + w ] = 3;
-		s[ 37 + w * 10 ] = 0;
-		s[ 15 + w * 4 ] = w < 2 ? 0 : 16;
-		s[ 81 + w ] = w < 2 ? 0 : 16 / 3;
-		s[ 36 + w * 10 ] = w < 2 ? 0 : 1;
+test( 'Asphalt and rock take no rubber inside the tyre\'s grip; a slide past the peak still marks', () => {
+	for ( const [ surface, kind, angle, ratio ] of [ [ 'asphalt', 3, 0.12, 0.05 ], [ 'asphalt', 3, 0.02, 0.095 ], [ 'rock', 2, 0.135, 0.05 ] ] ) {
+		const tracks = new TyreTracks( new Scene(), paved( surface ), 256 );
+		for ( let step = 0; step <= 8; step ++ ) tracks.emit( 'car', car( 0, step * 0.4, 0, { rich: true, kind, angle, ratio } ), VEHICLES.aster );
+		assert.equal( tracks.count, 0, `${ surface } at slip angle ${ angle } rad, slip ratio ${ ratio } (inside the grip) drew ${ tracks.count } quads` );
 	}
-	for ( let i = 0; i < 120; i ++ ) tracks.emit( 'rs', s, VEHICLES.gt3rs );
-	assert.equal( tracks.count, 2, 'one bounded rubber patch at each rear contact' );
-	const p = tracks.attributes.position.array;
-	const length = Math.abs( p[ 2 ] - p[ 5 ] );
-	assert.ok( length >= 0.04 && length < 0.24, `rubber contact length ${ length.toFixed( 3 ) } m` );
+	for ( const [ angle, ratio, slip ] of [ [ 0.3, 0.05, 0 ], [ 0.02, 0.35, 0 ], [ 0.05, 0, 0.7 ] ] ) {
+		const tracks = new TyreTracks( new Scene(), paved( 'asphalt' ), 256 );
+		for ( let step = 0; step <= 8; step ++ ) tracks.emit( 'car', car( 0, step * 0.4, 0, { rich: true, kind: 3, angle, ratio, slip } ), VEHICLES.aster );
+		assert.ok( tracks.count > 0, `a slide past the peak (angle ${ angle } rad, ratio ${ ratio }, slide ${ slip }) drew no rubber` );
+	}
 } );

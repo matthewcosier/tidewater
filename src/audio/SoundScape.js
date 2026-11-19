@@ -129,7 +129,7 @@ const EMPTY = {};
 export class SoundScape {
 
 	// Does not touch Web Audio: the context is created on the first resume() (autoplay policy).
-	// shore (optional): { shore: ShoreWaves, field: shore field { res, data }, terrain: TerrainData }; found
+	// shore (optional): { shore: ShoreWaves, field: shore field { data, resX, resZ, cellSize, originX, originZ }, terrain: TerrainData }; found
 	// on window.__app when not given (see attachShore()).
 	constructor( { baseUrl = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'audio/', shore = null } = {} ) {
 
@@ -771,12 +771,14 @@ export class SoundScape {
 	// shore field at (x, z): travel time T, direction (dx, dz) × exposure, time to the shoreline Ts
 	_field( x, z, o ) {
 
-		const { field, terrain } = this._shore;
-		const res = field.res, data = field.data;
-		const fx = clamp( ( x - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
-		const fz = clamp( ( z - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
+		// the field carries its own rectangle (ShoreField.js: resX x resZ cells of cellSize m from
+		// originX, originZ): texel centres at origin + ( i + 0.5 ) * cellSize, clamp and stride per axis
+		const field = this._shore.field;
+		const resX = field.resX, resZ = field.resZ, cell = field.cellSize, data = field.data;
+		const fx = clamp( ( x - field.originX ) / cell - 0.5, 0, resX - 1.001 );
+		const fz = clamp( ( z - field.originZ ) / cell - 0.5, 0, resZ - 1.001 );
 		const i = Math.floor( fx ), j = Math.floor( fz ), tx = fx - i, tz = fz - j;
-		const k = ( j * res + i ) * 4, kr = k + res * 4;
+		const k = ( j * resX + i ) * 4, kr = k + resX * 4;
 		for ( let c = 0; c < 4; c ++ ) {
 
 			const a = data[ k + c ], b = data[ k + 4 + c ], cc = data[ kr + c ], d = data[ kr + 4 + c ];

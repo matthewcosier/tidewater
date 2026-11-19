@@ -1,5 +1,11 @@
 import * as THREE from '../engine/index.js';
 
+// Palm and tree trunks for walkers are filed in square cells this wide (m): a trunk is 0.4 to 0.8 m
+// across, so a capsule query reads the one to four cells within reach instead of the island's
+// thousands of trunks.
+const TRUNK_CELL = 4;
+const cellKey = ( ix, iz ) => ( ix + 32768 ) * 65536 + ( iz + 32768 );   // exact for |cell| < 32768 (131 km)
+
 // Lightweight collision world for the character controller and boat.
 // Boxes are oriented around Y only. Walkable boxes (decks, floors, stairs) act as ground.
 export class Colliders {
@@ -9,7 +15,75 @@ export class Colliders {
 		this.boxes = [];
 		this.cylinders = [];
 		this.boom = [];     // camera-only capsules (ThirdPersonCamera): braces, stringers; nothing collides with them
+		this.trunks = null;              // flat [ x, z, radius, bottom, top, ... ] m (setTrunks)
+		this.trunkCells = new Map();     // cellKey -> offsets into `trunks`
+		this.trunkReach = 0;             // m, the widest trunk's radius
 		this._v = new THREE.Vector3();
+
+	}
+
+	// Palm and tree trunks for people on foot: the flat set the car physics takes
+	// (WorldPhysics.trunkCylinders), handed in by RallyDrive.refreshIslandColliders at load, when a
+	// disaster fells or uproots a tree, and on restore. Kept out of `cylinders`: the car physics,
+	// clinging (Disasters), the wake and the livestock read that list and are handed the trunks
+	// separately, so a trunk in both would be met twice. Before this the walker went straight through
+	// every palm (docs/people.md, Design: solid trunks, cars and room between people).
+	setTrunks( flat ) {
+
+		this.trunks = flat;
+		this.trunkCells.clear();
+		this.trunkReach = 0;
+		for ( let k = 0; k < flat.length; k += 5 ) {
+
+			const key = cellKey( Math.floor( flat[ k ] / TRUNK_CELL ), Math.floor( flat[ k + 1 ] / TRUNK_CELL ) );
+			let list = this.trunkCells.get( key );
+			if ( ! list ) this.trunkCells.set( key, list = [] );
+			list.push( k );
+			if ( flat[ k + 2 ] > this.trunkReach ) this.trunkReach = flat[ k + 2 ];
+
+		}
+
+	}
+
+	// Push a vertical capsule (feet at pos.y) out of the trunks near it: the same band and radial
+	// push-out as the cylinders below. Returns true if it touched one.
+	resolveTrunks( pos, radius, height, stepHeight = 0.35 ) {
+
+		const T = this.trunks;
+		if ( ! T ) return false;
+		const reach = radius + this.trunkReach;
+		const x0 = Math.floor( ( pos.x - reach ) / TRUNK_CELL ), x1 = Math.floor( ( pos.x + reach ) / TRUNK_CELL );
+		const z0 = Math.floor( ( pos.z - reach ) / TRUNK_CELL ), z1 = Math.floor( ( pos.z + reach ) / TRUNK_CELL );
+		let hit = false;
+		for ( let ix = x0; ix <= x1; ix ++ ) for ( let iz = z0; iz <= z1; iz ++ ) {
+
+			const list = this.trunkCells.get( cellKey( ix, iz ) );
+			if ( ! list ) continue;
+			for ( const k of list ) {
+
+				if ( pos.y + height < T[ k + 3 ] || pos.y + stepHeight > T[ k + 4 ] ) continue;
+				const dx = pos.x - T[ k ], dz = pos.z - T[ k + 1 ], r = T[ k + 2 ] + radius, d2 = dx * dx + dz * dz;
+				if ( d2 >= r * r ) continue;
+				const d = Math.sqrt( d2 ) || 1e-4;
+				pos.x = T[ k ] + dx / d * r;
+				pos.z = T[ k + 1 ] + dz / d * r;
+				hit = true;
+
+			}
+
+		}
+		return hit;
+
+	}
+
+	// A person on foot (the player's walker, evacuees, a knocked townsperson's step): boxes, cylinders
+	// and trunks. resolveCapsule alone stays boxes and cylinders, for the ship's hull points and the
+	// ragdoll, which meet trunks their own way (Ragdoll.trunks).
+	resolveWalker( pos, radius, height, stepHeight = 0.35 ) {
+
+		const a = this.resolveCapsule( pos, radius, height, stepHeight );
+		const b = this.resolveTrunks( pos, radius, height, stepHeight );
+		return a || b;
 
 	}
 

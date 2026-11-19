@@ -12,11 +12,16 @@ import { CHANDLERY } from './Chandlery.js';
 // Per frame it only writes a few CSS transforms. The bake runs in row chunks over the first frames.
 //   const map = new Minimap( hudEl, game );  map.update( dt );  map.highlight( [ 'joe', 'marta' ] )
 
-const N = 900; // baked canvas size (px)
-const EXT = 1800; // metres covered by the bake: the island, the strait and Joey Island
-const X0 = - EXT / 2, Z0 = 15 - EXT / 2; // world at canvas (0, 0): the island north, Joey Island south
-const PPM = N / EXT; // canvas px per metre
+const PPM = 0.5; // canvas px per metre (2 m a pixel)
+// The bake covers the island, the strait and Joey Island: x -900..900, z from the north coast
+// (-885) to 300 m past Joey's terminal, which bounds its south coast (about 250 m), so the window
+// follows the island when it moves (src/joey/JoeyFrame.js). World at canvas (0, 0): X0, Z0.
+const X0 = - 900, Z0 = - 885, Z1 = WORLD.joeyTerminal.position.z + 300; // m
+const NX = Math.round( 1800 * PPM ), NZ = Math.ceil( ( Z1 - Z0 ) * PPM ); // baked canvas size (px)
 const ROWS_PER_FRAME = 48;
+const RIM_GAP = 0.2;       // of the map's radius, centre to centre (19 px on a 95 px radius: a 17 px pin and a hair)
+const RIM_MAX = 32;        // rim slots a frame (the N, the fixed pins and the drivers)
+const wrapAngle = a => a - 2 * Math.PI * Math.round( a / ( 2 * Math.PI ) );
 
 const CSS = /* css */`
 .gm-map { position: absolute; right: var(--tw-edge); bottom: var(--tw-edge); width: calc(184 * var(--tw-u)); height: calc(184 * var(--tw-u));
@@ -25,7 +30,7 @@ const CSS = /* css */`
 .tw-root[data-panel='open'] .gm-map { right: calc(var(--tw-panel-w) + 2 * var(--tw-3)); }
 .gm-map-view { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: #0b2c48;
 	box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), inset 0 0 18px rgba(0,0,0,0.45); }
-.gm-map-view canvas { position: absolute; left: 0; top: 0; width: ${ N }px; height: ${ N }px; transform-origin: 0 0; image-rendering: auto; }
+.gm-map-view canvas { position: absolute; left: 0; top: 0; width: ${ NX }px; height: ${ NZ }px; transform-origin: 0 0; image-rendering: auto; }
 .gm-map-vig { position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
 	background: radial-gradient(circle at 50% 50%, transparent 58%, rgba(4, 12, 20, 0.45) 100%); }
 .gm-map-marks { position: absolute; inset: 0; }
@@ -106,7 +111,7 @@ export class Minimap {
 		style.textContent = CSS;
 		document.head.append( style );
 
-		this.el = h( 'div', 'gm-map tw-glass', `<div class="gm-map-view"><canvas width="${ N }" height="${ N }"></canvas><div class="gm-map-vig"></div>
+		this.el = h( 'div', 'gm-map tw-glass', `<div class="gm-map-view"><canvas width="${ NX }" height="${ NZ }"></canvas><div class="gm-map-vig"></div>
 			<div class="gm-map-marks"></div>
 			<div class="gm-map-me"><svg viewBox="0 0 24 24"><path d="M12 2 20 21 12 16.5 4 21Z" fill="#fff" stroke="#0b1418" stroke-width="1.4" stroke-linejoin="round"/></svg></div></div>` );
 		this.el.setAttribute( 'role', 'group' );
@@ -151,8 +156,8 @@ export class Minimap {
 		this._hot = new Set();
 		this._size = 0;
 		this._bake = { row: 0, ctx: this.canvas.getContext( '2d' ), img: null, h: null, done: false };
-		this._bake.img = this._bake.ctx.createImageData( N, N );
-		this._bake.h = new Float32Array( N * N );
+		this._bake.img = this._bake.ctx.createImageData( NX, NZ );
+		this._bake.h = new Float32Array( NX * NZ );
 		// the view's size, kept by a ResizeObserver (reading clientWidth per frame forces a style +
 		// layout pass right after last frame's transform writes)
 		this._viewSize = - 1;
@@ -201,21 +206,22 @@ export class Minimap {
 		const B = this._bake;
 		if ( B.done ) return;
 		const T = this.game.app.terrainData;
-		const res = T.res, tex = T.texel, org = T.origin;
+		// terrain mask index per axis: the domain is a rectangle (stride resX, rows resZ)
+		const resX = T.resX, resZ = T.resZ, tex = T.texel, orgX = T.originX, orgZ = T.originZ;
 		const idx = ( x, z ) => {
 
-			const i = Math.floor( ( x - org ) / tex ), j = Math.floor( ( z - org ) / tex );
-			return i < 0 || j < 0 || i >= res || j >= res ? - 1 : j * res + i;
+			const i = Math.floor( ( x - orgX ) / tex ), j = Math.floor( ( z - orgZ ) / tex );
+			return i < 0 || j < 0 || i >= resX || j >= resZ ? - 1 : j * resX + i;
 
 		};
 
 		const d = B.img.data;
-		const end = Math.min( N, B.row + ROWS_PER_FRAME );
-		for ( let py = B.row; py < end; py ++ ) for ( let px = 0; px < N; px ++ ) {
+		const end = Math.min( NZ, B.row + ROWS_PER_FRAME );
+		for ( let py = B.row; py < end; py ++ ) for ( let px = 0; px < NX; px ++ ) {
 
 			const x = X0 + ( px + 0.5 ) / PPM, z = Z0 + ( py + 0.5 ) / PPM;
 			const hgt = T.heightAt( x, z );
-			B.h[ py * N + px ] = hgt;
+			B.h[ py * NX + px ] = hgt;
 			const k = idx( x, z );
 			let c;
 			if ( hgt < 0 ) {
@@ -256,19 +262,19 @@ export class Minimap {
 
 			}
 
-			const o = ( py * N + px ) * 4;
+			const o = ( py * NX + px ) * 4;
 			d[ o ] = c[ 0 ]; d[ o + 1 ] = c[ 1 ]; d[ o + 2 ] = c[ 2 ]; d[ o + 3 ] = 255;
 
 		}
 
 		B.row = end;
-		if ( B.row < N ) return;
+		if ( B.row < NZ ) return;
 
 		// coastline: a thin pale line where the height crosses sea level
-		for ( let py = 1; py < N - 1; py ++ ) for ( let px = 1; px < N - 1; px ++ ) {
+		for ( let py = 1; py < NZ - 1; py ++ ) for ( let px = 1; px < NX - 1; px ++ ) {
 
-			const i = py * N + px, a = B.h[ i ] >= 0;
-			if ( a && ( B.h[ i - 1 ] < 0 || B.h[ i + 1 ] < 0 || B.h[ i - N ] < 0 || B.h[ i + N ] < 0 ) ) {
+			const i = py * NX + px, a = B.h[ i ] >= 0;
+			if ( a && ( B.h[ i - 1 ] < 0 || B.h[ i + 1 ] < 0 || B.h[ i - NX ] < 0 || B.h[ i + NX ] < 0 ) ) {
 
 				const o = i * 4;
 				d[ o ] = d[ o ] * 0.3 + 245 * 0.7; d[ o + 1 ] = d[ o + 1 ] * 0.3 + 241 * 0.7; d[ o + 2 ] = d[ o + 2 ] * 0.3 + 228 * 0.7;
@@ -335,6 +341,14 @@ export class Minimap {
 		}
 	}
 
+	// No rim pin among the first n within gap (rad) of angle a.
+	_rimClear( a, n, gap ) {
+
+		for ( let k = 0; k < n; k ++ ) if ( Math.abs( wrapAngle( a - this._rim[ k ] ) ) < gap - 1e-4 ) return false;
+		return true;
+
+	}
+
 	update( dt ) {
 
 		this._bakeStep();
@@ -371,6 +385,8 @@ export class Minimap {
 		const s = kpm / PPM;
 		this._setStyle( this.canvas, 'transform', `translate(${ R }px, ${ R }px) rotate(${ rot }rad) scale(${ s }) translate(${ - ( x - X0 ) * PPM }px, ${ - ( z - Z0 ) * PPM }px)` );
 
+		const rimAt = this._rim || ( this._rim = new Float32Array( RIM_MAX ) );
+		let rimN = 0;
 		const place = ( el, dx, dz, edgeInset, arrow ) => {
 
 			let sx = ( dx * rx + dz * rz ) * kpm, sy = - ( dx * fx + dz * fz ) * kpm;
@@ -378,7 +394,25 @@ export class Minimap {
 			const edge = r > max;
 			if ( edge ) {
 
-				sx *= max / r; sy *= max / r;
+				// clockwise from the top; clear of the N and the rim pins already placed (RIM_GAP): the
+				// nearest clear angle beside one of them (a push-apart loop let a third pin swing back
+				// onto the first)
+				let a = Math.atan2( sx, - sy );
+				const gap = RIM_GAP * R / max;
+				if ( ! this._rimClear( a, rimN, gap ) ) {
+
+					let best = a, bestD = Infinity;
+					for ( let k = 0; k < rimN; k ++ ) for ( let side = - 1; side <= 1; side += 2 ) {
+
+						const c = rimAt[ k ] + side * gap, d = Math.abs( wrapAngle( c - a ) );
+						if ( d < bestD && this._rimClear( c, rimN, gap ) ) { best = c; bestD = d; }
+
+					}
+					a = best;
+
+				}
+				if ( rimN < RIM_MAX ) rimAt[ rimN ++ ] = a;
+				sx = Math.sin( a ) * max; sy = - Math.cos( a ) * max;
 
 			}
 
@@ -387,6 +421,9 @@ export class Minimap {
 			return edge;
 
 		};
+
+		// the N on the rim, first: the pins keep clear of it
+		place( this.north, 0, - 1e6, 9 );
 
 		for ( const m of this.markers ) {
 
@@ -398,9 +435,6 @@ export class Minimap {
 			this._toggle( m.el, 'is-edge', edge );
 
 		}
-
-		// the N on the rim
-		place( this.north, 0, - 1e6, 9 );
 
 		// fish finder: the richest water nearby, refreshed now and then
 		const finder = this.game.state.stats.finder;

@@ -5,7 +5,7 @@ import {TerrainData} from '../src/world/TerrainData.js';
 import {PerspectiveCamera} from '../src/engine/index.js';
 const terrain=new TerrainData();
 test('chase camera stays outside the ridge and sees the airborne glider after an ordinary push-out launch',()=>{
- const camera=new PerspectiveCamera(60,16/9,.1,4000),g=new Glider({camera,terrainData:terrain,cameraCut(){}});g.model={};g.active=g.pilot=true;g.flight.launch();
+ const camera=new PerspectiveCamera(60,16/9,.1,4000),g=new Glider({camera,terrainData:terrain,cameraCut(){}});g.model={};g.active=g.pilot=true;g.flight.launch({sample:()=>({wx:2.44,wz:6.55})});
  const env={terrainAt:(x,z)=>terrain.heightAt(x,z),waterAt:()=>0,sample:()=>({wx:2.44,wz:6.55})};let checked=0,minEye=Infinity,minLine=Infinity;
  for(let i=0;i<1200;i++){
   g.flight.controls.pitch=i>=480?1:0;g.flight.step(1/120,env);g.updateCamera(1/120);
@@ -56,7 +56,7 @@ test('ordinary push-out camera keeps a bounded boom and exposes the actual autho
  const t=new TerrainData(),colliders=new Colliders();buildStation({terrainData:t,coastalRoute:new CoastalRoute(t),colliders,scene:new Group(),village:{materials:{wood:{},hard:{},stone:{}}}});
  const model=await asset,env={terrainAt:(x,z)=>t.heightAt(x,z),waterAt:()=>0,sample:()=>({wx:2.44,wz:6.55})};
  for(const stride of [1,2,4]){
-  const camera=new PerspectiveCamera(60,16/9,.1,4000),g=new Glider({camera,terrainData:t,colliders,cameraCut(){}});g.model=model;g.active=g.pilot=true;g.flight.launch();
+  const camera=new PerspectiveCamera(60,16/9,.1,4000),g=new Glider({camera,terrainData:t,colliders,cameraCut(){}});g.model=model;g.active=g.pilot=true;g.flight.launch({sample:()=>({wx:2.44,wz:6.55})});
   const body=new GliderBody(g.model.root,g.flight);let maxBoom=0,hidden=0,checked=0,maxSpeed=0,last=null;
   for(let i=0;i<1200;i++){
    g.flight.controls.pitch=i>=480?1:0;g.flight.step(1/120,env);if(i%stride)continue;g.updateCamera(stride/120);
@@ -266,3 +266,44 @@ test('Player finalizes the nearby wreck camera after the actual displayed contac
  assert.ok(endpoint>.7,`the actual failed contact frame838 remains obscured: ${endpoint}`);
  assert.ok(longest<.25,`post-contact head stays obscured for ${longest}s`);
 });
+
+import {clearFlightCamera} from '../src/glider/FlightCamera.js';
+test( 'the chase eye keeps up with a 20 m/s wing at 10 Hz while every boom is hidden, and closes a 200 m gap', () => {
+	const g = new Glider( { camera: new PerspectiveCamera( 60, 16 / 9, .1, 4000 ), terrainData: terrain, cameraCut() {} } );
+	const controls = g.flight.controls;
+	const speed = 20; // m/s ground speed downwind, the measured browser case
+	const dt = .1; // s: the headless frame time
+	const lift = 200; // m above the sea: no terrain in the way
+	let hidden = false;
+	const sail = { pilotVisible: () => ! hidden };
+	const subject = [ - 900, lift, - 300 ];
+	const eye = new Vector3( subject[ 0 ], subject[ 1 ] + 5, subject[ 2 ] - 15 );
+	const state = {};
+	const frame = reset => {
+		const desired = [ subject[ 0 ], subject[ 1 ] + 5, subject[ 2 ] - 15 ];
+		clearFlightCamera( eye, subject, terrain, null, [ 0, 0, 0, 1 ], { desired, dt, state, reset, sail, controls, velocity: [ 0, 0, speed ] } );
+		return eye.distanceTo( new Vector3( ...subject ) );
+	};
+	frame( true );
+	hidden = true;
+	let worst = 0;
+	for ( let i = 0; i < 30; i ++ ) {
+		subject[ 2 ] += speed * dt;
+		worst = Math.max( worst, frame( false ) );
+	}
+	assert.ok( worst < 23, `eye fell ${ worst.toFixed( 1 ) } m behind the wing in 3 s with every boom hidden (limit 23 m)` );
+	// The browser state: the eye is already 200 m back and every boom is still hidden.
+	eye.set( subject[ 0 ], subject[ 1 ] + 5, subject[ 2 ] - 200 );
+	let gap = 0;
+	for ( let i = 0; i < 30; i ++ ) {
+		subject[ 2 ] += speed * dt;
+		gap = frame( false );
+	}
+	assert.ok( gap < 23, `eye still ${ gap.toFixed( 1 ) } m from the wing 3 s after a 200 m gap (limit 23 m)` );
+	hidden = false;
+	for ( let i = 0; i < 20; i ++ ) {
+		subject[ 2 ] += speed * dt;
+		gap = frame( false );
+	}
+	assert.ok( gap < 19, `eye ${ gap.toFixed( 1 ) } m from the wing 2 s after the booms cleared (nominal boom 15.8 m)` );
+} );

@@ -36,3 +36,5 @@ docs/**/*.png
 /public/rally/rally_physics_bg.wasm
 /public/rally/cosier_gt3rs.glb
 /public/aviation/carrier.glb
+
+/public/ferry/terminal.glb

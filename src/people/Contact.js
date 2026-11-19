@@ -278,7 +278,7 @@ export class Contact {
 			const floor=walker?walker.ground(b.position.x,b.position.z,Math.max(oldY,b.position.y)+.35):P.groundAt(b.position.x,b.position.z,Math.max(oldY,b.position.y)+.35);
 			b.supported=b.position.y<=floor+.001;
 			if(b.supported){b.position.y=floor;b.velocity.y=Math.max(0,b.velocity.y);const speed=Math.hypot(b.velocity.x,b.velocity.z),friction=Math.max(0,1-.6*9.81*h/Math.max(1e-6,speed));b.velocity.x*=friction;b.velocity.z*=friction;}
-			const x=b.position.x,z=b.position.z;if(local.resolveCapsule(b.position,.27,1.7,.35)){if(Math.abs(b.position.x-x)>.0001)b.velocity.x=0;if(Math.abs(b.position.z-z)>.0001)b.velocity.z=0;}
+			const x=b.position.x,z=b.position.z;if(local.resolveWalker(b.position,.27,1.7,.35)){if(Math.abs(b.position.x-x)>.0001)b.velocity.x=0;if(Math.abs(b.position.z-z)>.0001)b.velocity.z=0;}
 		}
 		_want.copy(b.position).sub(p.base);O.free=true;
 	}
@@ -414,7 +414,7 @@ export class Contact {
 			S.velocity.y += Math.max( - 9.81, Math.min( 9.81, ( targetY - S.at.y ) * 16 - S.velocity.y * 8 ) ) * dt;
 			S.at.addScaledVector( S.velocity, dt );
 			if ( S.at.y < g ) { S.at.y = g; S.velocity.y = Math.max( 0, S.velocity.y ); }
-			this.hub.app.colliders?.resolveCapsule( S.at, BODY_R, 1.7, 0.3 );
+			this.hub.app.colliders?.resolveWalker( S.at, BODY_R, 1.7, 0.3 );
 		} else S.at.y = g;
 		_want.set( S.at.x - p.base.x, S.at.y - p.base.y, S.at.z - p.base.z );
 

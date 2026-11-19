@@ -20,7 +20,7 @@ const ellipseDist = ( x, z, cx, cz, rx, rz ) => {
 // central bay: the beach and its underwater profile stay smooth (the surf is tuned for it)
 const beachZoneAt = ( x, z ) => ( 1 - smoothstep( 120, 205, Math.abs( x - 10 ) ) ) * ( 1 - smoothstep( 40, 140, z + 40 ) ) * smoothstep( - 260, - 120, z );
 
-const RES = 2048; // 1 m texels over the 2048 m domain
+export const BORDER_FADE = 120; // m: the heightfield fades to the - 90 m ocean floor over this band inside every edge
 
 // volcanic plugs on the summit ridge: [x, z, radius, height above the envelope]
 const PLUGS = [ [ - 42, - 505, 72, 62 ], [ 152, - 466, 46, 38 ], [ - 238, - 458, 40, 26 ] ];
@@ -66,14 +66,24 @@ export class TerrainData {
 
 	constructor( seed = 7 ) {
 
-		this.size = WORLD.terrainSize;
-		this.res = RES;
-		this.texel = this.size / this.res;
-		this.origin = - this.size / 2;
+		// The domain is the WORLD.terrain rectangle (sizeX != sizeZ). Heights are row-major: row j
+		// runs along z (resZ rows), stride resX, k = j * resX + i, texel centre at
+		// ( originX + ( i + 0.5 ) * texel, originZ + ( j + 0.5 ) * texel ).
+		const D = WORLD.terrain;
+		this.sizeX = D.sizeX; // m
+		this.sizeZ = D.sizeZ; // m
+		this.texel = D.texel; // m per height texel
+		this.resX = D.sizeX / D.texel;
+		this.resZ = D.sizeZ / D.texel;
+		this.originX = D.originX; // m, west edge
+		this.originZ = D.originZ; // m, north edge
+		// the 1 m relief passes index texels as metres and the 8 m / 2 m grids, min/max tiles and
+		// 4 m GPU cells need whole counts: fail loudly rather than build a skewed grid
+		if ( D.texel !== 1 || D.sizeX % 64 !== 0 || D.sizeZ % 64 !== 0 ) throw new Error( `WORLD.terrain must be 1 m texels over multiples of 64 m, got ${ JSON.stringify( D ) }` );
 		this.noise = new Noise2D( seed );
 		this.noise2 = new Noise2D( seed * 31 + 5 );
 		this.noise3 = new Noise2D( seed * 131 + 17 );
-		const n = this.res * this.res;
+		const n = this.resX * this.resZ;
 		this.heights = new Float32Array( n );
 		this.rock = new Float32Array( n ); // rockiness mask (0 sand/soil .. 1 bare rock)
 		this.sand = new Uint8Array( n ); // loose sand cover (beach, dunes, seabed)
@@ -298,21 +308,22 @@ export class TerrainData {
 
 		};
 
-		const { origin } = this;
+		const { originX, originZ } = this;
 		const n = this.noise, n3 = this.noise3;
 
 		// ---- grid A: 8 m
-		const NA = 256, TA = this.size / NA;
-		const Awx = new Float32Array( NA * NA ), Awz = new Float32Array( NA * NA );
-		const Af170 = new Float32Array( NA * NA ), Aund = new Float32Array( NA * NA ), Adeep = new Float32Array( NA * NA );
-		const AE = new Float32Array( NA * NA );
-		for ( let j = 0; j < NA; j ++ ) {
+		const TA = 8; // m, grid A cell
+		const NAx = this.sizeX / TA, NAz = this.sizeZ / TA;
+		const Awx = new Float32Array( NAx * NAz ), Awz = new Float32Array( NAx * NAz );
+		const Af170 = new Float32Array( NAx * NAz ), Aund = new Float32Array( NAx * NAz ), Adeep = new Float32Array( NAx * NAz );
+		const AE = new Float32Array( NAx * NAz );
+		for ( let j = 0; j < NAz; j ++ ) {
 
-			const z = origin + ( j + 0.5 ) * TA;
-			for ( let i = 0; i < NA; i ++ ) {
+			const z = originZ + ( j + 0.5 ) * TA;
+			for ( let i = 0; i < NAx; i ++ ) {
 
-				const x = origin + ( i + 0.5 ) * TA;
-				const k = j * NA + i;
+				const x = originX + ( i + 0.5 ) * TA;
+				const k = j * NAx + i;
 				const ox = n.fbm( x / 300, z / 300, 3 ) * 60, oz = n.fbm( x / 300 + 7.1, z / 300 - 3.3, 3 ) * 60;
 				const wx = x + ox, wz = z + oz;
 				Awx[ k ] = ox; Awz[ k ] = oz;
@@ -331,44 +342,45 @@ export class TerrainData {
 		}
 
 		// envelope gradient
-		const Agx = new Float32Array( NA * NA ), Agz = new Float32Array( NA * NA );
-		for ( let j = 1; j < NA - 1; j ++ ) for ( let i = 1; i < NA - 1; i ++ ) {
+		const Agx = new Float32Array( NAx * NAz ), Agz = new Float32Array( NAx * NAz );
+		for ( let j = 1; j < NAz - 1; j ++ ) for ( let i = 1; i < NAx - 1; i ++ ) {
 
-			const k = j * NA + i;
+			const k = j * NAx + i;
 			Agx[ k ] = ( AE[ k + 1 ] - AE[ k - 1 ] ) / ( 2 * TA );
-			Agz[ k ] = ( AE[ k + NA ] - AE[ k - NA ] ) / ( 2 * TA );
+			Agz[ k ] = ( AE[ k + NAx ] - AE[ k - NAx ] ) / ( 2 * TA );
 
 		}
 
 		tick( 'gridA' );
 
 		// ---- grid B: 2 m
-		const NB = RES / 2, TB = this.size / NB;
-		const Bh = new Float32Array( NB * NB ), Brock = new Float32Array( NB * NB ), Bd = new Float32Array( NB * NB );
-		const Bbz = new Float32Array( NB * NB ), Bcarve = new Float32Array( NB * NB );
+		const TB = 2 * this.texel; // m, grid B cell
+		const NBx = this.resX / 2, NBz = this.resZ / 2;
+		const Bh = new Float32Array( NBx * NBz ), Brock = new Float32Array( NBx * NBz ), Bd = new Float32Array( NBx * NBz );
+		const Bbz = new Float32Array( NBx * NBz ), Bcarve = new Float32Array( NBx * NBz );
 		const F = { wx: 0, wz: 0, f170: 0, und: 0, deep: 0, E: 0, gx: 0, gz: 0 };
 		const out = { h: 0, rock: 0, d: 0, bz: 0, carve: 0 };
-		for ( let j = 0; j < NB; j ++ ) {
+		for ( let j = 0; j < NBz; j ++ ) {
 
-			const z = origin + ( j + 0.5 ) * TB;
-			for ( let i = 0; i < NB; i ++ ) {
+			const z = originZ + ( j + 0.5 ) * TB;
+			for ( let i = 0; i < NBx; i ++ ) {
 
-				const x = origin + ( i + 0.5 ) * TB;
-				F.wx = x + sampleGrid( Awx, NA, origin, TA, x, z );
-				F.wz = z + sampleGrid( Awz, NA, origin, TA, x, z );
-				F.f170 = sampleGrid( Af170, NA, origin, TA, x, z );
-				F.und = sampleGrid( Aund, NA, origin, TA, x, z );
-				F.deep = sampleGrid( Adeep, NA, origin, TA, x, z );
-				F.E = sampleGrid( AE, NA, origin, TA, x, z );
+				const x = originX + ( i + 0.5 ) * TB;
+				F.wx = x + sampleGrid( Awx, NAx, NAz, originX, originZ, TA, x, z );
+				F.wz = z + sampleGrid( Awz, NAx, NAz, originX, originZ, TA, x, z );
+				F.f170 = sampleGrid( Af170, NAx, NAz, originX, originZ, TA, x, z );
+				F.und = sampleGrid( Aund, NAx, NAz, originX, originZ, TA, x, z );
+				F.deep = sampleGrid( Adeep, NAx, NAz, originX, originZ, TA, x, z );
+				F.E = sampleGrid( AE, NAx, NAz, originX, originZ, TA, x, z );
 				if ( F.E > 0.01 ) {
 
-					F.gx = sampleGrid( Agx, NA, origin, TA, x, z );
-					F.gz = sampleGrid( Agz, NA, origin, TA, x, z );
+					F.gx = sampleGrid( Agx, NAx, NAz, originX, originZ, TA, x, z );
+					F.gz = sampleGrid( Agz, NAx, NAz, originX, originZ, TA, x, z );
 
 				}
 
 				this._base( x, z, F, out );
-				const k = j * NB + i;
+				const k = j * NBx + i;
 				Bh[ k ] = out.h; Brock[ k ] = out.rock; Bd[ k ] = out.d; Bbz[ k ] = out.bz; Bcarve[ k ] = out.carve;
 
 			}
@@ -378,11 +390,11 @@ export class TerrainData {
 		tick( 'gridB' );
 
 		// ---- grid C: 1 m
-		const H = upsample2( Bh, NB, true );
-		const D = upsample2( Bd, NB, false );
-		const R0 = upsample2( Brock, NB, false );
-		const BZ = upsample2( Bbz, NB, false );
-		const CV = upsample2( Bcarve, NB, false );
+		const H = upsample2( Bh, NBx, NBz, true );
+		const D = upsample2( Bd, NBx, NBz, false );
+		const R0 = upsample2( Brock, NBx, NBz, false );
+		const BZ = upsample2( Bbz, NBx, NBz, false );
+		const CV = upsample2( Bcarve, NBx, NBz, false );
 		this.heights = H;
 		tick( 'upsample' );
 
@@ -400,21 +412,23 @@ export class TerrainData {
 
 		this._masks( H, D, R0, BZ, CV );
 		// soften the 1 m masks so material transitions never show the texel grid
-		this.rock = boxBlur( this.rock, RES, RES, 1 );
+		this.rock = boxBlur( this.rock, this.resX, this.resZ, 1 );
 		tick( 'masks' );
 
-		// fade to deep ocean floor at the domain border
-		const res = RES;
-		for ( let j = 0; j < res; j ++ ) {
+		// fade to deep ocean floor at the domain border; past `band` texels from every edge the fade
+		// is 1, so inner rows only touch their two side bands
+		const { resX, resZ } = this;
+		const band = Math.ceil( BORDER_FADE / this.texel ) + 2;
+		for ( let j = 0; j < resZ; j ++ ) {
 
-			if ( Math.min( j, res - 1 - j ) > 121 ) {
+			if ( Math.min( j, resZ - 1 - j ) >= band ) {
 
-				for ( let i = 0; i < 122; i ++ ) this._fadeBorder( H, i, j );
-				for ( let i = res - 122; i < res; i ++ ) this._fadeBorder( H, i, j );
+				for ( let i = 0; i < band; i ++ ) this._fadeBorder( H, i, j );
+				for ( let i = resX - band; i < resX; i ++ ) this._fadeBorder( H, i, j );
 
 			} else {
 
-				for ( let i = 0; i < res; i ++ ) this._fadeBorder( H, i, j );
+				for ( let i = 0; i < resX; i ++ ) this._fadeBorder( H, i, j );
 
 			}
 
@@ -427,10 +441,10 @@ export class TerrainData {
 
 	_fadeBorder( H, i, j ) {
 
-		const res = RES;
-		const e = Math.min( i, j, res - 1 - i, res - 1 - j ) * this.texel;
-		const t = smoothstep( 0, 120, e );
-		const k = j * res + i;
+		const { resX, resZ } = this;
+		const e = Math.min( i, j, resX - 1 - i, resZ - 1 - j ) * this.texel;
+		const t = smoothstep( 0, BORDER_FADE, e );
+		const k = j * resX + i;
 		H[ k ] = lerp( - 90, H[ k ], t );
 
 	}
@@ -438,17 +452,17 @@ export class TerrainData {
 	// 1 m relief on land: micro undulation and rock outcrops breaking through the slopes
 	_detail( H, D, R0, BZ ) {
 
-		const res = RES, o = this.origin, n2 = this.noise2, n3 = this.noise3;
-		for ( let j = 1; j < res - 1; j ++ ) {
+		const resX = this.resX, resZ = this.resZ, ox = this.originX, oz = this.originZ, n2 = this.noise2, n3 = this.noise3;
+		for ( let j = 1; j < resZ - 1; j ++ ) {
 
-			const z = o + j + 0.5;
+			const z = oz + j + 0.5;
 			if ( z > 320 || z < - 900 ) continue;
-			for ( let i = 1; i < res - 1; i ++ ) {
+			for ( let i = 1; i < resX - 1; i ++ ) {
 
-				const k = j * res + i;
+				const k = j * resX + i;
 				const h = H[ k ];
 				if ( h < - 6 ) continue;
-				const x = o + i + 0.5;
+				const x = ox + i + 0.5;
 				const d = D[ k ];
 				const e = - d;
 				const bz = BZ[ k ];
@@ -457,7 +471,7 @@ export class TerrainData {
 				const calm = Math.max( bz * ( 1 - smoothstep( 70, 130, e ) ), 1 - smoothstep( 105, 150, vd ) );
 				const wild = 1 - calm;
 				if ( wild <= 0.01 ) continue;
-				const gx = H[ k + 1 ] - H[ k - 1 ], gz = H[ k + res ] - H[ k - res ];
+				const gx = H[ k + 1 ] - H[ k - 1 ], gz = H[ k + resX ] - H[ k - resX ];
 				const slope = Math.sqrt( gx * gx + gz * gz ) * 0.5;
 
 				// soft undulation on land (creep, root mounds)
@@ -518,22 +532,22 @@ export class TerrainData {
 	// discrete features: sea stacks, wave-cut rock platforms, beach cusps / bars, dune ridges, paths
 	_features( H, D, R0, BZ ) {
 
-		const res = RES, o = this.origin, n = this.noise, n2 = this.noise2, n3 = this.noise3;
+		const resX = this.resX, resZ = this.resZ, ox = this.originX, oz = this.originZ, n = this.noise, n2 = this.noise2, n3 = this.noise3;
 
 		// ---- sea stacks: steep columns with a rubble skirt
 		for ( const [ sx, sz, r, hgt ] of SEA_STACKS ) {
 
 			const R = r * 2.4;
-			const i0 = Math.max( 1, Math.floor( sx - R - o ) ), i1 = Math.min( res - 2, Math.ceil( sx + R - o ) );
-			const j0 = Math.max( 1, Math.floor( sz - R - o ) ), j1 = Math.min( res - 2, Math.ceil( sz + R - o ) );
+			const i0 = Math.max( 1, Math.floor( sx - R - ox ) ), i1 = Math.min( resX - 2, Math.ceil( sx + R - ox ) );
+			const j0 = Math.max( 1, Math.floor( sz - R - oz ) ), j1 = Math.min( resZ - 2, Math.ceil( sz + R - oz ) );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const x = o + i + 0.5, z = o + j + 0.5;
+				const x = ox + i + 0.5, z = oz + j + 0.5;
 				const dx = x - sx, dz = z - sz;
 				const a = Math.atan2( dz, dx );
 				const rr = r * ( 1 + 0.22 * n3.noise( Math.cos( a ) * 1.7 + sx, Math.sin( a ) * 1.7 + sz ) + 0.08 * n2.noise( x / 2.5, z / 2.5 ) );
 				const u = Math.hypot( dx, dz ) / rr;
-				const k = j * res + i;
+				const k = j * resX + i;
 				// column: near vertical faces, rounded shoulder, craggy top
 				const col = smoothstep( 1.0, 0.82, u );
 				const top = hgt * ( 1 - 0.25 * u * u ) + n2.ridged( x / 6, z / 6, 3 ) * 2.2;
@@ -551,18 +565,18 @@ export class TerrainData {
 		}
 
 		// ---- rocky coast: wave-cut platform just below the cliffs with tide pools
-		for ( let j = 1; j < res - 1; j ++ ) {
+		for ( let j = 1; j < resZ - 1; j ++ ) {
 
-			const z = o + j + 0.5;
+			const z = oz + j + 0.5;
 			if ( z > 330 || z < - 880 ) continue;
-			for ( let i = 1; i < res - 1; i ++ ) {
+			for ( let i = 1; i < resX - 1; i ++ ) {
 
-				const k = j * res + i;
+				const k = j * resX + i;
 				const d = D[ k ];
 				if ( d < - 4 || d > 26 ) continue;
 				const r0 = R0[ k ];
 				if ( r0 < 0.3 ) continue;
-				const x = o + i + 0.5;
+				const x = ox + i + 0.5;
 				const width = 9 + 12 * ( 0.5 + 0.5 * n3.fbm( x / 45, z / 45, 2 ) );
 				const inside = ( 1 - smoothstep( width * 0.7, width, d ) ) * smoothstep( 0.3, 0.6, r0 );
 				if ( inside <= 0 ) continue;
@@ -583,14 +597,14 @@ export class TerrainData {
 		// ---- the bay beach: cusps in the swash zone, a longshore bar, a berm crest and dune ridges
 		{
 
-			const i0 = Math.floor( - 200 - o ), i1 = Math.ceil( 230 - o );
-			const j0 = Math.floor( - 170 - o ), j1 = Math.ceil( 160 - o );
+			const i0 = Math.floor( - 200 - ox ), i1 = Math.ceil( 230 - ox );
+			const j0 = Math.floor( - 170 - oz ), j1 = Math.ceil( 160 - oz );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const k = j * res + i;
+				const k = j * resX + i;
 				const bz = BZ[ k ];
 				if ( bz < 0.05 ) continue;
-				const x = o + i + 0.5, z = o + j + 0.5;
+				const x = ox + i + 0.5, z = oz + j + 0.5;
 				const d = D[ k ];
 				const h = H[ k ];
 				let add = 0;
@@ -638,16 +652,16 @@ export class TerrainData {
 			}
 
 			const R = p.w * 2 + 2;
-			const i0 = Math.floor( x0 - R - o ), i1 = Math.ceil( x1 + R - o );
-			const j0 = Math.floor( z0 - R - o ), j1 = Math.ceil( z1 + R - o );
+			const i0 = Math.floor( x0 - R - ox ), i1 = Math.ceil( x1 + R - ox );
+			const j0 = Math.floor( z0 - R - oz ), j1 = Math.ceil( z1 + R - oz );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const x = o + i + 0.5, z = o + j + 0.5;
+				const x = ox + i + 0.5, z = oz + j + 0.5;
 				const [ dist ] = polylineDistance( p.pts, x, z );
 				const w = p.w * ( 1 + 0.25 * n2.noise( x / 6, z / 6 ) );
 				const m = 1 - smoothstep( w * 0.6, w * 1.9, dist );
 				if ( m <= 0 ) continue;
-				const k = j * res + i;
+				const k = j * resX + i;
 				const v = Math.round( m * 255 );
 				if ( v > this.path[ k ] ) this.path[ k ] = v;
 				// sink up to 8 cm (none on the beach where it would disturb the swash)
@@ -669,18 +683,18 @@ export class TerrainData {
 	// reach it. this.scarp marks the face (and the chunks) for the terrain material.
 	_scarp( H, D, R0, BZ ) {
 
-		const res = RES, o = this.origin, n = this.noise, n2 = this.noise2, n3 = this.noise3;
+		const resX = this.resX, resZ = this.resZ, ox = this.originX, oz = this.originZ, n = this.noise, n2 = this.noise2, n3 = this.noise3;
 		const scarp = this.scarp;
-		const i0 = Math.floor( - 200 - o ), i1 = Math.ceil( 230 - o );
-		const j0 = Math.floor( - 190 - o ), j1 = Math.ceil( 0 - o );
+		const i0 = Math.floor( - 200 - ox ), i1 = Math.ceil( 230 - ox );
+		const j0 = Math.floor( - 190 - oz ), j1 = Math.ceil( 0 - oz );
 		for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-			const k = j * res + i;
+			const k = j * resX + i;
 			const bz = BZ[ k ];
 			if ( bz < 0.3 ) continue;
 			const e = - D[ k ];
 			if ( e < 36 || e > 95 ) continue;
-			const x = o + i + 0.5, z = o + j + 0.5;
+			const x = ox + i + 0.5, z = oz + j + 0.5;
 
 			// gaps: village core, pier foot, footpaths, rock
 			const vd = Math.hypot( ( x - VILLAGE.x ) * 0.8, z - VILLAGE.z );
@@ -724,20 +738,20 @@ export class TerrainData {
 	// sit a little proud of the sand (sediment trapped by the blades), rubble heads are knobbly.
 	_seabed( H, R0 ) {
 
-		const res = RES, o = this.origin, n = this.noise, n2 = this.noise2, n3 = this.noise3;
+		const resX = this.resX, resZ = this.resZ, ox = this.originX, oz = this.originZ, n = this.noise, n2 = this.noise2, n3 = this.noise3;
 		const grass = this.seagrass, rubble = this.rubble;
 		const rc = WORLD.reef.center, rr = WORLD.reef.radius;
 		const px = WORLD.pier.x;
-		for ( let j = 1; j < res - 1; j ++ ) {
+		for ( let j = 1; j < resZ - 1; j ++ ) {
 
-			const z = o + j + 0.5;
+			const z = oz + j + 0.5;
 			if ( z < - 900 || z > 420 ) continue;
-			for ( let i = 1; i < res - 1; i ++ ) {
+			for ( let i = 1; i < resX - 1; i ++ ) {
 
-				const k = j * res + i;
+				const k = j * resX + i;
 				const h = H[ k ];
 				if ( h > - 1.2 || h < - 14 ) continue;
-				const x = o + i + 0.5;
+				const x = ox + i + 0.5;
 				const depth = - h;
 				const r0 = R0[ k ];
 
@@ -791,14 +805,14 @@ export class TerrainData {
 	// rock / sand / gully masks from the final shape
 	_masks( H, D, R0, BZ, CV ) {
 
-		const res = RES, o = this.origin, n2 = this.noise2, n3 = this.noise3;
+		const resX = this.resX, resZ = this.resZ, ox = this.originX, oz = this.originZ, n2 = this.noise2, n3 = this.noise3;
 		const rock = this.rock, sand = this.sand, gully = this.gully;
-		for ( let j = 1; j < res - 1; j ++ ) {
+		for ( let j = 1; j < resZ - 1; j ++ ) {
 
-			const z = o + j + 0.5;
-			for ( let i = 1; i < res - 1; i ++ ) {
+			const z = oz + j + 0.5;
+			for ( let i = 1; i < resX - 1; i ++ ) {
 
-				const k = j * res + i;
+				const k = j * resX + i;
 				const h = H[ k ];
 				const d = D[ k ];
 				const r0 = R0[ k ];
@@ -810,8 +824,8 @@ export class TerrainData {
 
 				}
 
-				const x = o + i + 0.5;
-				const gx = H[ k + 1 ] - H[ k - 1 ], gz = H[ k + res ] - H[ k - res ];
+				const x = ox + i + 0.5;
+				const gx = H[ k + 1 ] - H[ k - 1 ], gz = H[ k + resX ] - H[ k - resX ];
 				const slope = Math.sqrt( gx * gx + gz * gz ) * 0.5;
 				const bz = BZ[ k ];
 				const nz = n2.noise( x / 23, z / 23 ) * 0.5 + n3.noise( x / 7, z / 7 ) * 0.25;
@@ -822,18 +836,18 @@ export class TerrainData {
 				const s0 = 1.45 - 0.75 * seaCliff + nz * 0.35;
 				let steep = smoothstep( s0, s0 + 0.35, slope );
 				// gully floors keep their soil and plants; spurs and faces between them go bare
-				if ( steep > 0 && j > 5 && i > 5 && j < res - 6 && i < res - 6 ) {
+				if ( steep > 0 && j > 5 && i > 5 && j < resZ - 6 && i < resX - 6 ) {
 
-					const cav = ( H[ k + 5 ] + H[ k - 5 ] + H[ k + 5 * res ] + H[ k - 5 * res ] - 4 * h ) / 25;
+					const cav = ( H[ k + 5 ] + H[ k - 5 ] + H[ k + 5 * resX ] + H[ k - 5 * resX ] - 4 * h ) / 25;
 					steep *= 1 - 0.85 * smoothstep( 0.01, 0.08, cav );
 
 				}
 				const coast = d < 0 ? r0 * ( 1 - smoothstep( 2, 16 + nz * 12, - d ) ) : r0 * ( 1 - smoothstep( 80, 260, d ) );
 				let rk = Math.max( steep, coast * ( 0.75 + nz * 0.5 ) );
 				// rounded outcrops (detail pass bumps): convex and steep-ish
-				if ( j > 3 && i > 3 && j < res - 4 && i < res - 4 ) {
+				if ( j > 3 && i > 3 && j < resZ - 4 && i < resX - 4 ) {
 
-					const lap = ( H[ k + 3 ] + H[ k - 3 ] + H[ k + 3 * res ] + H[ k - 3 * res ] - 4 * h ) / 9;
+					const lap = ( H[ k + 3 ] + H[ k - 3 ] + H[ k + 3 * resX ] + H[ k - 3 * resX ] - 4 * h ) / 9;
 					rk = Math.max( rk, smoothstep( 0.55, 0.9, slope ) * smoothstep( - 0.12, - 0.3, lap ) * ( 1 - bz ) * 0.8 );
 
 				}
@@ -871,17 +885,17 @@ export class TerrainData {
 	// flatten a circular pad (for building foundations)
 	flatten( x, z, radius, height, falloff = 4 ) {
 
-		const { res, texel, origin } = this;
+		const { resX, resZ, texel, originX, originZ } = this;
 		const r = radius + falloff;
 		this.pads.push( { x, z, radius, height } );
-		const i0 = Math.max( 0, Math.floor( ( x - r - origin ) / texel ) ), i1 = Math.min( res - 1, Math.ceil( ( x + r - origin ) / texel ) );
-		const j0 = Math.max( 0, Math.floor( ( z - r - origin ) / texel ) ), j1 = Math.min( res - 1, Math.ceil( ( z + r - origin ) / texel ) );
+		const i0 = Math.max( 0, Math.floor( ( x - r - originX ) / texel ) ), i1 = Math.min( resX - 1, Math.ceil( ( x + r - originX ) / texel ) );
+		const j0 = Math.max( 0, Math.floor( ( z - r - originZ ) / texel ) ), j1 = Math.min( resZ - 1, Math.ceil( ( z + r - originZ ) / texel ) );
 		for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-			const px = origin + ( i + 0.5 ) * texel, pz = origin + ( j + 0.5 ) * texel;
+			const px = originX + ( i + 0.5 ) * texel, pz = originZ + ( j + 0.5 ) * texel;
 			const d = Math.hypot( px - x, pz - z );
 			const t = 1 - smoothstep( radius, r, d );
-			const k = j * res + i;
+			const k = j * resX + i;
 			this.heights[ k ] = lerp( this.heights[ k ], height, t );
 			this.rock[ k ] *= 1 - t;
 
@@ -985,14 +999,14 @@ export class TerrainData {
 	// polyline, or the signed distance to a closed polygon (negative inside).
 	_eachTexel( pts, reach, closed, fn ) {
 
-		const { res, texel, origin } = this;
+		const { resX, resZ, texel, originX, originZ } = this;
 		const xs = pts.map( p => p[ 0 ] ), zs = pts.map( p => p[ 1 ] );
-		const i0 = Math.max( 0, Math.floor( ( Math.min( ...xs ) - reach - origin ) / texel ) ), i1 = Math.min( res - 1, Math.ceil( ( Math.max( ...xs ) + reach - origin ) / texel ) );
-		const j0 = Math.max( 0, Math.floor( ( Math.min( ...zs ) - reach - origin ) / texel ) ), j1 = Math.min( res - 1, Math.ceil( ( Math.max( ...zs ) + reach - origin ) / texel ) );
+		const i0 = Math.max( 0, Math.floor( ( Math.min( ...xs ) - reach - originX ) / texel ) ), i1 = Math.min( resX - 1, Math.ceil( ( Math.max( ...xs ) + reach - originX ) / texel ) );
+		const j0 = Math.max( 0, Math.floor( ( Math.min( ...zs ) - reach - originZ ) / texel ) ), j1 = Math.min( resZ - 1, Math.ceil( ( Math.max( ...zs ) + reach - originZ ) / texel ) );
 		for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-			const d = shapeDistance( pts, closed, origin + ( i + 0.5 ) * texel, origin + ( j + 0.5 ) * texel );
-			if ( d <= reach ) fn( j * res + i, d );
+			const d = shapeDistance( pts, closed, originX + ( i + 0.5 ) * texel, originZ + ( j + 0.5 ) * texel );
+			if ( d <= reach ) fn( j * resX + i, d );
 
 		}
 
@@ -1000,13 +1014,13 @@ export class TerrainData {
 
 	heightAt( x, z ) {
 
-		const { res, texel, origin, heights } = this;
-		const fx = ( x - origin ) / texel - 0.5, fz = ( z - origin ) / texel - 0.5;
-		if ( fx < 0 || fz < 0 || fx >= res - 1 || fz >= res - 1 ) return - 90;
+		const { resX, resZ, texel, originX, originZ, heights } = this;
+		const fx = ( x - originX ) / texel - 0.5, fz = ( z - originZ ) / texel - 0.5;
+		if ( fx < 0 || fz < 0 || fx >= resX - 1 || fz >= resZ - 1 ) return - 90;
 		const i = Math.floor( fx ), j = Math.floor( fz );
 		const tx = fx - i, tz = fz - j;
-		const k = j * res + i;
-		const a = heights[ k ], b = heights[ k + 1 ], c = heights[ k + res ], d = heights[ k + res + 1 ];
+		const k = j * resX + i;
+		const a = heights[ k ], b = heights[ k + 1 ], c = heights[ k + resX ], d = heights[ k + resX + 1 ];
 		return ( a * ( 1 - tx ) + b * tx ) * ( 1 - tz ) + ( c * ( 1 - tx ) + d * tx ) * tz;
 
 	}
@@ -1030,22 +1044,23 @@ export class TerrainData {
 
 	}
 
-	// min/max pyramid for CDLOD culling bounds
+	// Min/max pyramid for CDLOD culling bounds. Level 0 holds one tile per 8 x 8 texels; each coarser
+	// level halves the tile count per axis, rounding up (an odd last tile reads itself twice), until
+	// one tile covers the whole rectangle, so x and z counts may differ (256 x 416 at 2048 x 3328 m).
 	buildMinMax() {
 
 		const tile = 8; // texels per tile at the finest level
-		const n = this.res / tile;
+		const nx = Math.ceil( this.resX / tile ), nz = Math.ceil( this.resZ / tile );
 		this.mmTile = tile;
-		this.mmN = n;
-		const mn0 = new Float32Array( n * n ), mx0 = new Float32Array( n * n );
-		const H = this.heights, res = this.res;
-		for ( let tj = 0; tj < n; tj ++ ) for ( let ti = 0; ti < n; ti ++ ) {
+		const mn0 = new Float32Array( nx * nz ), mx0 = new Float32Array( nx * nz );
+		const H = this.heights, resX = this.resX, resZ = this.resZ;
+		for ( let tj = 0; tj < nz; tj ++ ) for ( let ti = 0; ti < nx; ti ++ ) {
 
 			let mn = Infinity, mx = - Infinity;
-			const jEnd = Math.min( res - 1, ( tj + 1 ) * tile ), iEnd = Math.min( res - 1, ( ti + 1 ) * tile );
+			const jEnd = Math.min( resZ - 1, ( tj + 1 ) * tile ), iEnd = Math.min( resX - 1, ( ti + 1 ) * tile );
 			for ( let j = tj * tile; j <= jEnd; j ++ ) {
 
-				const row = j * res;
+				const row = j * resX;
 				for ( let i = ti * tile; i <= iEnd; i ++ ) {
 
 					const h = H[ row + i ];
@@ -1056,29 +1071,29 @@ export class TerrainData {
 
 			}
 
-			mn0[ tj * n + ti ] = mn;
-			mx0[ tj * n + ti ] = mx;
+			mn0[ tj * nx + ti ] = mn;
+			mx0[ tj * nx + ti ] = mx;
 
 		}
 
 		this.mmMin = mn0;
 		this.mmMax = mx0;
-		// coarser levels: level l has n >> l tiles per side
-		this.mmLevels = [ { n, min: mn0, max: mx0 } ];
+		this.mmLevels = [ { nx, nz, min: mn0, max: mx0 } ];
 		let cur = this.mmLevels[ 0 ];
-		while ( cur.n > 1 ) {
+		while ( cur.nx > 1 || cur.nz > 1 ) {
 
-			const m = cur.n >> 1;
-			const mn = new Float32Array( m * m ), mx = new Float32Array( m * m );
-			for ( let j = 0; j < m; j ++ ) for ( let i = 0; i < m; i ++ ) {
+			const cx = Math.ceil( cur.nx / 2 ), cz = Math.ceil( cur.nz / 2 );
+			const mn = new Float32Array( cx * cz ), mx = new Float32Array( cx * cz );
+			for ( let j = 0; j < cz; j ++ ) for ( let i = 0; i < cx; i ++ ) {
 
-				const a = ( 2 * j ) * cur.n + 2 * i, b = a + cur.n;
-				mn[ j * m + i ] = Math.min( cur.min[ a ], cur.min[ a + 1 ], cur.min[ b ], cur.min[ b + 1 ] );
-				mx[ j * m + i ] = Math.max( cur.max[ a ], cur.max[ a + 1 ], cur.max[ b ], cur.max[ b + 1 ] );
+				const i0 = 2 * i, i1 = Math.min( 2 * i + 1, cur.nx - 1 );
+				const r0 = 2 * j * cur.nx, r1 = Math.min( 2 * j + 1, cur.nz - 1 ) * cur.nx;
+				mn[ j * cx + i ] = Math.min( cur.min[ r0 + i0 ], cur.min[ r0 + i1 ], cur.min[ r1 + i0 ], cur.min[ r1 + i1 ] );
+				mx[ j * cx + i ] = Math.max( cur.max[ r0 + i0 ], cur.max[ r0 + i1 ], cur.max[ r1 + i0 ], cur.max[ r1 + i1 ] );
 
 			}
 
-			cur = { n: m, min: mn, max: mx };
+			cur = { nx: cx, nz: cz, min: mn, max: mx };
 			this.mmLevels.push( cur );
 
 		}
@@ -1087,26 +1102,26 @@ export class TerrainData {
 
 	boundsFor( x0, z0, x1, z1 ) {
 
-		const { origin, texel, mmTile } = this;
+		const { originX, originZ, texel, mmTile } = this;
 		// pick the pyramid level where the box spans only a few tiles per side
 		const span = Math.max( x1 - x0, z1 - z0 ) / ( texel * mmTile );
 		const l = Math.max( 0, Math.min( this.mmLevels.length - 1, Math.ceil( Math.log2( Math.max( 1, span / 2 ) ) ) ) );
 		const L = this.mmLevels[ l ];
 		const ts = texel * mmTile * ( 1 << l );
-		const i0 = Math.floor( ( x0 - origin ) / ts ), i1 = Math.floor( ( x1 - origin ) / ts );
-		const j0 = Math.floor( ( z0 - origin ) / ts ), j1 = Math.floor( ( z1 - origin ) / ts );
+		const i0 = Math.floor( ( x0 - originX ) / ts ), i1 = Math.floor( ( x1 - originX ) / ts );
+		const j0 = Math.floor( ( z0 - originZ ) / ts ), j1 = Math.floor( ( z1 - originZ ) / ts );
 		let mn = Infinity, mx = - Infinity;
 		let outside = false;
 		for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-			if ( i < 0 || j < 0 || i >= L.n || j >= L.n ) {
+			if ( i < 0 || j < 0 || i >= L.nx || j >= L.nz ) {
 
 				outside = true;
 				continue;
 
 			}
 
-			const k = j * L.n + i;
+			const k = j * L.nx + i;
 			if ( L.min[ k ] < mn ) mn = L.min[ k ];
 			if ( L.max[ k ] > mx ) mx = L.max[ k ];
 
