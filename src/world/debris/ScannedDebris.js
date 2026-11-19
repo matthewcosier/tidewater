@@ -2,6 +2,8 @@ import {
 	Vector3, Quaternion, Euler, Matrix4, Frustum, Sphere, BufferGeometry, Float32BufferAttribute, Uint16BufferAttribute,
 	Uint32BufferAttribute, InstancedBufferAttribute, InstancedMesh, DynamicDrawUsage,
 } from '../../engine/index.js';
+import { decodeImage } from '../../engine/loaders/GLTF.js';
+import { GPU } from '../../engine/gpu/GPU.js';
 import { Texture } from '../../engine/gpu/Texture.js';
 import { generateMipmaps } from '../../engine/gpu/Mipmaps.js';
 import { commonModule } from '../../engine/render/wgsl/common.js';
@@ -44,12 +46,16 @@ async function loadPixels( url ) {
 
 	if ( globalThis.__debrisImage ) return globalThis.__debrisImage( url );
 	const blob = await ( await fetch( url ) ).blob();
+	if ( GPU.mobileStartup ) return decodeImage( new Uint8Array( await blob.arrayBuffer() ), blob.type, 256 );
 	const bmp = await createImageBitmap( blob );
 	const cv = new OffscreenCanvas( bmp.width, bmp.height );
 	const ctx = cv.getContext( '2d', { willReadFrequently: true } );
 	ctx.drawImage( bmp, 0, 0 );
 	const d = ctx.getImageData( 0, 0, bmp.width, bmp.height ).data;
-	return { data: new Uint8Array( d.buffer, d.byteOffset, d.byteLength ), width: bmp.width, height: bmp.height };
+	const { width, height } = bmp;
+	bmp.close();
+	cv.width = cv.height = 0;
+	return { data: new Uint8Array( d.buffer, d.byteOffset, d.byteLength ), width, height };
 
 }
 

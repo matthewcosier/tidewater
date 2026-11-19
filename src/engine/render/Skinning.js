@@ -235,7 +235,7 @@ export class SkinnedModel {
 			if ( ! texCache.has( key ) ) {
 
 				const im = g.images[ src ];
-				const px = await decodeImage( im.bytes, im.mimeType );
+				const px = await decodeImage( im.bytes, im.mimeType, GPU.mobileStartup ? 256 : Infinity );
 				const t = new Texture( { label: 'char' + src, width: px.width, height: px.height, format: srgb ? 'rgba8unorm-srgb' : 'rgba8unorm', data: px.data, mips: true, usage: [ 'sample', 'copyDst' ], sampler: 'anisoRepeat' } );
 				t.getGPU();
 				generateMipmaps( t );

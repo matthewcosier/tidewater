@@ -600,7 +600,9 @@ export class VillageTextures {
 		this.jobs = [];
 		this._bytes = 0;
 
-		for ( const set of SETS ) {
+		for ( const source of SETS ) {
+
+			const set = GPU.mobileStartup ? { ...source, w: source.w / 2, h: source.h / 2 } : source;
 
 			const job = { set, fields: null, albedo: null, nra: null };
 			if ( set.nra ) job.fields = new Texture( { label: 'vlgFields_' + set.name, width: set.w, height: set.h, format: 'rgba16float', usage: [ 'sample', 'storage' ] } );

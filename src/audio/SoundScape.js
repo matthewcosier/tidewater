@@ -131,9 +131,11 @@ export class SoundScape {
 	// Does not touch Web Audio: the context is created on the first resume() (autoplay policy).
 	// shore (optional): { shore: ShoreWaves, field: shore field { res, data }, terrain: TerrainData }; found
 	// on window.__app when not given (see attachShore()).
-	constructor( { baseUrl = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'audio/', shore = null } = {} ) {
+	constructor( { baseUrl = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'audio/', shore = null, mobile = false } = {} ) {
 
 		this.baseUrl = baseUrl;
+		this.mobile = mobile;
+		this.audioLoads = mobile ? Promise.resolve() : null;
 		this.ctx = null;
 		this._failed = false;
 		this._muted = false;
@@ -196,7 +198,12 @@ export class SoundScape {
 
 			try {
 
-				this.ctx = new AC( { latencyHint: 'balanced' } );
+				try {
+					this.ctx = new AC( this.mobile ? { latencyHint: 'balanced', sampleRate: 24000 } : { latencyHint: 'balanced' } );
+				} catch ( e ) {
+					if ( ! this.mobile || e.name !== 'NotSupportedError' ) throw e;
+					this.ctx = new AC( { latencyHint: 'balanced' } );
+				}
 				this._build();
 
 			} catch ( e ) {
@@ -207,7 +214,7 @@ export class SoundScape {
 
 			}
 
-			for ( const n of CORE ) this._want( n );
+			if ( ! this.mobile ) for ( const n of CORE ) this._want( n );
 
 		}
 
@@ -607,7 +614,7 @@ export class SoundScape {
 		if ( b ) return b;
 		if ( ! this._loading.has( name ) && BANK[ name ] && this.ctx ) {
 
-			const p = fetch( this.baseUrl + BANK[ name ].file )
+			const load = () => fetch( this.baseUrl + BANK[ name ].file )
 				.then( ( r ) => {
 
 					if ( ! r.ok ) throw new Error( `audio ${ name }: HTTP ${ r.status }` );
@@ -622,6 +629,9 @@ export class SoundScape {
 
 				} )
 				.catch( ( e ) => this._warn( e ) );
+			// A first tap used to launch all ambient decoders alongside the first fully drawn frames.
+			const p = this.mobile ? this.audioLoads.then( load ) : load();
+			if ( this.mobile ) this.audioLoads = p.then( () => {}, () => {} );
 			this._loading.set( name, p );
 
 		}

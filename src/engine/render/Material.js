@@ -48,6 +48,17 @@ const BUILTIN_UNIFORMS = {
 	alphaTest: [ 'f32', 0 ],
 };
 
+// WGSL type names belong to field layouts. Per-instance names made otherwise identical paint
+// shaders different source strings, defeating both the shader-module and native pipeline caches.
+const uniformTypes = new Map();
+function materialUniformType( fields ) {
+
+	const signature = JSON.stringify( Object.entries( fields ).map( ( [ name, def ] ) => [ name, Array.isArray( def ) ? def[ 0 ] : def ] ) );
+	if ( ! uniformTypes.has( signature ) ) uniformTypes.set( signature, 'MaterialParams' + uniformTypes.size );
+	return uniformTypes.get( signature );
+
+}
+
 export class Material {
 
 	constructor( o = {} ) {
@@ -88,7 +99,7 @@ export class Material {
 
 		const fields = { ...BUILTIN_UNIFORMS };
 		for ( const k in o.uniforms || {} ) fields[ k ] = o.uniforms[ k ];
-		this.uniformBlock = new UniformBlock( 'MaterialParams' + this.id, fields, { label: this.name } );
+		this.uniformBlock = new UniformBlock( materialUniformType( fields ), fields, { label: this.name } );
 		this.uniforms = this.uniformBlock.fields;
 		const u = this.uniforms;
 		u.color.value = toColor( o.color, new Color( 1, 1, 1 ) );
@@ -201,7 +212,7 @@ export class Material {
 		m.version = 0;
 		m.defines = { ...this.defines };
 		m.bindings = { ...this.bindings };
-		m.uniformBlock = new UniformBlock( 'MaterialParams' + m.id, Object.fromEntries( this.uniformBlock.order.map( ( k ) => [ k, [ this.uniformBlock.layout[ k ].typeStr, cloneValue( this.uniforms[ k ].value ) ] ] ) ), { label: m.name } );
+		m.uniformBlock = new UniformBlock( this.uniformBlock.structName, Object.fromEntries( this.uniformBlock.order.map( ( k ) => [ k, [ this.uniformBlock.layout[ k ].typeStr, cloneValue( this.uniforms[ k ].value ) ] ] ) ), { label: m.name } );
 		m.uniforms = m.uniformBlock.fields;
 		m._listeners = [];
 		return m;

@@ -15,7 +15,7 @@
 // tangents). Not handled: external buffers, Draco / meshopt, sparse accessors, morph targets.
 //
 // Asset hooks for headless runs (no fetch of relative URLs / no image decoding in Node):
-//   globalThis.__assetFile( url ) -> ArrayBuffer, globalThis.__assetImage( bytes, mimeType ) -> { data, width, height }
+//   globalThis.__assetFile( url ) -> ArrayBuffer, globalThis.__assetImage( bytes, mimeType, maxEdge ) -> { data, width, height }
 
 import { Matrix4, Quaternion, Vector3 } from '../math/index.js';
 
@@ -196,18 +196,42 @@ function identities( n ) {
 
 }
 
-// Decoded RGBA8 pixels (top row first) of an embedded image.
-export async function decodeImage( bytes, mimeType ) {
+// Read at the upload size. Releasing the bitmap and canvas backing store here avoids overlapping
+// dozens of full-resolution character and prop images with the first GPU submission on iOS.
+const mobileDecoders = [ Promise.resolve(), Promise.resolve() ];
+let nextDecoder = 0;
 
-	if ( globalThis.__assetImage ) return globalThis.__assetImage( bytes, mimeType );
+export async function decodeImage( bytes, mimeType, maxEdge = Infinity ) {
+
+	if ( globalThis.__assetImage ) return globalThis.__assetImage( bytes, mimeType, maxEdge );
+	if ( ! Number.isFinite( maxEdge ) ) return decodeBitmap( bytes, mimeType, maxEdge );
+	const slot = nextDecoder;
+	nextDecoder = ( slot + 1 ) % mobileDecoders.length;
+	const result = mobileDecoders[ slot ].then( () => decodeBitmap( bytes, mimeType, maxEdge ) );
+	mobileDecoders[ slot ] = result.then( () => {}, () => {} );
+	return result;
+
+}
+
+async function decodeBitmap( bytes, mimeType, maxEdge ) {
+
 	const bmp = await createImageBitmap( new Blob( [ bytes ], { type: mimeType } ), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' } );
-	const cv = new OffscreenCanvas( bmp.width, bmp.height );
-	const ctx = cv.getContext( '2d', { willReadFrequently: true } );
-	ctx.drawImage( bmp, 0, 0 );
-	const width = bmp.width, height = bmp.height;
-	const d = ctx.getImageData( 0, 0, width, height ).data;
-	// (read the size first: a closed ImageBitmap reports 0 x 0)
-	bmp.close && bmp.close();
-	return { data: new Uint8Array( d.buffer, d.byteOffset, d.byteLength ), width, height };
+	const scale = Math.min( 1, maxEdge / Math.max( bmp.width, bmp.height ) );
+	const width = Math.max( 1, Math.round( bmp.width * scale ) ), height = Math.max( 1, Math.round( bmp.height * scale ) );
+	let cv;
+	try {
+
+		cv = new OffscreenCanvas( width, height );
+		const ctx = cv.getContext( '2d', { willReadFrequently: true } );
+		ctx.drawImage( bmp, 0, 0, width, height );
+		const d = ctx.getImageData( 0, 0, width, height ).data;
+		return { data: new Uint8Array( d.buffer, d.byteOffset, d.byteLength ), width, height };
+
+	} finally {
+
+		bmp.close();
+		if ( cv ) cv.width = cv.height = 0;
+
+	}
 
 }

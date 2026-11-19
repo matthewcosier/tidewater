@@ -3,6 +3,7 @@ import {
 	CylinderGeometry, TorusGeometry, SphereGeometry, LatheGeometry, Vector2,
 } from '../engine/index.js';
 import { Texture } from '../engine/gpu/Texture.js';
+import { GPU } from '../engine/gpu/GPU.js';
 import { generateMipmaps } from '../engine/gpu/Mipmaps.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
 import { ShaderModule } from '../engine/gpu/Shader.js';
@@ -54,7 +55,8 @@ async function bytes( url ) {
 
 async function pixels( url ) {
 
-	return decodeImage( new Uint8Array( await bytes( url ) ), url.endsWith( '.png' ) ? 'image/png' : 'image/jpeg' );
+	const png = url.endsWith( '.png' );
+	return decodeImage( new Uint8Array( await bytes( url ) ), png ? 'image/png' : 'image/jpeg', GPU.mobileStartup ? ( png ? 512 : 256 ) : Infinity );
 
 }
 

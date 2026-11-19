@@ -25,7 +25,7 @@ export const GPU = {
 	samplers: null,
 	_submitHooks: [],
 
-	async init( { canvas = null, requiredLimits = {}, headless = false } = {} ) {
+	async init( { canvas = null, requiredLimits = {}, headless = false, mobileStartup = false } = {} ) {
 
 		if ( ! navigator.gpu ) throw new Error( 'WebGPU is not available in this browser.' );
 		const adapter = await navigator.gpu.requestAdapter( { powerPreference: 'high-performance' } );
@@ -59,6 +59,9 @@ export const GPU = {
 
 		const device = await adapter.requestDevice( { requiredFeatures, requiredLimits: limits } );
 		this.device = device;
+		this.mobileStartup = mobileStartup;
+		this._compileSlots = mobileStartup ? [ Promise.resolve(), Promise.resolve() ] : null;
+		this._nextCompileSlot = 0;
 		this.queue = device.queue;
 		this.limits = device.limits;
 		// A lost device never comes back: every buffer, texture and pipeline died with it. Tell the page
@@ -166,7 +169,12 @@ export const GPU = {
 		const h = { pipeline: null, label: desc.label, desc, kind, failed: false };
 		// started after the current task: a kernel dispatched right after it was made (a one-off bake)
 		// compiles once, synchronously, instead of twice
-		const p = Promise.resolve().then( () => {
+		// Mobile WebKit can terminate its GPU process when thousands of compiles start in the same turn.
+		// Queue both render and compute jobs before calling the driver. A synchronous first use still wins.
+		const slots = this._compileSlots;
+		const slot = this._nextCompileSlot;
+		const start = slots ? slots[ slot ] : Promise.resolve();
+		const p = start.then( () => {
 
 			if ( h.pipeline ) return;
 			const create = kind === 'render' ? this.device.createRenderPipelineAsync : this.device.createComputePipelineAsync;
@@ -184,6 +192,10 @@ export const GPU = {
 
 		} ).finally( () => this._pending.delete( p ) );
 		this._pending.add( p );
+		if ( slots ) {
+			slots[ slot ] = p.catch( () => {} ); // a driver error must not poison the next job on this slot
+			this._nextCompileSlot = ( slot + 1 ) % slots.length;
+		}
 		return h;
 
 	},
@@ -194,14 +206,25 @@ export const GPU = {
 		if ( h.pipeline || h.failed ) return h.pipeline;
 		this.syncCompiles.push( h.label );
 		h.pipeline = h.kind === 'render' ? this.device.createRenderPipeline( h.desc ) : this.device.createComputePipeline( h.desc );
+		h.desc = null;
 		return h.pipeline;
 
 	},
 
 	// resolves when every pipeline requested so far has compiled
-	async pipelinesReady() {
+	async pipelinesReady( onProgress ) {
 
-		while ( this._pending.size ) await Promise.all( [ ...this._pending ] );
+		let done = 0, total = 0;
+		while ( this._pending.size ) {
+
+			const jobs = [ ...this._pending ];
+			if ( onProgress ) {
+				total += jobs.length;
+				onProgress( done, total );
+				await Promise.all( jobs.map( job => job.then( () => onProgress( ++ done, total ) ) ) );
+			} else await Promise.all( jobs );
+
+		}
 
 	},
 

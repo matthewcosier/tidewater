@@ -64,12 +64,21 @@ export function fragmentProxy(bounds,terrain){
 }
 export class StructuralDamage {
  constructor(app,owner){this.app=app;this.owner=owner;this.records=[];this.bodyBudget=224;this.joints=new Map();this.anchors=[];this.members=[];this.bodies=new Map();this.nextId=100000;this.deferred=0;this.pending=[];this.tokens=PIECE_BURST;this.debrisSinks=[];this.debrisCount=0;
-  this.addRecords([...STRUCTURES,...importedStructures(app)]);
+  // Keep authored, indexed terminal meshes and their frustum bounds while the island is calm.
+  // Fracture spans and previous-position buffers are needed only when a disaster starts.
+  this.waitingRecords=app.engine?.mobileStartup ? {world:[...STRUCTURES],additional:[]} : null;
+  if(!this.waitingRecords)this.addRecords([...STRUCTURES,...importedStructures(app)]);
+ }
+ prepareForEvent(){
+  const waiting=this.waitingRecords;if(!waiting)return;
+  this.waitingRecords=null;
+  this.addRecords([...waiting.world,...importedStructures(this.app),...waiting.additional]);
  }
  addRecords(records){
+  if(this.waitingRecords){this.waitingRecords.additional.push(...records);return;}
   for(const r of records){if(this.records.includes(r))continue;r.scatterIndex=this.records.length;r.spans=r.spans.map(saveSpan);Object.assign(r,spanBounds(r.spans));r.initialColliders=r.colliders.map(snapshotCollider);for(const s of r.spans)enableGeometryMotion(s.geo);this.records.push(r);}
  }
- update(dt){let changed=false;const field=this.owner.field;this.clock=(this.clock??0)+dt;
+ update(dt){this.prepareForEvent();let changed=false;const field=this.owner.field;this.clock=(this.clock??0)+dt;
   for(const r of this.records){
    if(r.progressive&&(r.components??=this.components(r))){if(this.progress(r,dt,field))changed=true;continue;}
    if(r.active||r.broken||!r.spans.length)continue;const mat=STRENGTHS[r.material]??STRENGTHS.timber,h=r.half,p=r.center,s=field.sample(p.x,p.y,p.z),volume=Math.max(1,8*h.x*h.y*h.z),mass=volume*mat.density,area=4*h.y*Math.max(h.x,h.z),depth=Math.max(0,s.height-(p.y-h.y));

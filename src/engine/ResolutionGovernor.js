@@ -1,7 +1,7 @@
 // Output resolution: Retina (the canvas at devicePixelRatio, capped at 2) with an adaptive governor.
 //
 // Modes (Settings > Performance > Resolution, kept in localStorage):
-//   'auto'     Retina when the frame rate holds, stepping down when it does not (the default)
+//   'auto'     adapt with frame time; start at 1× on Apple touch devices and Retina elsewhere (default)
 //   'retina'   always min( 2, devicePixelRatio )
 //   'standard' always 1 (the canvas in CSS pixels, the browser upscales on a Retina screen)
 //
@@ -41,7 +41,8 @@ export class ResolutionGovernor {
 		this.onScale = null; // ( scale ) => apply an internal render scale (bound by the app)
 		this.onChange = []; // ( level ) => after every step
 		this.levels = this._levels();
-		this.index = 0;
+		// An iPhone at 2× allocates four times the output pixels before the governor sees its first frame.
+		this.index = engine.mobileStartup && this.mode === 'auto' ? this.levels.findIndex( l => l.dpr === 1 ) : 0;
 		this.samples = [];
 		this.t = 0;
 		this.hold = GRACE;
@@ -50,7 +51,7 @@ export class ResolutionGovernor {
 		this.lastUp = - 1; // index we stepped up from (a failed try doubles the backoff)
 		this.steps = []; // history: { t, from, to, why, median }
 		this.downMedian = 0; // median (ms) that triggered the last step down, while its verdict is pending; 0: none
-		this.dpr = this.mode === 'standard' ? 1 : this.maxDpr;
+		this.dpr = this.mode === 'standard' ? 1 : this.levels[ this.index ].dpr;
 		this.scale = 1;
 		this._applied = 1;
 

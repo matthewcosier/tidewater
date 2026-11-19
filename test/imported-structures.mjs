@@ -54,3 +54,44 @@ test('Real native imported fragments keep bounded rest extents, rigid triangles,
   assert.equal(moved,damage.bodies.size);damage.reset();assert.equal(physics.prop_count(),0);for(let i=0;i<list.length;i++)for(const [name,a]of Object.entries(baseline[i])){if(name==='previousPosition')continue;assert.deepEqual(list[i].geometry.attributes[name].array,a,`Restore must preserve every ${name} value, including unfractured neighbouring cells`);}assert.ok(targets.every(r=>r.colliders.every(c=>!c.disasterDisabled)));
  }}finally{damage.reset();physics.free();}
 });
+
+test( 'The mobile terminals keep their authored geometry until a disaster needs fracture spans', async () => {
+	const app = await importedTerminalFixture( { both: true, mobile: true } );
+	const initial = meshes( app ).map( mesh => [ mesh, mesh.geometry ] );
+	assert.ok( initial.length > 20 );
+	const damage = new StructuralDamage( app, {} );
+	assert.ok( initial.every( ( [ mesh, geometry ] ) => mesh.geometry === geometry && ! mesh.userData.importedFragments ) );
+	const extra = { name: 'later registration', spans: [], colliders: [] };
+	damage.addRecords( [ extra ] );
+	damage.prepareForEvent();
+	assert.ok( initial.some( ( [ mesh, geometry ] ) => mesh.geometry !== geometry && mesh.userData.importedFragments ) );
+	assert.ok( damage.records.some( r => r.name.startsWith( 'Ferry terminal' ) ) );
+	assert.ok( damage.records.some( r => r.name.startsWith( 'Joey terminal' ) ) );
+	assert.equal( damage.records.at( -1 ), extra );
+	const count = damage.records.length;
+	damage.prepareForEvent();
+	assert.equal( damage.records.length, count );
+} );
+
+test( 'Mobile ferry assets retain the named pivots, poses and materials within a smaller triangle budget', async () => {
+	const inspect = async file => {
+		const data = await readFile( new URL( '../public/ferry/' + file, import.meta.url ) );
+		const json = JSON.parse( data.toString( 'utf8', 20, 20 + data.readUInt32LE( 12 ) ) );
+		const triangles = json.meshes.reduce( ( n, mesh ) => n + mesh.primitives.reduce( ( sum, p ) => sum + json.accessors[ p.indices ].count / 3, 0 ), 0 );
+		return { json, triangles };
+	};
+	for ( const name of [ 'terminal.glb', 'ferry.glb', 'parked_cars.glb' ] ) {
+		const full = await inspect( name ), mobile = await inspect( 'mobile/' + name );
+		assert.ok( mobile.triangles < full.triangles * 0.16, name + ': ' + mobile.triangles );
+		const nodes = new Map( mobile.json.nodes.map( n => [ n.name, n ] ) );
+		for ( const node of full.json.nodes.filter( n => n.name ) ) {
+			const other = nodes.get( node.name );
+			assert.ok( other, node.name );
+			for ( const [ key, fallback ] of Object.entries( { translation: [ 0, 0, 0 ], rotation: [ 0, 0, 0, 1 ], scale: [ 1, 1, 1 ] } ) ) {
+				const a = node[ key ] || fallback, b = other[ key ] || fallback;
+				assert.ok( a.every( ( x, i ) => Math.abs( x - b[ i ] ) < 0.00001 ), node.name + ' ' + key );
+			}
+		}
+		assert.deepEqual( new Set( mobile.json.materials.map( m => m.name ) ), new Set( full.json.materials.map( m => m.name ) ) );
+	}
+} );

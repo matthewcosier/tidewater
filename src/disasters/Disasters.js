@@ -38,7 +38,7 @@ export class Disasters {
  addBody(options){return this.bodies.addExternal(options);}
  removeBody(record){this.bodies.removeExternal(record);}
  registerBody(options){return this.bodies.register(options);}
- start(kind,config){const error=validate(kind,{...DEFAULTS[kind],...config});if(error)throw new RangeError(error);if(this.app?.deferSimulationChange?.(()=>this.start(kind,{...config})))return;if(!this.vesselSnapshots)this.capture();
+ start(kind,config){const error=validate(kind,{...DEFAULTS[kind],...config});if(error)throw new RangeError(error);if(this.app?.deferSimulationChange?.(()=>this.start(kind,{...config})))return;this.structures?.prepareForEvent?.();if(!this.vesselSnapshots)this.capture();
   // A run that starts from calm draws a fresh seed for its capacity scatter (EventRandom). Internal: tests and telemetry read runSeed; no panel shows it.
   // nextSeed: a one-shot replay hook for the browser specs and bug repro (window.__app.disasters.nextSeed = n).
   // The next real start takes it as both the event's seed (the tsunami plan, the tornado track) and runSeed,

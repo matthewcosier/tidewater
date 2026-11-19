@@ -1,5 +1,7 @@
 # The Tidewater Spirit (car ferry)
 
+On Apple touch devices the renderer loads the lower-triangle ship, terminal and parked-car meshes from `public/ferry/mobile/`. They use the same named pivots, materials and authored collider files as the full models. The terminal has 59,341 triangles, the ferry 23,441 and the parked-car set 6,175. Regenerate them after editing the original models with `sh tools/ferry/mobile-lod.sh`. The generator uses gltfpack 1.3.0.
+
 A 50.4 m, 17.8 m beam aluminium catamaran car ferry after Austal's Spirit of Kangaroo Island
 (2003, 2.5 m draught), with our own name and livery. The terminal is `tools/ferry/terminal_build.py`
 (Penneshaw layout: breakwater hook, L jetty, solar-roofed hall, marshalling yard, stern-to berth).
@@ -99,7 +101,7 @@ the shell for the row behind; padded armrests sit on bent tube. The pan top stay
 (-8 degrees, `SEAT_PLATES`) is unchanged, so `SEATS` in `Crowd.js` and the seat numbers still fit. The seats cost
 about 100 k triangles (the GLB went from 236 k to 337 k triangles, 12.2 to 17.6 MB).
 
-Export weight (2026-09-27, round 2): `Seats` was never in `fb.flush`'s smooth groups, so the seats exported flat, every
+Export weight (2026-09-27): `Seats` was never in `fb.flush`'s smooth groups, so the seats exported flat, every
 triangle with its own three vertices, and the rounded parts shaded faceted. `flush` now takes per-group sharp angles:
 `{'Hull': 35, 'Boat': 35, 'Seats': 50, 'Props': 50, 'Fittings': 50}` (50 keeps box edges and cylinder caps crisp, rounds
 8-sided tubes, welds everything else). Flat lettering (`text()`) is coplanar, so its faces are marked smooth and share
@@ -227,10 +229,10 @@ Terminal detail (2026-09-27):
 - Revetment: the dry rows (t < 2.0) use the craggy hero stones; the splash rows keep the lighter ones.
 - Ground (`ground()`): compacted zones, dried puddle silt and weed clumps at scales that hold from the air.
 - Hall: `Ceiling` gets a warm fill and a 600 x 1200 tile grid (it rendered dark green), `WallLining` a light fill.
-- Hall seating (round 2): `seat_shell()` sweeps a moulded 16 mm shell profile across the seat; the beam seating is six
+- Hall seating: `seat_shell()` sweeps a moulded 16 mm shell profile across the seat; the beam seating is six
   shells a row on brackets off a steel box beam with end caps, tube armrests with pads, T-legs on glides; the cafe chairs
   use the same shell. Colliders unchanged.
-- Yard paint (TerminalPaint, round 2): `Asphalt` has saw-cut repairs of mixed sizes (new ones black with a tar edge, old
+- Yard paint (TerminalPaint): `Asphalt` has saw-cut repairs of mixed sizes (new ones black with a tar edge, old
   ones grey), crack-seal lines, an oil stain per car length in the queue lanes, darker polished wheel paths and gully
   grates down the lanes every 13.5 m; `PaintWhite` below y 3.3 (the ground markings) wears where tyres run;
   `SandyGravel` has stronger zones and damp patches. Traced: `terminal.glb` has no `Saltbush` mesh (bounds probe), so

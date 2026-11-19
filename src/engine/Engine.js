@@ -6,12 +6,21 @@ import { Timer } from './math/Timer.js';
 import { MeshRenderer } from './render/MeshRenderer.js';
 import { FrameUniforms } from './render/Frame.js';
 
+// iPadOS can request the desktop site (MacIntel) while still using the mobile GPU process.
+export function isAppleTouchDevice() {
+
+	return /iPhone|iPad|iPod/.test( navigator.userAgent ) ||
+		( navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1 );
+
+}
+
 // Canvas, device, main camera / scene and the frame loop.
 export class Engine {
 
 	constructor( container ) {
 
 		this.container = container;
+		this.mobileStartup = isAppleTouchDevice();
 		this.resolution = new ResolutionGovernor( this ); // Retina (DPR, capped at 2) + the adaptive governor
 		this.renderScale = this.resolution.dpr; // canvas pixels per CSS pixel
 		this.clock = new Timer();
@@ -27,7 +36,7 @@ export class Engine {
 		this.container.appendChild( canvas );
 		this.canvas = canvas;
 		this.domElement = canvas;
-		await GPU.init( { canvas } );
+		await GPU.init( { canvas, mobileStartup: this.mobileStartup } );
 		this.meshRenderer = new MeshRenderer();
 		this.meshRenderer.syncPipelines = false; // compile in the background (App.precompile waits for them)
 		this.camera = new PerspectiveCamera( 62, window.innerWidth / window.innerHeight, 0.06, 60000 );
@@ -94,9 +103,12 @@ export class Engine {
 			// One accepted simulation interval in flight. Awaiting independent
 			// worker jobs gives the browser input time without overlapping frames.
 			const pending = update( dt, this.clock.getElapsed() );
-			this.pendingUpdate = pending?.then ? pending : null;
+			// WebKit may accept several full command buffers while the first is still allocating geometry.
+			// Pace the interactive loop by GPU completion on the phone, including after an async physics step.
+			const done = this.mobileStartup ? Promise.resolve( pending ).then( () => GPU.queue.onSubmittedWorkDone() ) : pending;
+			this.pendingUpdate = done?.then ? done : null;
 			if ( this.pendingUpdate ) await this.pendingUpdate;
-			this.pendingUpdate = null;
+			if ( this.pendingUpdate === done ) this.pendingUpdate = null;
 			if ( this.running && this.generation === generation ) this._raf = requestAnimationFrame( loop );
 
 		};

@@ -72,7 +72,8 @@ export class Ferry {
 	async init() {
 
 		const base = import.meta.env.BASE_URL;
-		const [ model, data ] = await Promise.all( [ loadModel( `${ base }ferry/ferry.glb`, { customize: ferryPaint } ), fetch( `${ base }ferry/ferry_colliders.json` ).then( r => r.json() ) ] );
+		const models = this.app.engine?.mobileStartup ? 'ferry/mobile/' : 'ferry/';
+		const [ model, data ] = await Promise.all( [ loadModel( `${ base }${ models }ferry.glb`, { customize: ferryPaint } ), fetch( `${ base }ferry/ferry_colliders.json` ).then( r => r.json() ) ] );
 		this.model = model;
 		this.root = model.root;
 		this.root.name = 'Ferry';

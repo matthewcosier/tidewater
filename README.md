@@ -1,11 +1,13 @@
 # Tidewater
 
+This fork includes the playable island expansion, the drivable COSIER GT3 RS and [Mac-rendered LAN play](docs/lan-play.md). The [experimental builds](docs/experimental-builds.md) preserve earlier disaster, crowd and performance work.
+
 An island fishing game for the browser. Cast from the pier, the beach or your own boat, fight the fish,
 sell your catch to Joe at the fish stand, and spend it on better gear at Marta's chandlery. Around it is a
 real-time tropical island and ocean: swim the reef, drive the boat out to deep water, and watch a humpback
 breach. It runs directly on WebGPU and WGSL with its own small rendering engine, no framework.
 
-**Play it:** https://dgreenheck.github.io/tidewater/
+To play this branch locally, run `npm ci` followed by `npm run dev`. The [original Tidewater demo](https://dgreenheck.github.io/tidewater/) is hosted by the upstream project.
 
 ![Fishing off the pier at golden hour](docs/screenshot.jpg)
 
@@ -75,6 +77,7 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
 
 | Key | Action |
 |---|---|
+| Tap **Click to explore** or press Enter | Enter the island after shader warm-up. If iOS interrupted the last load, tap **Load island again** to retry. |
 | W A S D | Move on foot. In a car, W accelerates, S brakes or reverses, and A/D steer. |
 | Mouse | Look (click to capture the mouse, Esc to release) |
 | Shift | Sprint / boat boost |
@@ -176,6 +179,8 @@ wheel, **W/S** work the throttles, **X** stops the engines, **C** centres the wh
 **Shift+A/D** runs the bow thruster, **H** sounds the horn, **V** swaps the bridge and chase
 views, **E** leaves the helm. Run her aground or into the pier and the hull takes damage; hole
 her and she floods. See `docs/ferry.md`.
+
+**Mac-rendered LAN play** lets a phone drive the GT3 or explore on foot with touch controls. The Mac renders the game and sends pictures and sound over the local network. See [LAN play](docs/lan-play.md) for the host command and controls.
 
 **Drive together** opens the local multiplayer lobby. Host a drive and share its room
 code, or join a listed drive. Up to eight players share visible cars with name tags,

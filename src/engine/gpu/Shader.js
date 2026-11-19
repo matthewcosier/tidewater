@@ -585,7 +585,7 @@ export function composeShader( { modules = [], bindings = {}, code = '', defines
 	// materials rely on it; results there are only used where the quad agrees)
 	if ( ! /diagnostic\s*\(\s*off\s*,\s*derivative_uniformity/.test( header ) ) src += 'diagnostic( off, derivative_uniformity );\n';
 	src += header;
-	src += structs.map( ( s ) => s.wgsl ).join( '\n' ) + '\n';
+	src += [ ...new Set( structs.map( ( s ) => s.wgsl ) ) ].join( '\n' ) + '\n';
 	src += g0.declarations( 0 ) + '\n';
 	src += set.declarations( 1 ) + '\n';
 	for ( const m of mods ) src += `// ---- ${ m.name }\n${ m.code }\n`;

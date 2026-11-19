@@ -127,10 +127,11 @@ export class Terminal {
 	async init() {
 
 		const base = import.meta.env.BASE_URL;
+		const models = this.app.engine?.mobileStartup ? 'ferry/mobile/' : 'ferry/';
 		const t0 = performance.now();
 		this.ready = Promise.all( [
-			loadModel( `${ base }ferry/terminal.glb`, { customize: terminalPaint } ).then( model => this.place( model, t0 ) ),
-			loadModel( `${ base }ferry/parked_cars.glb` ).then( model => this.park( model ) ),
+			loadModel( `${ base }${ models }terminal.glb`, { customize: terminalPaint } ).then( model => this.place( model, t0 ) ),
+			loadModel( `${ base }${ models }parked_cars.glb` ).then( model => this.park( model ) ),
 		] );
 		const data = await fetch( `${ base }ferry/terminal_colliders.json` ).then( r => r.json() );
 		this.addColliders( data );

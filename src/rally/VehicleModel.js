@@ -3,6 +3,7 @@ import { loadGLB, decodeImage } from '../engine/loaders/GLTF.js';
 import { Material } from '../engine/render/Material.js';
 import { LAYERS } from '../core/SceneRenderer.js';
 import { Texture } from '../engine/gpu/Texture.js';
+import { GPU } from '../engine/gpu/GPU.js';
 import { generateMipmaps } from '../engine/gpu/Mipmaps.js';
 
 // Rally's original untextured GLBs retain their complete authored hierarchy,
@@ -98,7 +99,7 @@ async function readMap( gltf, info, srgb ) {
 	const map = gltf.textures[ info.index ];
 	const image = gltf.images[ map.source ];
 	const clamp = gltf.json.samplers?.[ map.sampler ]?.wrapS === 33071; // glTF CLAMP_TO_EDGE on the studio decals
-	const { data, width, height } = await decodeImage( image.bytes, image.mimeType );
+	const { data, width, height } = await decodeImage( image.bytes, image.mimeType, GPU.mobileStartup ? 512 : Infinity );
 	const texture = new Texture( {
 		label: 'carMap' + info.index, width, height, data, format: srgb ? 'rgba8unorm-srgb' : 'rgba8unorm',
 		mips: true, usage: [ 'sample', 'copyDst' ], sampler: clamp ? 'anisoClamp' : 'anisoRepeat',

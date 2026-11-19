@@ -50,12 +50,14 @@ const HOOK_DEFAULTS = {
 };
 
 // stub modules for hooks nobody installed
-export function hookModules() {
+export function hookModules( mobile = false ) {
 
 	const out = [];
 	for ( const k in HOOK_DEFAULTS ) {
 
-		const m = SceneLighting.hooks[ k ];
+		// The phone keeps sky IBL, direct sun and local lamps. Avoid compiling the ground-bounce
+		// field and refracted shadow-position hook for every material in the first view.
+		const m = mobile && ( k === 'bounce' || k === 'shadowPosition' ) ? null : SceneLighting.hooks[ k ];
 		if ( m ) out.push( m );
 		else out.push( stub( k ) );
 

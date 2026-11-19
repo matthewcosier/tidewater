@@ -31,6 +31,15 @@ const _v = new Vector3();
 const _camPos = new Vector3();
 
 const _layouts = new WeakMap();
+const nativeIds = new WeakMap();
+let nextNativeId = 0;
+function nativeId( resource ) {
+
+	if ( ! nativeIds.has( resource ) ) nativeIds.set( resource, ++ nextNativeId );
+	return nativeIds.get( resource );
+
+}
+
 let _listToken = 0; // one per drawItems call (see BindingSet.getBindGroup)
 
 const DRAW_STRIDE = 256; // minUniformBufferOffsetAlignment
@@ -43,6 +52,7 @@ export class MeshRenderer {
 	constructor() {
 
 		this.pipelines = new Map();
+		this.nativePipelines = new Map();
 		this.geometries = new WeakMap();
 		this.attributeBuffers = new WeakMap();
 		this.capacity = 8192;
@@ -376,7 +386,7 @@ export class MeshRenderer {
 		const c = composeShader( { modules: src.modules, bindings: src.bindings, code: src.code, defines: src.defines, stage: 'render', label: material.name } );
 		const module = createShaderModule( c.code, material.name );
 		this._ensureDrawBuffer();
-		const layout = GPU.device.createPipelineLayout( { bindGroupLayouts: [ c.group0.layout, c.bindings.layout, this.drawLayout ] } );
+		const groups = [ c.group0.layout, c.bindings.layout, this.drawLayout ];
 
 		const blend = blendState( material.blending );
 		let targets = [];
@@ -402,7 +412,6 @@ export class MeshRenderer {
 		const depthCompare = material.depthTest ? ( material.depthCompare || pass.depthCompare ) : 'always';
 		const desc = {
 			label: material.name + ' ' + pass.kind,
-			layout,
 			vertex: { module, entryPoint: 'vs', buffers: vl.buffers.map( ( b ) => b.layout ) },
 			primitive: { topology: material.topology, cullMode, frontFace: 'ccw' },
 		};
@@ -415,7 +424,19 @@ export class MeshRenderer {
 			depthBiasSlopeScale: pass.kind === 'depth' ? ( pass.depthBiasSlopeScale || 0 ) : material.depthBiasSlopeScale,
 		};
 		// compiled in the background: the draw is skipped until it is ready (see GPU.renderPipeline)
-		const p = { handle: GPU.renderPipeline( desc ), bindings: c.bindings, label: desc.label };
+		// Native objects have no enumerable descriptor fields. Key them by identity, and all fixed
+		// render state by value. Colours, textures and uniforms still bind separately per material.
+		const nativeKey = JSON.stringify( [ groups.map( nativeId ), desc ], ( field, value ) =>
+			field === 'label' ? undefined : field === 'module' ? nativeId( value ) : value );
+		let handle = this.nativePipelines.get( nativeKey );
+		if ( ! handle ) {
+
+			desc.layout = GPU.device.createPipelineLayout( { bindGroupLayouts: groups } );
+			handle = GPU.renderPipeline( desc );
+			this.nativePipelines.set( nativeKey, handle );
+
+		}
+		const p = { handle, bindings: c.bindings, label: desc.label };
 		this.pipelines.set( key, p );
 		this.stats.pipelines = this.pipelines.size;
 		return p;
@@ -636,6 +657,7 @@ export class MeshRenderer {
 
 			const { object: o, geometry: geo, material } = it;
 			if ( ! geo.attributes.position && ! geo.vertexCount && ! geo.indirect ) continue;
+			if ( ! this.precompiling && ! geo.indirect && ( it.count === 0 || ( o.isInstancedMesh ? o.count : geo.instanceCount ) === 0 ) ) continue;
 			let vl, p;
 			if ( this.precompiling ) {
 

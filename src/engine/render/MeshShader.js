@@ -46,6 +46,10 @@ export function buildMeshShader( material, layout, pass ) {
 	const kind = pass.kind;
 	const has = new Set( layout.map( ( a ) => a.name ) );
 	const defs = material.allDefines();
+	if ( GPU.mobileStartup ) {
+		defs.UNDERWATER_LIGHTING = Math.min( defs.UNDERWATER_LIGHTING, 1 );
+		defs.LOCAL_LIGHTS_CHEAP = 1;
+	}
 	defs.PASS_MAIN = kind === 'main' ? 1 : 0;
 	defs.PASS_DEPTH = kind === 'depth' ? 1 : 0;
 	defs.PASS_COLOR = kind === 'color' ? 1 : 0;
@@ -386,7 +390,7 @@ struct FragOut {
 	// modules: lighting (with the installed hooks) for colour passes, or whenever a material module needs it
 	let modules = [ commonModule, surfaceModule, ...material.modules ];
 	const needsLighting = kind !== 'depth' || collectModules( material.modules ).includes( lightingModule );
-	if ( needsLighting ) modules = [ commonModule, surfaceModule, ...hookModules(), lightingModule, ...material.modules ];
+	if ( needsLighting ) modules = [ commonModule, surfaceModule, ...hookModules( GPU.mobileStartup ), lightingModule, ...material.modules ];
 	// custom-shaded materials (the water) that only need sunShadow(): no scene lighting hooks, whose
 	// modules would add their uniform buffers / textures to the pipeline (12 uniform buffers per stage)
 	if ( material.lightingHooks === false && ! collectModules( material.modules ).includes( lightingModule ) ) modules = [ commonModule, surfaceModule, shadowModule, ...material.modules ];

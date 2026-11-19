@@ -1,4 +1,5 @@
 import './core/BenchSeed.js';
+import { isAppleTouchDevice } from './engine/Engine.js';
 import { App } from './App.js';
 import { UI } from './ui/UI.js';
 import { AppUI } from './ui/AppUI.js';
@@ -13,15 +14,34 @@ if ( /[?&]bench\b/.test( location.search ) ) {
 }
 
 const ui = new UI();
-const app = new App();
 window.__ui = ui;
+// A killed WebContent process cannot show the normal device-lost dialog. A tab-scoped
+// marker lets its replacement ask before allocating the same scene again.
+const mobile = isAppleTouchDevice(), loadingKey = 'tidewater.mobileLoading';
+function clearLoadingMarker() {
+
+	if ( mobile ) try { sessionStorage.removeItem( loadingKey ); } catch { /* storage disabled */ }
+
+}
+
+if ( mobile ) {
+
+	let interrupted = false;
+	try { interrupted = sessionStorage.getItem( loadingKey ) === '1'; } catch { /* storage disabled */ }
+	if ( interrupted ) await ui.waitForLoadingRetry();
+	try { sessionStorage.setItem( loadingKey, '1' ); } catch { /* storage disabled */ }
+	window.addEventListener( 'pagehide', clearLoadingMarker, { once: true } );
+
+}
+const app = new App();
 
 // The browser can take the graphics device away (driver reset, GPU memory pressure). Nothing draws
 // after that, so the loader stops and a dialog offers Reload (device-lost.spec.js).
-window.addEventListener( 'tw-device-lost', () => ui.showDeviceLost(), { once: true } );
+window.addEventListener( 'tw-device-lost', () => { clearLoadingMarker(); ui.showDeviceLost(); }, { once: true } );
 
-app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async () => {
+app.init( ( p, text, until ) => ui.setLoading( p, text, until ), ( done, total ) => ui.setLoadingDetail( done, total ) ).then( async () => {
 
+	clearLoadingMarker();
 	if ( ui.deviceLost ) return;
 	app.ui = new AppUI( app, ui );
 	ui.setLoading( 1, 'Ready' );
@@ -38,6 +58,18 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async ()
 
 	} else app.start();
 	ui.showStartOverlay( () => {
+		if ( mobile ) {
+			// The first tap starts the live mix while detailed geometry is still arriving. If the
+			// browser kills this document there, offer a retry before starting the island again.
+			try { sessionStorage.setItem( loadingKey, '1' ); } catch { /* storage disabled */ }
+			const startFrame = app.engine.frame, startTime = performance.now();
+			const check = () => {
+				if ( ui.deviceLost ) return;
+				if ( app.engine.frame >= startFrame + 30 && performance.now() - startTime >= 10000 ) clearLoadingMarker();
+				else setTimeout( check, 1000 );
+			};
+			setTimeout( check, 10000 );
+		}
 
 		app.input.requestLock();
 		if ( app.audio ) app.audio.resume();
@@ -46,6 +78,7 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async ()
 
 } ).catch( ( e ) => {
 
+	clearLoadingMarker();
 	console.error( e );
 	if ( ! ui.deviceLost ) ui.setLoadingError( 'Something went wrong: ' + e.message );
 

@@ -97,7 +97,7 @@ import { WakeSim } from './ocean/WakeSim.js';
 import { Vegetation } from './world/Vegetation.js';
 import { SoundScape } from './audio/SoundScape.js';
 import { updateCameraVelocity, useStaticVelocity } from './post/CameraVelocity.js';
-import { poseScene } from './engine/render/ScenePose.js'; // L6 perf
+import { poseScene } from './engine/render/ScenePose.js';
 
 const _up = new Vector3( 0, 1, 0 );
 
@@ -121,13 +121,19 @@ export class App {
 
 	}
 
-	async init( onProgress = () => {} ) {
+	async init( onProgress = () => {}, onShaderProgress ) {
 
 		const qs = this.qs;
 		// report a stage, then let the page paint it before the (synchronous) stage work starts
 		const progress = async ( p, text, until ) => {
 
 			onProgress( p, text, until );
+			// Uploads and mip generation used to accumulate in one command buffer until the first
+			// island frame. Submit between mobile loading stages while no render pass is open.
+			if ( this.engine?.mobileStartup && GPU.encoder ) {
+				GPU.submit();
+				await GPU.queue.onSubmittedWorkDone();
+			}
 			if ( typeof requestAnimationFrame === 'function' ) await new Promise( ( r ) => requestAnimationFrame( () => setTimeout( r, 0 ) ) );
 
 		};
@@ -168,7 +174,7 @@ export class App {
 		// contact-hardening filter sized by the sun's disc on the near cascade. Each cascade's depth range
 		// is its light margin (200 m) + its extent, which keeps the depth bias small in metres.
 		// Shadows come from the opaque and the late (transparent-pass) layers.
-		this.csm = this.shadows = new SunShadows( { size: 2048, splits: [ 10, 60, 400 ], lightMargin: 200, normalBias: [ 0.015, 0.06, 0.3 ], bias: 0.00002 } );
+		this.csm = this.shadows = new SunShadows( { size: engine.mobileStartup ? 1024 : 2048, splits: engine.mobileStartup ? [ 55 ] : [ 10, 60, 400 ], pcssCascades: engine.mobileStartup ? 0 : 1, lightMargin: engine.mobileStartup ? 60 : 200, normalBias: [ 0.015, 0.06, 0.3 ], bias: 0.00002 } );
 		this.shadows.layerMask = ( 1 << LAYERS.OPAQUE ) | ( 1 << LAYERS.TRANSPARENT );
 
 		this.environment = new Environment( renderer, scene, this.sky );
@@ -280,6 +286,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.sceneRenderer = new SceneRenderer( engine.meshRenderer, scene, camera );
 		// the water's refraction source: the scene below the water only, half resolution
 		this.refraction = new RefractionPass( { meshRenderer: engine.meshRenderer, scene, camera, sceneRenderer: this.sceneRenderer, scale: 0.5 } );
+		// The existing uncovered-pixel path refracts the opaque copy. A separate underwater scene pass
+		// would redraw both terminals, the road and the reef every frame on a phone.
+		if ( engine.mobileStartup ) this.refraction.enabled = false;
 		this.sceneRenderer.onBeforeWater = () => this.refraction.render( G.seaLevel.value );
 		if ( this.sky.background ) this.sceneRenderer.background = this.sky.background;
 		// lanterns, lamp posts, path lights, lit windows, the boat's cabin / navigation lights and the
@@ -403,7 +412,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		// ---------------------------------------------------------------- audio
 		// recorded field recordings (public/audio, credits in public/audio/CREDITS.md); ?noAudio turns it off
-		this.audio = qs.has( 'noAudio' ) ? null : new SoundScape();
+		this.audio = qs.has( 'noAudio' ) ? null : new SoundScape( { mobile: engine.mobileStartup } );
 		this.player.audio = this.audio;
 		// the fishing game (rod, bites, catch, cooler, fish stand)
 		this.game = new Game( this );
@@ -459,6 +468,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.people = new People( this ); // the townsfolk brains, events and speech bubbles (src/people, docs/people.md)
 		this.ferry = new Ferry( this );
 		await this.ferry.init();
+		if ( engine.mobileStartup ) await progress( 0.355, 'Preparing island vehicles…' );
 		this.jetskis = new Jetskis( this ); // rideable jetskis (src/jetski)
 		await this.jetskis.init();
 		this.player.jetskis = this.jetskis;
@@ -471,9 +481,10 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		await this.windfarm.init();
 		this.aviation = new Aviation(this);
 		await this.aviation.init();
-		this.player.aviation = this.aviation; // walk-up E prompt at the carrier jet (lane L2)
+		this.player.aviation = this.aviation; // walk-up E prompt at the carrier jet
 		this.glider = new Glider(this);
 		await this.glider.init();
+		if ( engine.mobileStartup ) await progress( 0.358, 'Preparing island wildlife…' );
 		this.chairlift = new Chairlift(this).init({connector:true});
 		this.livestock = new Livestock(this);
 		await this.livestock.init();
@@ -487,7 +498,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// frames behind the loading screen so any remaining first-use stalls happen there
 		// stage weights: in the browser the pipeline compile below takes far longer than everything before it
 		await progress( 0.36, 'Compiling shaders…', 0.95 );
-		await this.precompile();
+		await this.precompile( onShaderProgress );
 		await progress( 0.96, 'Warming up…' );
 		for ( let i = 0; i < 2; i ++ ) {
 
@@ -498,11 +509,11 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
-	// Build every pipeline up front, then wait for the GPU (keeps first-use compiles behind the loading
+	// Desktop builds every pipeline up front, then waits for the GPU (keeps first-use compiles behind the loading
 	// screen). The precompile frame visits every mesh of every pass, hidden or out of view, and the
 	// pipelines compile in parallel in the background (GPU.renderPipeline); the refraction pass and
 	// the hull mask are forced on so their variants are built too.
-	async precompile() {
+	async precompile( onShaderProgress ) {
 
 		const mr = this.engine.meshRenderer;
 		const refr = this.refraction.enabled;
@@ -517,6 +528,15 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		await GPU.pipelinesReady();
+		if ( this.engine.mobileStartup ) {
+
+			// Prime exactly the opening view. The normal draw path discovers new variants as the camera moves.
+			await this.frame( 1 / 60 );
+			await GPU.pipelinesReady( onShaderProgress );
+			await GPU.queue.onSubmittedWorkDone();
+			return;
+
+		}
 		mr.precompiling = true;
 		this.refraction.enabled = true;
 		const sr = this.sceneRenderer, hm = sr.hullMaskRT;
@@ -915,10 +935,10 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// uniforms (setFrameCamera); shadows then render with this frame's sun and camera
 		this.post.beginFrame();
 		this.underwater.updateCamera( this.camera );
-		// ---- L6 perf: pose the scene graph once for every pass of this frame (src/engine/render/ScenePose.js).
+		// Pose the scene graph once for every pass of this frame (src/engine/render/ScenePose.js).
 		// The simulation and the camera are final here; the passes below skip their own whole-scene update.
 		poseScene( this.scene );
-		// ---- end L6 perf
+
 		this.shadows.render( this.scene, this.engine.meshRenderer, this.shadows.update( this.camera, G.sunDir.value, this.scene ) );
 		this.sceneRenderer.render();
 		if ( this.post.flare ) this.post.flare.kernel.dispatch( 1 );

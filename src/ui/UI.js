@@ -3222,6 +3222,24 @@ export class UI {
 	// scripts run. setLoadingDetail( done, total ): sub-progress of the current stage (e.g. pipelines
 	// compiled / total), mapped between p and `until`. setLoadingError( message ).
 
+	waitForLoadingRetry() {
+
+		this.setLoading( 0, 'The last load stopped before the island was ready.', 0 );
+		const button = document.createElement( 'button' );
+		button.type = 'button';
+		button.className = 'tw-btn tw-btn-primary';
+		button.textContent = 'Load island again';
+		document.querySelector( '#loader .loader-panel' ).append( button );
+		button.focus();
+		return new Promise( resolve => button.addEventListener( 'click', () => {
+
+			button.remove();
+			resolve();
+
+		}, { once: true } ) );
+
+	}
+
 	setLoading( progress01, status, until ) {
 
 		const L = document.getElementById( 'loader' );
