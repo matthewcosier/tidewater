@@ -106,7 +106,7 @@ test('Portrait coexistence: identity, warnings and flight instruments remain rea
  });
  await test.step('When I configure a tsunami then the panel replaces the narrow flight instrument layer',async()=>{
   await open(page,'Disasters');await expect(page.locator('.av-hud')).toBeHidden();
-  await page.getByLabel('Disaster type').selectOption('tsunami');
+  await page.getByLabel('Disaster type').selectOption('tsunami'); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
   await page.getByLabel('Warning lead time (s)',{exact:true}).fill('120');
   await page.getByRole('button',{name:'Start disaster',exact:true}).click();
   const warning=page.getByRole('status',{name:'Tsunami warning',exact:true});await expect(warning).toBeVisible();

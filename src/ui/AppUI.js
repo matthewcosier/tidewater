@@ -20,6 +20,8 @@ const SEA = {
 	Storm: { wind: 20, fetch: 900, chop: 1.2, swell: 1.0, surf: 0.9, period: 12, whitecaps: 1 },
 };
 
+const GLIDER_CHIP = { landed: 'Landed · Hang glider', crashed: 'Crashed · Hang glider', ditched: 'Swimming · Hang glider' };
+
 export class AppUI {
 
 	constructor( app, ui = new UI() ) {
@@ -238,7 +240,7 @@ export class AppUI {
 		const quality = perf.addFolder( 'Quality', { icon: 'layers' } );
 		// output resolution: Retina (DPR, capped at 2) with the adaptive governor (src/engine/ResolutionGovernor.js);
 		// its lowest steps lower the render scale (never above the slider). A scale step keeps the TAA history:
-		// the history is at output size and the camera did not move, so no cut (the cut here threw
+		// the history is at output size and the camera did not move, so no cut (ledger D5: the cut here threw
 		// the history away on every step, a canopy shimmer each time the tsunami spike stepped the governor)
 		const gov = app.engine.resolution;
 		gov.onScale = ( v ) => {
@@ -291,7 +293,7 @@ export class AppUI {
 
 		const app = this.app, p = app.player, third = p.view === 'third';
 		const show = ON_FOOT.has( p.mode ) && ! app.freeCam && ! app.rally?.active;
-		// context-aware HUD chips: stamp the rule on the root; GameHUD's and
+		// context-aware HUD chips (ledger D3, D7): stamp the rule on the root; GameHUD's and
 		// WorldTools' CSS read it. Scratch objects, so the per-frame call allocates nothing.
 		CHIP_CTX.mode = p.mode;
 		CHIP_CTX.freeCam = !! app.freeCam;
@@ -315,8 +317,6 @@ export class AppUI {
 
 		if ( this._viewThird === third ) return;
 		this._viewThird = third;
-		// the root carries the view too: the evacuation hint's CSS reads it to stand clear of the
-		// third-person character (src/evacuation/Panel.js)
 		this.ui.root.classList.toggle( 'is-third', third );
 		const label = third ? 'First person' : 'Third person';
 		this.viewBtn.setAttribute( 'aria-label', label );
@@ -339,15 +339,19 @@ export class AppUI {
 		if ( app.freeCam ) {
 
 			ui.setMode( 'Free camera' );
-			ui.setPrompt( 'F', app.rally?.active ? 'Return to car' : app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Dive' : 'Walk' );
+			// a DebugViews review pose hides the hint until the camera is flown (review captures only)
+			if ( app.reviewPose && app.fly.velocity.lengthSq() > 0.01 ) app.reviewPose = null;
+			if ( app.reviewPose ) ui.setPrompt( null );
+			else ui.setPrompt( 'F', app.rally?.active ? 'Return to car' : app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Dive' : 'Walk' );
 			ui.setBoatGauges( { visible: false } );
 			ui.setDepth( { visible: false } );
 			return;
 
 		}
+		app.reviewPose = null;
 
 		const mode = p.mode === 'chairlift' ? 'Riding · Summit chairlift'
-			: p.mode === 'glider' ? ( app.glider?.pilot ? 'Flying · Hang glider' : 'Summit launch' )
+			: p.mode === 'glider' ? ( app.glider?.pilot ? ( GLIDER_CHIP[ app.glider.flight?.phase ] || 'Flying · Hang glider' ) : 'Summit launch' )
 			: p.mode === 'aviation' ? ( app.aviation?.pilot ? 'Flying · Kestrel' : 'Carrier view' )
 			: p.mode === 'rally' ? `Driving · ${ app.rally.profile.name }`
 			: p.mode === 'boat' ? `Boat · ${ p.camMode === 'first' ? '1st' : '3rd' } person`

@@ -628,6 +628,24 @@ export class Player {
 
 		}
 
+		// hang glider (src/glider/Glider.js): E clips in at the summit launch deck
+		if ( this.glider && ! this.busy && ! this.prompt ) {
+
+			const o = this.glider.offer( this );
+			if ( o ) {
+
+				this.prompt = { key: 'E', text: o.text };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					o.act();
+					return;
+
+				}
+
+			}
+
+		}
+
 		// jetskis (src/jetski/Jetski.js): ride one, climb aboard from the water, right a capsized one
 		if ( this.jetskis && ! this.busy && ! this.prompt ) {
 

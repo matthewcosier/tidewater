@@ -21,3 +21,6 @@ cp out/*.ogg ../../public/audio/         # then copy the entries of fishing-bank
 - The mixer (`src/audio/SoundScape.js`, `MIX`) turns target loudness into gains with those measurements.
 
 `raw/`, `work/` and `out/` are build scratch (not committed).
+
+Disaster sounds (`dis_*`, `src/disasters/DisasterSound.js`): `build-disaster.mjs` (its header has the download line).
+Loops and sprites are built as above at 48 kb/s; the entries of `disaster-bank.json` go into `src/audio/soundBank.js`.

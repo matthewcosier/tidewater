@@ -1,6 +1,6 @@
 import * as THREE from '../engine/index.js';
-import { capsuleContact, adjacent } from '../people/ArticulatedContacts.js';
-import { articulatedContact, jointCoordinates } from './JointVelocity.js';
+import { capsuleContactTo, adjacent } from '../people/ArticulatedContacts.js';
+import { ArticulatedResponse, jointCoordinatesTo, coordinateRecords } from './JointVelocity.js';
 
 // The player's ragdoll: the car yeet (src/rally/Bailout.js), a big fall on foot, and
 // player.ragdoll( impulse, point ) for other systems (a jetski wipe-out, a bump in a crowd).
@@ -36,14 +36,8 @@ import { articulatedContact, jointCoordinates } from './JointVelocity.js';
 
 const G = 9.81, SUB = 2, MASS = 75, D2R = Math.PI / 180;
 const MAX_ROTATION_STEP = 0.1, CONTACT_TRAVEL = 0.15, MAX_SUBSTEPS = 192;
-// PLANE_REACH (m): how far a contact sphere may move across the ground from where its plane was taken
-// before the plane is taken again at its new place. The plane is a tangent (height there, normal from
-// +-0.25 m differences), so on a creased or curving hillside it parts from the terrain with distance:
-// The solver could move a forearm 0.26 m from its plane in one 38-substep frame while the pelvis stayed inside the
-// 0.15 m whole-rig refresh, the plane saying 0.8 cm clear and the terrain 8.3 cm deep (tornado seed 1).
-// Near the ground a sphere moves at most CONTACT_TRAVEL * r a substep, so this is a few substeps of travel.
 const PLANE_REACH = 0.05;
-const STILL = Object.freeze( [ 0, 0, 0 ] ), SUPPORT_REACH = Object.freeze( { maxRise: 0.001, maxDrop: 0.001 } );
+const NONE = Object.freeze( [] ), STILL = Object.freeze( [ 0, 0, 0 ] ), SUPPORT_REACH = Object.freeze( { maxRise: 0.001, maxDrop: 0.001 } );
 const FRACTION = { Pelvis: 0.142, Spine: 0.139, Spine2: 0.216, Head: 0.081, UpperArm: 0.028, Forearm: 0.022, Thigh: 0.1, Calf: 0.0465, Foot: 0.0145 };
 // buoyancy against weight when fully under (the lungs float the chest; limbs just sink)
 const FLOAT = { Pelvis: 1.15, Spine: 1.35, Spine2: 1.6, Head: 1.2 };
@@ -56,6 +50,13 @@ const MU = 0.65, MU_WALL = 0.3, BOUNCE = 0.15, JOINT_VISCOSITY = 1, SPIN_DAMP = 
 // sliding across it is lifted by C (v_h^2 - skimMin^2), so a shallow entry skips like a stone until he slows;
 // drag (per m): the water's drag on him grows with the square of his speed (spray, the wave he pushes)
 export const ENTRY = { plane: 0.9, skim: 0.012, skimMin: 8, drag: 0.06 };
+const SURFACE_TAU = 0.3;
+// Bore front (boreFront): ROLLER_SPIN is the declared share of the roller's shear rate U / d that a
+// caught body takes up; ROLLER_GRIP (1/s) how fast it takes it up; ROLLER_AIR the void fraction of the
+// roller water, declared 0.3 inside the 0.1 to 0.5 measured in hydraulic-jump rollers (Chanson).
+// FRONT_MIN_DEPTH (m) keeps U / d finite on a wet film.
+const HOLD_TAU = 0.25; // s: a hold reached at 0.7 m closes at about 2.8 m/s, a lunge, not a snap
+const ROLLER_SPIN = 1, ROLLER_GRIP = 3, ROLLER_AIR = 0.3, FRONT_MIN_DEPTH = 0.2;
 const DEPEN = 1.5, SETTLE_V = 0.35, SETTLE_W = 1.5, SETTLE_T = 1.0, FLAT_T = 0.5, RISE_T = 0.75, BLEND_T = 0.6, OUT_T = 0.3, SWIM_T = 0.6, EYE = 1.62;
 
 const V = () => ( { x: 0, y: 0, z: 0 } );
@@ -125,6 +126,12 @@ function basis( x, y, z, o ) {
 }
 
 const _a = V(), _b = V(), _c = V(), _d = V(), _e = V(), _f = V(), _q1 = Q(), _q2 = Q(), _q3 = Q(), _gq = Q(), _up = new THREE.Vector3( 0, 1, 0 );
+// rest-test frame (update): the flood flow under the pelvis (m/s) and its sample; the still frame is STILL above
+const _carried = [ 0, 0, 0 ], _flow = {};
+// The substep's own storage (no garbage inside simulate: test/articulated-flood.mjs holds it to the allocating solver
+// bit for bit and measures what it allocates): joint coordinates for solveJoint and the limit repair, the self-pair
+// contact and its arms, measure()'s axes.
+const _jc = coordinateRecords(), _jr = coordinateRecords(), _sc = { normal: V(), point: V(), penetration: 0 }, _sa = V(), _sb = V(), _sP = V(), _m1 = V(), _m2 = V(), _m3 = V(), _m4 = V(), _m5 = V();
 // scratch for the solver (no allocation per substep)
 const _rp = V(), _rc = V(), _n = V(), _P = V(), _a1 = V(), _a2 = V(), _x = V(), _b1 = V(), _b2 = V(), _an = V(), _aP = V(), _t = V();
 
@@ -407,7 +414,7 @@ export class Ragdoll {
 		for ( const b of this.bodies ) b.supported = false;
 		this.push( opts.impulse, opts.point );
 		this.phase = 'sim';
-		this.t = 0; this.rest = 0; this.nearT = 0; this.trunks = opts.trunks || this.trunks;
+		this.t = 0; this.rest = 0; this.nearT = 0; this.surfacePrev = NaN; this.surfaceVy = 0; this.trunks = opts.trunks || this.trunks;
 		this.stats = { substeps: 0, substepsMax: 0, consumedTime: 0, protectionEnergy: 0, protectionCount: 0, protectionLast: null, above40: 0, above70: 0, maxIntegratedAngle: 0, maxNearTravelRatio: 0, forceRetries: 0, maxGeometricTravelRatio: 0, acceptedTime: 0, droppedTime: 0, droppedSteps: 0, protectionTranslationEnergy: 0, protectionRotationEnergy: 0, protectionWorldEnergyChange: 0, protectionSupportWork: 0, protectionBoundExceeded: 0, capped: 0, frames: 0, ms: 0, msMax: 0, nan: 0, clearance: Infinity, swing: 0, twist: 0, hinge: 0, flexMax: 0, simT: 0, settleSpeed: 0, water: false };
 		this.focus.set( this.pelvis.x.x, this.pelvis.x.y, this.pelvis.x.z );
 		this.floorY = this.ground( this.pelvis.x.x, this.pelvis.x.z, this.pelvis.x.y );
@@ -497,16 +504,17 @@ export class Ragdoll {
 		// Position repair uses the actual coordinate gradient, including its
 		// magnitude. The mean anatomical axis is not the derivative at a tilt.
 		const count = c.hinge ? 3 : 2;
-		let coordinates = null;
+		let fresh = false, known = 0;
 		for ( let i = 0; i < count; i ++ ) {
 			// Earlier coordinates only invalidate the remaining gradients if they rotate a body.
-			const coordinate = ( coordinates ??= jointCoordinates( p, c ) )[ i ]; if ( ! coordinate ) continue;
+			if ( ! fresh ) { known = jointCoordinatesTo( p, c, _jc ); fresh = true; }
+			const coordinate = i < known ? _jc[ i ] : null; if ( ! coordinate ) continue;
 			const { angle, min, max, n } = coordinate, target = Math.min( max, Math.max( min, angle ) ), error = angle - target;
 			if ( Math.abs( error ) < 1e-7 ) continue;
 			const inverseMass = this.wRot( p, n ) + this.wRot( c, n ); if ( inverseMass < 1e-12 ) continue;
 			const impulse = error / inverseMass, P = _aP; P.x = n.x * impulse; P.y = n.y * impulse; P.z = n.z * impulse;
 			this.applyRot( p, P, 1 ); this.applyRot( c, P, - 1 );
-			coordinates = null;
+			fresh = false;
 		}
 
 	}
@@ -576,20 +584,28 @@ export class Ragdoll {
 		nb.length = 0; nc.length = 0;
 		for ( const b of C.boxes ) if ( Math.abs( b.center.x - P.x ) < b.radius + reach && Math.abs( b.center.z - P.z ) < b.radius + reach ) nb.push( b );
 		for ( const c of C.cylinders ) if ( Math.abs( c.x - P.x ) < c.radius + reach && Math.abs( c.z - P.z ) < c.radius + reach ) nc.push( c );
-		const t = this.trunks && this.trunks();
-		if ( t ) for ( let i = 0; i < t.length; i += 5 ) if ( Math.abs( t[ i ] - P.x ) < reach && Math.abs( t[ i + 1 ] - P.z ) < reach ) nc.push( { x: t[ i ], z: t[ i + 1 ], radius: t[ i + 2 ], yMin: t[ i + 3 ], yMax: t[ i + 4 ] } );
+		const t = this.trunks && this.trunks(), pool = this.trunkPool || ( this.trunkPool = [] );
+		let k = 0;
+		if ( t ) for ( let i = 0; i < t.length; i += 5 ) if ( Math.abs( t[ i ] - P.x ) < reach && Math.abs( t[ i + 1 ] - P.z ) < reach ) {
+
+			const c = pool[ k ] || ( pool[ k ] = { x: 0, z: 0, radius: 0, yMin: 0, yMax: 0 } );
+			k ++;
+			c.x = t[ i ]; c.z = t[ i + 1 ]; c.radius = t[ i + 2 ]; c.yMin = t[ i + 3 ]; c.yMax = t[ i + 4 ];
+			nc.push( c );
+
+		}
 
 	}
 
 	projectAnchors() {
 		// Exact mass-weighted projection at fixed rotations. A connected tree's
 		// relative centres are unique; its mass centre supplies the free translation.
-		const before = { ...this.com( _c ) };
+		const before = this.com( _c ), bx = before.x, by = before.y, bz = before.z;
 		for ( const b of this.joints ) {
 			const p = b.parent; rot( p.q, b.rP, _a ); rot( b.q, b.o, _b );
 			b.x.x = p.x.x + _a.x - _b.x; b.x.y = p.x.y + _a.y - _b.y; b.x.z = p.x.z + _a.z - _b.z;
 		}
-		const after = this.com( _c ), dx = before.x - after.x, dy = before.y - after.y, dz = before.z - after.z;
+		const after = this.com( _c ), dx = bx - after.x, dy = by - after.y, dz = bz - after.z;
 		for ( const b of this.bodies ) { b.x.x += dx; b.x.y += dy; b.x.z += dz; }
 	}
 
@@ -671,6 +687,40 @@ export class Ragdoll {
 		this.stats.protectionLast = { cause, remaining: h, scale, removed, translation, rotation, worldChange, supportWork, support: provider?.id || null };
 	}
 
+	// The breaking front of a flood bore. Where the flow is supercritical (Froude U / sqrt(g d) > 1)
+	// it is the roller: the water turns over across its depth, so a body caught in it is rolled about
+	// the horizontal axis across the flow, at the shear rate U / d (1/s) scaled by how far past
+	// critical the flow is (declared ROLLER_SPIN 1, reached over 1 / ROLLER_GRIP s). The roller is
+	// also aerated: its water carries less weight, so a body loses that share of its buoyancy and goes
+	// under until the front has passed. Before this a swept body slid flat and upright on the current.
+	boreFront( b, ux, uz, water, sub, h ) {
+
+		const U = Math.sqrt( ux * ux + uz * uz );
+		const depth = Math.max( FRONT_MIN_DEPTH, water - this.disasterField.terrain( b.x.x, b.x.z ) );
+		const front = Math.min( 1, Math.max( 0, U / Math.sqrt( G * depth ) - 1 ) );
+		if ( ! ( front > 0 ) ) return;
+		const ax = uz / U, az = - ux / U; // cross-flow axis: the top of the body moves downstream
+		const spin = ROLLER_SPIN * front * U / depth, along = b.w.x * ax + b.w.z * az;
+		const add = ( spin - along ) * ( 1 - Math.exp( - ROLLER_GRIP * sub * h ) );
+		b.w.x += ax * add; b.w.z += az * add;
+		b.v.y -= G * b.float * sub * h * ROLLER_AIR * front;
+
+	}
+
+	// Clinging (src/people/Cling.js): steer the gripping body onto the hold's surface, as an arm pulls
+	// in. A velocity target with time constant HOLD_TAU, not a spring, so a stiff hold cannot ring or
+	// blow up at the substep; the rest of the rig trails downstream on its joints. Vertical motion is
+	// left to buoyancy and the bore front, so a holder can still be pushed under.
+	holdOn( b, h ) {
+
+		const hold = this.cling.hold;
+		const dx = b.x.x - hold.x, dz = b.x.z - hold.z;
+		const l = Math.hypot( dx, dz ) || 1, reach = hold.radius + b.r;
+		b.v.x = ( hold.x + dx / l * reach - b.x.x ) / HOLD_TAU;
+		b.v.z = ( hold.z + dz / l * reach - b.x.z ) / HOLD_TAU;
+
+	}
+
 	integrateForces( h, W ) {
 		for ( const b of this.bodies ) {
 
@@ -680,7 +730,9 @@ export class Ragdoll {
 				// ground loads use its actual mass; no second water resistance is added.
 				let ux = 0, uz = 0, water = W;
 				if ( this.disasterField ) {
-					const a = this.disasterField.acceleration( b.x, b.v, { mass: b.m, area: 2 * b.r * ( b.len + 2 * b.r ), height: 2 * b.r, buoyancy: false, waterDrag: false, supported: !! this.supportedStep, dt: h }, {} );
+					const o = this._loadOptions || ( this._loadOptions = { mass: 0, area: 0, height: 0, buoyancy: false, waterDrag: false, supported: false, dt: 0 } );
+					o.mass = b.m; o.area = 2 * b.r * ( b.len + 2 * b.r ); o.height = 2 * b.r; o.supported = !! this.supportedStep; o.dt = h;
+					const a = this.disasterField.acceleration( b.x, b.v, o, this._load || ( this._load = {} ) );
 					b.v.x += a.ax * h; b.v.y += a.ay * h; b.v.z += a.az * h;
 					ux = a.ux; uz = a.uz; water = a.height;
 				}
@@ -696,8 +748,10 @@ export class Ragdoll {
 					b.v.x *= kq; b.v.y *= kq; b.v.z *= kq;
 					const k = Math.exp( - WATER_DRAG * sub * h ), kw = Math.exp( - WATER_SPIN * sub * h );
 					b.v.x = ux + b.v.x * k; b.v.y *= k; b.v.z = uz + b.v.z * k; b.w.x *= kw; b.w.y *= kw; b.w.z *= kw;
+					if ( this.disasterField && ( ux !== 0 || uz !== 0 ) ) this.boreFront( b, ux, uz, water, sub, h );
 
 				}
+				if ( this.cling && b === this.cling.body ) this.holdOn( b, h );
 
 				const kw = Math.exp( - SPIN_DAMP * h );
 				b.w.x *= kw; b.w.y *= kw; b.w.z *= kw;
@@ -768,11 +822,11 @@ export class Ragdoll {
 			for ( const c of this.joints ) this.solveJoint( c );
 			// Self overlap repair stays inside the articulated geometric solve.
 			// Its correction is not reconstructed as physical limb velocity.
-			for ( const [ a, b ] of this.selfPairs || [] ) {
-				const c = capsuleContact( a, b ); if ( ! c ) continue;
-				const n = c.normal, ra = { x: c.point.x - a.x.x, y: c.point.y - a.x.y, z: c.point.z - a.x.z }, rb = { x: c.point.x - b.x.x, y: c.point.y - b.x.y, z: c.point.z - b.x.z };
+			for ( const pair of this.selfPairs || NONE ) {
+				const a = pair[ 0 ], b = pair[ 1 ], c = capsuleContactTo( a, b, _sc ); if ( ! c ) continue;
+				const n = c.normal, ra = _sa, rb = _sb; ra.x = c.point.x - a.x.x; ra.y = c.point.y - a.x.y; ra.z = c.point.z - a.x.z; rb.x = c.point.x - b.x.x; rb.y = c.point.y - b.x.y; rb.z = c.point.z - b.x.z;
 				const l = Math.min( DEPEN * h, Math.max( 0, c.penetration - 0.001 ) ) / ( this.wPos( a, ra, n ) + this.wPos( b, rb, n ) );
-				const P = { x: n.x * l, y: n.y * l, z: n.z * l };
+				const P = _sP; P.x = n.x * l; P.y = n.y * l; P.z = n.z * l;
 				this.applyPos( a, ra, P, - 1 ); this.applyPos( b, rb, P, 1 );
 				this.stats.selfContacts ++;
 			}
@@ -838,7 +892,7 @@ export class Ragdoll {
 			// remaining coordinate error, with a bounded three-pass budget.
 			for ( let pass = 0; pass < 3; pass ++ ) {
 				let repairs = 0;
-				for ( const c of this.joints ) if ( jointCoordinates( c.parent, c ).some( a => a.angle < a.min - .5 * D2R || a.angle > a.max + .5 * D2R ) ) { this.solveJoint( c, false ); repairs ++; }
+				for ( const c of this.joints ) if ( this.outsideLimits( c ) ) { this.solveJoint( c, false ); repairs ++; }
 				if ( ! repairs ) break;
 			}
 			this.projectAnchors();
@@ -851,21 +905,27 @@ export class Ragdoll {
 
 
 			// Coupled contact iterations: geometric repair does not fund friction.
-			const response = articulatedContact( this, { viscosityStep: ( this.opts.jointViscosity ?? JOINT_VISCOSITY ) * h, deferWriteback: true } );
+			if ( this._response?.bodies !== this.bodies ) this._response = new ArticulatedResponse( this );
+			const response = this._response.reset( ( this.opts.jointViscosity ?? JOINT_VISCOSITY ) * h, true );
 			if ( this.debugStep ) this.debugResponse = response;
 			this.debugStep?.( 'base', s );
 			for ( let i = 0; i < nc; i ++ ) { const c = this.contacts[ i ]; c.normalImpulse = 0; c.normalMass = null; c.tx = c.ty = c.tz = 0; }
-			const self = [];
-			for ( const [ a, b ] of this.selfPairs || [] ) {
-				const ct = capsuleContact( a, b ); if ( ! ct ) continue;
-				self.push( { a, b, n: ct.normal, ra: { x: ct.point.x - a.x.x, y: ct.point.y - a.x.y, z: ct.point.z - a.x.z }, rb: { x: ct.point.x - b.x.x, y: ct.point.y - b.x.y, z: ct.point.z - b.x.z }, impulse: 0 } );
+			// the self contacts' records are kept and refilled each substep (their arms are the response's cache keys)
+			const self = this.selfContacts || ( this.selfContacts = [] );
+			let ns = 0;
+			for ( const pair of this.selfPairs || NONE ) {
+				const a = pair[ 0 ], b = pair[ 1 ], ct = capsuleContactTo( a, b, _sc ); if ( ! ct ) continue;
+				const s = self[ ns ] || ( self[ ns ] = { a: null, b: null, n: V(), ra: V(), rb: V(), impulse: 0, inverseMass: null } );
+				ns ++;
+				s.a = a; s.b = b; s.n.x = ct.normal.x; s.n.y = ct.normal.y; s.n.z = ct.normal.z; s.impulse = 0; s.inverseMass = null;
+				s.ra.x = ct.point.x - a.x.x; s.ra.y = ct.point.y - a.x.y; s.ra.z = ct.point.z - a.x.z; s.rb.x = ct.point.x - b.x.x; s.rb.y = ct.point.y - b.x.y; s.rb.z = ct.point.z - b.x.z;
 			}
 			for ( let iteration = 0; iteration < 8; iteration ++ ) {
 				const limitChange = response.limits( h );
 				if ( this.debugStep ) { response.writeback(); this.debugStep( 'limits' + iteration, s ); }
-				if ( nc === 0 && self.length === 0 && limitChange < 1e-12 ) break;
+				if ( nc === 0 && ns === 0 && limitChange < 1e-12 ) break;
 				for ( let i = 0; i < nc; i ++ ) {
-					const ct = this.contacts[ i ], b = ct.b, n = ct.n, sv = ct.velocity || [ 0, 0, 0 ];
+					const ct = this.contacts[ i ], b = ct.b, n = ct.n, sv = ct.velocity || STILL;
 					response.pointVelocity( b, ct.r, _b );
 					const vn = ( _b.x - sv[ 0 ] ) * n.x + ( _b.y - sv[ 1 ] ) * n.y + ( _b.z - sv[ 2 ] ) * n.z;
 					const want = ct.vn < - 2.5 ? - ( this.opts.restitution ?? BOUNCE ) * ct.vn : 0;
@@ -884,8 +944,8 @@ export class Ragdoll {
 					}
 				}
 				if ( this.debugStep ) { response.writeback(); this.debugStep( 'ground' + iteration, s ); }
-				for ( const ct of self ) {
-					const { a, b, ra, rb, n } = ct;
+				for ( let i = 0; i < ns; i ++ ) {
+					const ct = self[ i ], a = ct.a, b = ct.b, ra = ct.ra, rb = ct.rb, n = ct.n;
 					const closing = response.relativeSpeed( a, ra, b, rb, n );
 					const total = Math.max( 0, ct.impulse - closing / ( ct.inverseMass ??= response.pairMass( a, ra, b, rb, n ) ) ), J = total - ct.impulse;
 					ct.impulse = total; response.pairImpulse( a, ra, b, rb, n.x * J, n.y * J, n.z * J );
@@ -909,6 +969,15 @@ export class Ragdoll {
 		this.stats.substeps = s; this.stats.substepsMax = Math.max( this.stats.substepsMax, s ); this.stats.consumedTime += elapsed;
 		this.lastLow = low;
 		this.supported = supported;
+
+	}
+
+	// a joint outside its limits by more than half a degree (the coupled-limit repair in simulate)
+	outsideLimits( c ) {
+
+		const m = jointCoordinatesTo( c.parent, c, _jr );
+		for ( let i = 0; i < m; i ++ ) { const a = _jr[ i ]; if ( a.angle < a.min - .5 * D2R || a.angle > a.max + .5 * D2R ) return true; }
+		return false;
 
 	}
 
@@ -951,16 +1020,21 @@ export class Ragdoll {
 
 			const t0 = performance.now();
 			const safe = this.safe;
-			this.bodies.forEach( ( b, i ) => { safe[ i * 7 ] = b.x.x; safe[ i * 7 + 1 ] = b.x.y; safe[ i * 7 + 2 ] = b.x.z; safe[ i * 7 + 3 ] = b.q.x; safe[ i * 7 + 4 ] = b.q.y; safe[ i * 7 + 5 ] = b.q.z; safe[ i * 7 + 6 ] = b.q.w; } );
+			for ( let i = 0; i < this.bodies.length; i ++ ) { const b = this.bodies[ i ]; safe[ i * 7 ] = b.x.x; safe[ i * 7 + 1 ] = b.x.y; safe[ i * 7 + 2 ] = b.x.z; safe[ i * 7 + 3 ] = b.q.x; safe[ i * 7 + 4 ] = b.q.y; safe[ i * 7 + 5 ] = b.q.z; safe[ i * 7 + 6 ] = b.q.w; }
 			this.simulate( dt );
 			this.t += dt;
 			this.ground( this.pelvis.x.x, this.pelvis.x.z, this.pelvis.x.y );
 			const movingSupport = this.supported ? this.groundProvider : null;
-			const carriedSpin = movingSupport?.angularVelocity?.() || [ 0, 0, 0 ];
+			const carriedSpin = movingSupport?.angularVelocity?.() || STILL;
+			const P0 = this.pelvis.x, flow = ! movingSupport && this.disasterField && P0.y < this.waterY ? this.disasterField.sample( P0.x, P0.y, P0.z, _flow ) : null;
+			const surfaceRate = flow && Number.isFinite( this.surfacePrev ) ? ( this.waterY - this.surfacePrev ) / dt : 0;
+			this.surfacePrev = flow ? this.waterY : NaN;
+			this.surfaceVy = flow ? this.surfaceVy + ( surfaceRate - this.surfaceVy ) * Math.min( 1, dt / SURFACE_TAU ) : 0;
+			_carried[ 0 ] = flow ? flow.ux : 0; _carried[ 1 ] = flow && ! this.supported ? this.surfaceVy : 0; _carried[ 2 ] = flow ? flow.uz : 0;
 			let e = 0, spin = 0, ok = true;
 			for ( const b of this.bodies ) {
 
-				const carried = movingSupport?.velocityAt( [ b.x.x, b.x.y, b.x.z ] ) || [ 0, 0, 0 ];
+				const carried = movingSupport?.velocityAt( [ b.x.x, b.x.y, b.x.z ] ) || _carried;
 				e += b.m * ( ( b.v.x - carried[ 0 ] ) ** 2 + ( b.v.y - carried[ 1 ] ) ** 2 + ( b.v.z - carried[ 2 ] ) ** 2 );
 				const wx = b.w.x - carriedSpin[ 0 ], wy = b.w.y - carriedSpin[ 1 ], wz = b.w.z - carriedSpin[ 2 ];
 				rot( b.q, b.ax, _a );
@@ -984,12 +1058,12 @@ export class Ragdoll {
 
 			}
 
-			const speed = Math.sqrt( e / this.mass ), P = this.pelvis.x, wet = P.y < this.waterY + 0.05 && this.waterY > this.ground( P.x, P.z, P.y ) + 0.4;
+			const speed = Math.sqrt( e / this.mass ), P = this.pelvis.x, inWater = P.y < this.waterY + 0.05, wet = inWater && this.waterY > this.ground( P.x, P.z, P.y ) + 0.4;
 			st.water = st.water || wet;
-			st.restSpeed = speed; st.restSpin = spin;
-			// in the sea: still enough, and floated back up to the surface
-			const floating = wet && P.y > this.waterY - 0.6;
-			this.rest = ( ( this.supported && ! wet ) || floating ) && speed < SETTLE_V * ( wet ? 1.8 : 1 ) && spin < SETTLE_W ? this.rest + dt : 0;
+			st.restSpeed = speed; st.restSpin = spin; st.surfaceVy = this.surfaceVy;
+			const floating = inWater && P.y > this.waterY - 0.6;
+			const swims = floating && wet, stands = ! wet && ( this.supported || floating );
+			this.rest = ( swims || ( stands && ! this.pinned ) ) && speed < SETTLE_V * ( wet ? 1.8 : 1 ) && spin < SETTLE_W ? this.rest + dt : 0;
 			this.measure();
 			this.focus.set( P.x, P.y, P.z );
 			this.floorY = Math.max( this.ground( P.x, P.z, P.y ), wet ? this.waterY - 1 : - Infinity );
@@ -1032,10 +1106,11 @@ export class Ragdoll {
 
 			}
 
-			const a1 = rot( p.q, c.aN, V() ), a2 = rot( c.q, c.ax, V() );
+			const a1 = rot( p.q, c.aN, _m1 ), a2 = rot( c.q, c.ax, _m2 );
 			const th = Math.acos( Math.min( 1, Math.max( - 1, dot( a1, a2 ) ) ) );
 			st.swing = Math.max( st.swing, ( th - c.cone ) / D2R );
-			const n = norm( { x: a1.x + a2.x, y: a1.y + a2.y, z: a1.z + a2.z } ), b1 = rot( p.q, c.bN, V() ), b2 = rot( c.q, c.bC, V() );
+			const n = _m5; n.x = a1.x + a2.x; n.y = a1.y + a2.y; n.z = a1.z + a2.z; norm( n );
+			const b1 = rot( p.q, c.bN, _m3 ), b2 = rot( c.q, c.bC, _m4 );
 			const d1 = dot( b1, n ), d2 = dot( b2, n );
 			b1.x -= n.x * d1; b1.y -= n.y * d1; b1.z -= n.z * d1; b2.x -= n.x * d2; b2.y -= n.y * d2; b2.z -= n.z * d2;
 			const phi = Math.atan2( dot( cross( b1, b2, _d ), n ), dot( b1, b2 ) );

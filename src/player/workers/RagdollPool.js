@@ -41,7 +41,7 @@ export class RagdollPool {
    const terrain=captureTerrain(rig.player.terrain,rig);if(!terrain)continue;
    const {state,near}=captureRig(rig,dt,{copy:false}),stamp=poseStamp(rig),id=entries.length;
    state.values.waterY=field?.waterAt(rig.focus.x,rig.focus.z)??0;
-   entries.push({rig,state,near,stamp,excluded,rigField:rig.disasterField,fieldTime:rig.disasterField?.time,water:rig.disasterField?.water,waterVersion:rig.disasterField?.water?.version,opts:JSON.stringify(scalarOptions(rig.opts)),job:{id,dt,state,terrain,field:!!rig.disasterField}});
+   entries.push({rig,state,near,stamp,excluded,rigField:rig.disasterField,fieldTime:rig.disasterField?.time,water:rig.disasterField?.water,waterVersion:rig.disasterField?.water?.version,gpuWater:rig.disasterField?.gpuWater,waterReadbacks:rig.disasterField?.gpuWater?.readbacks,outer:rig.disasterField?.outer,outerVersion:rig.disasterField?.outer?.version,gpuOuter:rig.disasterField?.gpuOuter,outerReadbacks:rig.disasterField?.gpuOuter?.readbacks,opts:JSON.stringify(scalarOptions(rig.opts)),job:{id,dt,state,terrain,field:!!rig.disasterField}});
   }
   if(entries.length<2)return null;
   const id=++this.sequence,batches=Array.from({length:Math.min(this.workers.length,entries.length)},()=>[]),cost=batches.map(()=>0);
@@ -55,11 +55,21 @@ export class RagdollPool {
     const entry=entries[result.id],{rig,stamp,near,excluded}=entry;
     if(result.error||excluded.some(b=>overlaps(b,result.bounds))){this.stats.fallback++;this.stats.lastFallback=result.error??'moving support or air modifier';continue;}
     rig._preparedSimulation={dt,consume:(r,step)=>{
-     if(step!==dt||r.phase!=='sim'||!unchanged(r,stamp)||r.disasterField!==entry.rigField||r.disasterField?.time!==entry.fieldTime||r.disasterField?.water!==entry.water||r.disasterField?.water?.version!==entry.waterVersion||JSON.stringify(scalarOptions(r.opts))!==entry.opts){this.stats.fallback++;this.stats.lastFallback=`stale: dt=${step}/${dt}, phase=${r.phase}, pose=${unchanged(r,stamp)}, field=${r.disasterField===entry.rigField}, clock=${r.disasterField?.time===entry.fieldTime}, water=${r.disasterField?.water===entry.water}, grid=${r.disasterField?.water?.version===entry.waterVersion}`;return false;}
+     if(step!==dt||r.phase!=='sim'||!unchanged(r,stamp)||r.disasterField!==entry.rigField||r.disasterField?.time!==entry.fieldTime||r.disasterField?.water!==entry.water||!steady(r.disasterField?.water,entry.waterVersion,entry.gpuWater,entry.waterReadbacks,r.disasterField?.gpuWater)||r.disasterField?.outer!==entry.outer||!steady(r.disasterField?.outer,entry.outerVersion,entry.gpuOuter,entry.outerReadbacks,r.disasterField?.gpuOuter)||JSON.stringify(scalarOptions(r.opts))!==entry.opts){this.stats.fallback++;this.stats.lastFallback=`stale: dt=${step}/${dt}, phase=${r.phase}, pose=${unchanged(r,stamp)}, field=${r.disasterField===entry.rigField}, clock=${r.disasterField?.time===entry.fieldTime}, water=${r.disasterField?.water===entry.water}, grid=${steady(r.disasterField?.water,entry.waterVersion,entry.gpuWater,entry.waterReadbacks,r.disasterField?.gpuWater)}, ring=${r.disasterField?.outer===entry.outer&&steady(r.disasterField?.outer,entry.outerVersion,entry.gpuOuter,entry.outerReadbacks,r.disasterField?.gpuOuter)}`;return false;}
      applyRigResult(r,result,near);this.stats.accepted++;return true;
     }};
    }
   }).catch(error=>{this.stats.fallback+=entries.length;this.fail(error);});
  }
 }
+// The water a job read is the host grid as it stood at dispatch. Two things step a grid's version: the frame's own
+// code (the CPU solver's step in Field.advance, a host write such as a launch or an impulse, WaterGrid.blend/pack)
+// and the GPU solver's readback, which lands whenever its mapping resolves (WaterGridGPU.readback, never awaited by
+// the frame). A frame that runs in one task sees a readback only after it ends; a frame waiting here at the barrier
+// let it land mid-frame, and every flood result was thrown away as stale and solved again on the main thread
+// (10 m tsunami, flood on land: 1,319 of 2,929 discarded, all for this, test/articulated-flood.mjs). A step the
+// readbacks alone account for (the same GPU grid, as many readbacks as version steps) belongs to the next interval,
+// as it would in a frame that did not wait: the job's water is the water the serial frame uses for this one. Any
+// other step is a write inside the frame and the interval goes to the serial solver, once.
+function steady(grid,version,gpu,readbacks,live){return grid?.version===version||!!gpu&&live===gpu&&grid.version-version===gpu.readbacks-readbacks;}
 function scalarOptions(opts){return [opts.sub,opts.jointViscosity,opts.friction,opts.restitution,opts.mass];}

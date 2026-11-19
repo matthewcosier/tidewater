@@ -33,6 +33,7 @@
 // the gain is target minus the file's measured loudness (soundBank.js).
 
 import { WORLD } from '../world/WorldLayout.js';
+import { BED_CEILING, SHOT_CEILING, busGain, stageCurve } from '../disasters/DisasterSound.js';
 import { BANK } from './soundBank.js';
 
 const clamp = ( v, a, b ) => ( v < a ? a : v > b ? b : v );
@@ -116,7 +117,7 @@ const STEP = {
 };
 
 // max simultaneous one-shot voices per category (oldest is faded out beyond this)
-const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, whistle: 1 };
+const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, whistle: 1, dis: 12 }; // dis: src/disasters/DisasterSound.js MAX_VOICES
 
 // loaded at resume(); everything else on first use
 const CORE = [ 'surf_crash', 'surf_wash', 'surf_backwash', 'surf_far', 'wind', 'palms', 'step_sand', 'step_wetsand', 'step_wood', 'step_water', 'step_grass', 'splash', 'swim' ];
@@ -129,7 +130,7 @@ const EMPTY = {};
 export class SoundScape {
 
 	// Does not touch Web Audio: the context is created on the first resume() (autoplay policy).
-	// shore (optional): { shore: ShoreWaves, field: shore field { res, data }, terrain: TerrainData }; found
+	// shore (optional): { shore: ShoreWaves, field: shore field { data, resX, resZ, cellSize, originX, originZ }, terrain: TerrainData }; found
 	// on window.__app when not given (see attachShore()).
 	constructor( { baseUrl = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'audio/', shore = null } = {} ) {
 
@@ -158,6 +159,10 @@ export class SoundScape {
 		this._stAt = { x: 1e9, z: 1e9, t: - 1e9 };
 		this._fakeT = 3;
 		this._warned = new Set();
+		this.disaster = null; // the disaster bus's input and the volume row's gain (opened at an event's launch, released when idle)
+		this._disBeds = new Map(); // key -> { src, lp, gain, trim, lufs, quiet }
+		this._disGain = busGain(); // the row's default: no shot ever passes a bus louder than the row allows
+		this._disCurve = null; // the bus's last stage (DisasterSound.stageCurve), computed once as audio is unlocked
 		this.env = {
 			lx: 0, ly: 1.7, lz: 0, fx: 0, fy: 0, fz: - 1, ux: 0, uy: 1, uz: 0,
 			u: 0, depth: 0, surf: 0.5, shoreDist: 60, onLand: true, wind: 7, day: 1, nearPier: false, hour: null,
@@ -255,6 +260,205 @@ export class SoundScape {
 
 		this._volume = clamp( num( v, this._volume ), 0, 1 );
 		this._applyVolume();
+
+	}
+
+	// ------------------------------------------------------------------ disaster sound (src/disasters/DisasterSound.js)
+	// One bus for every disaster sound (disasterOpen): muffled as the rest is when the lens goes under, bounded, and under
+	// the master volume, the mute and the limiter. Its own gain is the Disaster laboratory's sound volume and mute.
+	// The caller gives each level as loudness at the listener (LUFS), distance, spreading and air already applied, so a
+	// panner here only places the sound (rolloff 0). Beds are keyed by the caller, so a disaster bed can play a recording
+	// the ambience also plays (the tornado's wind on wind.ogg) on a gain of its own.
+
+	setDisasterGain( g ) {
+
+		this._disGain = clamp( num( g, 1 ), 0, 4 );
+		if ( this.disaster ) this._ramp( this.disaster.gain, this._disGain, 0.05 );
+
+	}
+
+	// asks for one recording a disaster may play (DisasterSound asks for each at an event's launch, one a frame), so the
+	// first break of a session finds its buffer (a recording is otherwise fetched on its first use, which plays nothing)
+	disasterWant( bank ) {
+
+		if ( this.enabled ) this._want( bank );
+
+	}
+
+	// the rest of the mix gives way to the disaster: the gain of every other sound above the water (this.above), down
+	// over 0.25 s and back over 1.5 s (DisasterSound.duckGain sets how far)
+	setDisasterDuck( g ) {
+
+		if ( ! this.above ) return;
+		const v = clamp( num( g, 1 ), 0, 1 ), last = this.above.gain._t ?? 1;
+		this._ramp( this.above.gain, v, v < last ? 0.25 : 1.5 );
+
+	}
+
+	get restGain() {
+
+		return this.above ? this.above.gain.value : 1;
+
+	}
+
+	get disasterGain() {
+
+		return this.disaster ? this.disaster.gain.value : 0;
+
+	}
+
+	// live disaster sources (beds and one-shots), nodes and one-shot voices
+	get disasterSources() {
+
+		return this._disBeds.size + ( this._voices.dis ? this._voices.dis.length : 0 );
+
+	}
+
+	get disasterVoices() {
+
+		return this._voices.dis ? this._voices.dis.length : 0;
+
+	}
+
+	get disasterNodes() {
+
+		return 3 * this._disBeds.size + 4 * this.disasterVoices + ( this.disaster ? 5 : 0 );
+
+	}
+
+	// The disaster bus: every disaster sound -> the volume row's gain -> the underwater muffling (two low-passes and the
+	// above-water level, the same values as the island's above-water chain, set in _mix) -> the bound (a wave shaper on
+	// DisasterSound.stageCurve, no oversampling: never more than -3 dBFS) -> the master volume and limiter. It goes round
+	// this.above, whose gain is the rest of the mix giving way. Opened at an event's launch (DisasterSound.play), not by
+	// the first sound that needs it; released when nothing has sounded for a few seconds with no event.
+	disasterOpen() {
+
+		if ( this.disaster || ! this.ctx || ! this.master ) return;
+		const c = this.ctx;
+		this.disasterOut = c.createWaveShaper();
+		this.disasterOut.curve = this._disCurve ?? ( this._disCurve = stageCurve() );
+		this.disasterOut.oversample = 'none';
+		this.disasterOut.connect( this.master );
+		this.disasterWet = c.createGain();
+		this.disasterWet.gain.value = this.aboveOut.gain.value;
+		this.disasterWet.connect( this.disasterOut );
+		const m2 = c.createBiquadFilter(), m1 = c.createBiquadFilter();
+		m2.type = m1.type = 'lowpass';
+		m1.Q.value = this.muffle[ 0 ].Q.value;
+		m2.Q.value = this.muffle[ 1 ].Q.value;
+		m1.frequency.value = this.muffle[ 0 ].frequency.value;
+		m2.frequency.value = this.muffle[ 1 ].frequency.value;
+		m2.connect( this.disasterWet );
+		m1.connect( m2 );
+		this.disasterMuffle = [ m1, m2 ];
+		this.disaster = c.createGain();
+		this.disaster.gain.value = this._disGain;
+		this.disaster.connect( m1 );
+
+	}
+
+	// releases the bus (no node of it left) and puts the rest of the mix back at its level
+	disasterRelease() {
+
+		if ( ! this.disaster ) return;
+		for ( const n of [ this.disaster, this.disasterMuffle[ 0 ], this.disasterMuffle[ 1 ], this.disasterWet, this.disasterOut ] ) n.disconnect();
+		this.disaster = this.disasterMuffle = this.disasterWet = this.disasterOut = null;
+		const g = this.above.gain, t = this.ctx.currentTime;
+		g.cancelScheduledValues( t );
+		g.setValueAtTime( 1, t );
+		g._t = 1;
+
+	}
+
+	_disBus() {
+
+		if ( ! this.disaster ) this.disasterOpen();
+		return this.disaster;
+
+	}
+
+	// a looping bed at `lufs` at the listener (-Infinity: fade out), low-passed at `cutoff` Hz; started when it first
+	// rises over -62 LUFS, stopped and disconnected after 2 s under -66 LUFS
+	disasterBed( key, bank, lufs, rate = 1, cutoff = 20000 ) {
+
+		if ( ! this.enabled ) return;
+		const c = this.ctx, now = c.currentTime;
+		const on = Number.isFinite( lufs ) && lufs > - 66;
+		let bed = this._disBeds.get( key );
+		if ( ! bed ) {
+
+			if ( ! ( Number.isFinite( lufs ) && lufs > - 62 ) ) return;
+			const info = BANK[ bank ], buf = this._want( bank );
+			if ( ! buf || ! info ) return;
+			const src = c.createBufferSource();
+			src.buffer = buf;
+			src.loop = true;
+			src.playbackRate.value = rate;
+			const lp = c.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.Q.value = 0.5;
+			lp.frequency.value = clamp( num( cutoff, 20000 ), 60, 20000 );
+			const g = c.createGain();
+			g.gain.value = 0;
+			src.connect( lp ).connect( g ).connect( this._disBus() );
+			src.start( now + 0.02, Math.random() * buf.duration );
+			bed = { src, lp, gain: g, trim: buf.numberOfChannels === 1 ? MONO : 1, lufs: Array.isArray( info.lufs ) ? info.lufs[ 0 ] : info.lufs, quiet: - 1, first: true };
+			this._disBeds.set( key, bed );
+
+		}
+
+		this._ramp( bed.gain.gain, on ? dB( clamp( Math.min( lufs, BED_CEILING ) - bed.lufs, - 80, 24 ) ) * bed.trim : 0, bed.first ? 0.8 : on ? 0.25 : 0.4 );
+		bed.first = false;
+		this._ramp( bed.src.playbackRate, clamp( num( rate, 1 ), 0.25, 4 ), 0.15 );
+		this._ramp( bed.lp.frequency, clamp( num( cutoff, 20000 ), 60, 20000 ), 0.2 );
+		if ( on ) bed.quiet = - 1;
+		else if ( bed.quiet < 0 ) bed.quiet = now;
+		else if ( now - bed.quiet > 2 ) {
+
+			try {
+
+				bed.src.stop();
+
+			} catch ( e ) { /* already stopped */ }
+
+			bed.src.disconnect();
+			bed.lp.disconnect();
+			bed.gain.disconnect();
+			this._disBeds.delete( key );
+
+		}
+
+	}
+
+	// a one-shot slice of `bank` placed at (x, y, z) at `lufs` at the listener, low-passed at `cutoff` Hz (the air)
+	disasterShot( bank, x, y, z, lufs, rate = 1, cutoff = 20000, pick = - 1 ) {
+
+		if ( ! this.enabled || ! this._want( bank ) || ! BANK[ bank ] ) return null;
+		const c = this.ctx;
+		const p = this._panner( this._disBus(), 1, 0 );
+		if ( p.positionX ) {
+
+			p.positionX.value = x;
+			p.positionY.value = y;
+			p.positionZ.value = z;
+
+		} else p.setPosition( x, y, z );
+		const lp = c.createBiquadFilter();
+		lp.type = 'lowpass';
+		lp.frequency.value = clamp( num( cutoff, 20000 ), 60, 20000 );
+		lp.connect( p );
+		const n = BANK[ bank ].slices ? BANK[ bank ].slices.length : 1;
+		const v = this._shot( bank, 'dis', lp, Math.min( num( lufs, - Infinity ), SHOT_CEILING ), rate, 0, pick >= 0 ? pick % n : - 1 );
+		if ( ! v ) {
+
+			lp.disconnect();
+			p.disconnect();
+			return null;
+
+		}
+
+		v.extra = [ lp, p ];
+		return v;
 
 	}
 
@@ -527,6 +731,7 @@ export class SoundScape {
 		};
 
 		this._panner = panner;
+		this._disCurve = stageCurve(); // the disaster bus's bound, computed once here rather than in an event's frame
 		this.limiter = c.createDynamicsCompressor();
 		this.limiter.threshold.value = - 4;
 		this.limiter.knee.value = 4;
@@ -771,12 +976,14 @@ export class SoundScape {
 	// shore field at (x, z): travel time T, direction (dx, dz) × exposure, time to the shoreline Ts
 	_field( x, z, o ) {
 
-		const { field, terrain } = this._shore;
-		const res = field.res, data = field.data;
-		const fx = clamp( ( x - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
-		const fz = clamp( ( z - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
+		// the field carries its own rectangle (ShoreField.js: resX x resZ cells of cellSize m from
+		// originX, originZ): texel centres at origin + ( i + 0.5 ) * cellSize, clamp and stride per axis
+		const field = this._shore.field;
+		const resX = field.resX, resZ = field.resZ, cell = field.cellSize, data = field.data;
+		const fx = clamp( ( x - field.originX ) / cell - 0.5, 0, resX - 1.001 );
+		const fz = clamp( ( z - field.originZ ) / cell - 0.5, 0, resZ - 1.001 );
 		const i = Math.floor( fx ), j = Math.floor( fz ), tx = fx - i, tz = fz - j;
-		const k = ( j * res + i ) * 4, kr = k + res * 4;
+		const k = ( j * resX + i ) * 4, kr = k + resX * 4;
 		for ( let c = 0; c < 4; c ++ ) {
 
 			const a = data[ k + c ], b = data[ k + 4 + c ], cc = data[ kr + c ], d = data[ kr + 4 + c ];
@@ -1068,6 +1275,14 @@ export class SoundScape {
 		this._ramp( this.muffle[ 0 ].frequency, f, 0.04 );
 		this._ramp( this.muffle[ 1 ].frequency, Math.min( 20000, f * 1.4 ), 0.04 );
 		this._ramp( this.aboveOut.gain, lerp( 1, 0.4 / ( 1 + e.depth / 5 ), u ), 0.05 );
+		if ( this.disaster ) {
+
+			// the disaster bus is muffled with the rest (its own copies: it goes round the rest of the mix's gain)
+			this._ramp( this.disasterMuffle[ 0 ].frequency, f, 0.04 );
+			this._ramp( this.disasterMuffle[ 1 ].frequency, Math.min( 20000, f * 1.4 ), 0.04 );
+			this._ramp( this.disasterWet.gain, lerp( 1, 0.4 / ( 1 + e.depth / 5 ), u ), 0.05 );
+
+		}
 		this._ramp( this.under.gain, u, 0.06 );
 		const wantUnder = u > 0 || ( ! e.onLand && e.ly < 2.5 );
 		this._bed( 'under_reef', wantUnder ? dB( MIX.reef ) * ( 0.8 + 0.3 * deep ) / dB( BANK.under_reef.lufs ) : 0, now, 0.5 );
