@@ -79,13 +79,15 @@ import {SkinnedModel} from '../src/engine/render/Skinning.js';
 import {StorageBuffer} from '../src/engine/gpu/Texture.js';
 import {loadModel} from '../src/rally/VehicleModel.js';
 import {GliderBody} from '../src/glider/GliderBody.js';
-test('A strong real updraft releases surface control to the actual articulated player using inherited momentum',async()=>{
+test('A surge over a swimmer releases surface control to the actual articulated player using inherited momentum',async()=>{
  const bytes=await readFile(new URL('../public/models/characters/player.glb',import.meta.url)),write=StorageBuffer.prototype.write;
  StorageBuffer.prototype.write=function(data){this.pendingData=data.slice();};
  try{
   const f=fixture({ground:-20,mode:'swim'}),model=new SkinnedModel(parseGLB(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)));
   f.player.avatar={model,group:model.group,idle:{clip:model.clips.get('idle'),time:0,weight:1,target:1}};model.group.position.copy(f.player.position);model.group.position.y-=1.458;
-  f.player.velocity.set(1,0,-1);const e=f.field.start('tornado',{x:0,z:0,intensity:120,radius:100,speed:0});e.time=2;
+  // A tornado's updraft is zero at the water surface (src/disasters/TornadoVortex.js), so the swimmer's other release
+  // drives the handoff here: the water rising 3 m over the head.
+  f.player.velocity.set(1,0,-1);f.setWater(3);
   f.tick();assert.equal(f.player.mode,'ragdoll');assert.equal(f.player.ragFrom,'swim');assert.equal(f.player.rag.disasterField,f.field);assert.equal(f.player.rag.bodies.length,14);assert.equal(f.player.rag.bodies.reduce((m,b)=>m+b.m,0),75);
   for(const b of f.player.rag.bodies){assert.ok(new Vector3(b.v.x,b.v.y,b.v.z).distanceTo(f.player.velocity)<1e-10,'handoff must inherit velocity without a launch impulse');assert.deepEqual(b.w,{x:0,y:0,z:0});}
   const before=f.player.rag.bodies.map(b=>({...b.x}));f.player.rag.simulate(1/60);assert.ok(f.player.rag.bodies.some((b,i)=>Math.hypot(b.x.x-before[i].x,b.x.y-before[i].y,b.x.z-before[i].z)>.005));assert.ok(f.player.rag.bodies.every(b=>Number.isFinite(b.x.x+b.x.y+b.x.z+b.v.x+b.v.y+b.v.z)));

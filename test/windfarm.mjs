@@ -9,6 +9,7 @@ import { Colliders } from '../src/world/Colliders.js';
 import { verifySites, prepareWindFarmSites, FARM_SITES } from '../src/windfarm/Sites.js';
 import { TerrainData } from '../src/world/TerrainData.js';
 import { DisasterField } from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 
 const wind = speed => ({ wx:0, wy:0, wz:-speed / Math.cos(R.tilt), ax:0, ay:0, az:0, height:0, ux:0, uz:0 });
 function run(t, seconds, speed=8, ground={}) { for(let i=0;i<Math.round(seconds*20);i++)t.advance(0.05,wind(speed),{...wind(0),...ground}); return t; }
@@ -126,7 +127,7 @@ test('Blade release transfers kinetic energy out of the attached rotor without d
 });
 
 test('The same live tornado sample drives rotor cut-out and a damaged rotor stops electrical production',()=>{
- const field=new DisasterField(()=>25);field.start('tornado',{x:0,z:0,radius:100,intensity:120,speed:0,duration:30});
+ const field=new DisasterField(()=>25),e=field.start('tornado',{x:0,z:0,radius:100,intensity:120,speed:0,duration:60});e.time=tornadoLifecycle(e,{}).genesis;
  const t=new TurbineModel({x:18,z:0,groundY:25,baseY:25.45,yaw:Math.atan2(.28,-1)});
  let sampledPeak=0;
  for(let i=0;i<240;i++){field.advance(.05);const hub=field.sample(18,115.45,0,{}),base=field.sample(18,25.1,0,{});sampledPeak=Math.max(sampledPeak,Math.hypot(hub.wx,hub.wy,hub.wz));t.advance(.05,hub,base);}

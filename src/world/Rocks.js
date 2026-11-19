@@ -129,9 +129,10 @@ export class Rocks {
 
 		const rockAt = ( x, z ) => {
 
-			const fx = ( x - T.origin ) / T.texel - 0.5, fz = ( z - T.origin ) / T.texel - 0.5;
-			const i = Math.max( 0, Math.min( T.res - 2, Math.floor( fx ) ) ), j = Math.max( 0, Math.min( T.res - 2, Math.floor( fz ) ) );
-			return T.rock[ j * T.res + i ];
+			// per axis: the terrain domain is a rectangle (resX columns along x, resZ rows along z)
+			const fx = ( x - T.originX ) / T.texel - 0.5, fz = ( z - T.originZ ) / T.texel - 0.5;
+			const i = Math.max( 0, Math.min( T.resX - 2, Math.floor( fx ) ) ), j = Math.max( 0, Math.min( T.resZ - 2, Math.floor( fz ) ) );
+			return T.rock[ j * T.resX + i ];
 
 		};
 
@@ -320,13 +321,14 @@ export class Rocks {
 		// ---- seabed: low algae-covered rocks in the rubble patches (2 - 10 m deep)
 		if ( T.rubble ) {
 
-			const res = T.res;
+			// row-major over the rectangular domain: stride resX, j bounded by resZ
+			const resX = T.resX, resZ = T.resZ;
 			for ( let z = - 120; z < 360; z += 3 ) for ( let x = - 420; x < 420; x += 3 ) {
 
 				const jx = x + ( rand() - 0.5 ) * 3, jz = z + ( rand() - 0.5 ) * 3;
-				const i = Math.floor( jx - T.origin ), j = Math.floor( jz - T.origin );
-				if ( i < 0 || j < 0 || i >= res || j >= res ) continue;
-				if ( T.rubble[ j * res + i ] < 170 || rand() > 0.12 ) continue;
+				const i = Math.floor( ( jx - T.originX ) / T.texel ), j = Math.floor( ( jz - T.originZ ) / T.texel );
+				if ( i < 0 || j < 0 || i >= resX || j >= resZ ) continue;
+				if ( T.rubble[ j * resX + i ] < 170 || rand() > 0.12 ) continue;
 				const h = T.heightAt( jx, jz );
 				if ( h > - 2 || h < - 10 ) continue;
 				add( jx, jz, 0.45 + rand() * rand() * 1.1, pick( [ 3, 3, 1, 0 ] ), { sink: 0.4, tilt: 0.5, align: 0.6, tumble: 0.5 } );

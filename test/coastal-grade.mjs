@@ -12,16 +12,19 @@ const terrain = new TerrainData();
 for ( const place of Object.values( PLACES ) ) applyTerminalSite( terrain, undefined, place );
 const before = Float32Array.from( terrain.heights );
 const route = new CoastalRoute( terrain );
-const { res, heights } = terrain;
+// row-major over the rectangular domain: x over resX columns, z over resZ rows, stride resX
+const { resX, resZ, heights } = terrain;
 
 // Cut and fill run at 1:1 where there is room. Where two legs of the mountain road pass
 // close at very different heights the bank between them has to be steeper; 1.4 m per metre
 // (about 54 degrees) is the most grading may add. The old nearest-leg grading left 8 m walls.
 test( 'Grading never leaves a cliff between neighbouring ground samples', () => {
 	const walls = [];
-	for ( let z = 1; z < res - 1; z ++ ) for ( let x = 1; x < res - 1; x ++ ) {
-		const i = z * res + x;
-		for ( const j of [ i + 1, i + res ] ) {
+	// a missing resX / resZ would make the scan below loop zero times and pass empty
+	assert.ok( Number.isInteger( resX ) && Number.isInteger( resZ ) && heights.length === resX * resZ, `heights hold ${ heights.length } samples for a ${ resX } x ${ resZ } grid` );
+	for ( let z = 1; z < resZ - 1; z ++ ) for ( let x = 1; x < resX - 1; x ++ ) {
+		const i = z * resX + x;
+		for ( const j of [ i + 1, i + resX ] ) {
 			if ( heights[ i ] === before[ i ] && heights[ j ] === before[ j ] ) continue;
 			const step = Math.abs( heights[ i ] - heights[ j ] ), natural = Math.abs( before[ i ] - before[ j ] );
 			if ( step > Math.max( 1.4, natural + 0.2 ) ) walls.push( `${ step.toFixed( 2 ) } m at texel (${ x }, ${ z })` );

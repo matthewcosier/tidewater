@@ -1,11 +1,3 @@
-// A severe tornado must not leave the player's ragdoll with limbs buried in the hillside, whatever
-// track, speed surges and intensity pulses the event's seed draws (craft rule 6: assert a physical
-// band across several seeds). Found by the L10 seed sweep (2026-10-05): at the player's own 60 Hz
-// cadence, 4 of 8 seeds left a limb 2.1 to 8.5 cm into the real terrain after the field stopped
-// (seed 1: 8.3 cm, seed 3: 8.5 cm; seed 1743774815: right forearm 5.7 cm on a 34 deg slope at
-// 6.5 s; seed 1993035085: left upper arm 2.8 cm while at rest at 8.6 s). The bound is the one
-// test/articulated-solver.mjs holds for the fixed seed: 2 cm (a limb sphere's skin, not burial).
-// Real terrain, real rig and the shared DisasterField; only asset bytes and GPU transport are stubbed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -13,6 +5,7 @@ import { Player } from '../src/player/Player.js';
 import { TerrainData } from '../src/world/TerrainData.js';
 import { Colliders } from '../src/world/Colliders.js';
 import { DisasterField } from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 import { Vector3, PerspectiveCamera } from '../src/engine/index.js';
 import { parseGLB } from '../src/engine/loaders/GLTF.js';
 import { SkinnedModel } from '../src/engine/render/Skinning.js';
@@ -28,9 +21,6 @@ const RUN = 12; // s, every burial seen in the sweep happened before 9 s
 const MAX_BURIAL = 0.02; // m
 const SEEDS = [ 1, 2, 3, 4, 5, 6, 7, 8 ];
 const at = new Vector3();
-// A fixed site, not WORLD.start: the start moved for gameplay (the baseline, 53.6,-77 to 55,-71) and took this
-// fixture with it, so seeds 4 and 5 then measured a different hillside (2.0 and 2.1 cm). The sweep and the
-// contact-plane fix were made on the old start; the same site as test/articulated-solver.mjs.
 const SITE = { x: 53.6, z: - 77 }; // m
 
 function fixture( seed ) {
@@ -44,8 +34,8 @@ function fixture( seed ) {
 	player.avatar = { model, group: model.group, idle: model.layers[ 0 ] };
 	// The slider's maximum, 20 m upwind: the same severe case as the articulated-solver fixture.
 	const field = new DisasterField( ( x, z ) => terrain.heightAt( x, z ) );
-	field.start( 'tornado', { x: player.position.x - 20, z: player.position.z, intensity: 120, radius: 180, speed: 0, duration: 40, seed } );
-	field.events.get( 'tornado' ).time = 1.2;
+	const e = field.start( 'tornado', { x: player.position.x - 20, z: player.position.z, intensity: 120, radius: 180, speed: 0, duration: 40, seed } );
+	e.time = tornadoLifecycle( e, {} ).genesis + 1.2; // 1.2 s into the mature stage
 	assert.equal( player.ragdoll( null, null, { velocity: new Vector3(), spin: new Vector3() } ), true );
 	player.rag.disasterField = field;
 	return { rig: player.rag, terrain, field };

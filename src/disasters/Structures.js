@@ -35,6 +35,10 @@ export const PIECE_MASS=25; // kg: heavier, or longer than PIECE_SIZE, is a larg
 export const PIECE_SIZE=1.5; // m
 const DEBRIS_PER_FRAME=64; // pieces handed to the debris hook per frame
 export const PIECE_WAIT=1; // s a large piece waits for a spawn token before it goes to the debris hook instead
+// capacity-seconds of overload (damage integrates utilization - 1 over time) after which a record whose fracture
+// keeps being deferred for want of a rigid-body slot fails anyway through the debris hook (washAway). At the
+// 25 m pier tsunami's 13-250 x capacity that is under 0.1 s; a record barely over capacity creeps for longer.
+const STARVED_FAIL=1;
 export function saveSpan(s){const p=s.geo.attributes.position,n=s.geo.attributes.normal,copy={...s,pos:p.array.slice(s.start*3,(s.start+s.count)*3),nrm:n?.array.slice(s.start*3,(s.start+s.count)*3)};if(s.frame){copy.restorePos=copy.pos.slice();copy.restoreNrm=copy.nrm?.slice();const nm=new Matrix3().getNormalMatrix(s.frame);for(let i=0;i<copy.pos.length;i+=3){v.fromArray(copy.pos,i).applyMatrix4(s.frame).toArray(copy.pos,i);if(copy.nrm)v.fromArray(copy.nrm,i).applyMatrix3(nm).normalize().toArray(copy.nrm,i);}copy.inverse=s.frame.clone().invert();}return copy;}
 export function spanBounds(spans){const lo=new Vector3(Infinity,Infinity,Infinity),hi=new Vector3(-Infinity,-Infinity,-Infinity);for(const s of spans){const a=s.pos??s.geo.attributes.position.array.subarray(s.start*3,(s.start+s.count)*3);for(let i=0;i<a.length;i+=3){v.fromArray(a,i);lo.min(v);hi.max(v);}}return {lo,hi,center:lo.clone().add(hi).multiplyScalar(0.5),half:hi.clone().sub(lo).multiplyScalar(0.5)};}
 export function restoreSpans(spans){for(const s of spans){markGeometryMotion(s.geo,s.start,s.count);s.geo.attributes.position.array.set(s.restorePos??s.pos,s.start*3);s.geo.attributes.position.needsUpdate=true;if(s.nrm){s.geo.attributes.normal.array.set(s.restoreNrm??s.nrm,s.start*3);s.geo.attributes.normal.needsUpdate=true;}}}
@@ -86,7 +90,10 @@ export class StructuralDamage {
    r.load=Math.hypot(seismic,wind+flood);r.capacity=mass*GRAVITY*mat.anchorG*r.anchorFactor;r.utilization=r.load/r.capacity;
    r.damage=Math.max(0,r.damage+dt*(r.utilization>1?(r.utilization-1):-.2));
    const exposed=s.shake>.25||Math.hypot(s.wx,s.wy,s.wz)>16||(depth>.08&&s.height>.1);
-   if(exposed&&(r.damage>0.08||r.utilization>.5)&&this.fracture(r))changed=true;
+   if(exposed&&(r.damage>0.08||r.utilization>.5)){r.starved=false;
+    if(this.fracture(r))changed=true;
+    else if(r.starved&&r.utilization>1&&r.damage>STARVED_FAIL&&this.washAway(r,s))changed=true;
+   }
   }
   if(this.releasePieces(dt))changed=true;
   // One deferred static rebuild per frame, run before the next physics step. No cameraCut: the pieces start where the building stood, so resetting TAA only smeared each break (test/disaster-frame-cost.mjs).
@@ -119,10 +126,6 @@ export class StructuralDamage {
   r.collidersChanged=false;
   return changed;
  }
- // A failed part takes only its own collider with it. Defect: the first rigid piece of a house
- // disabled every collider of the record, so the walls still standing became walk-through. On a record's
- // first failure its shell box (one box over the whole body: Buildings.js 'house', 'shed') is swapped for
- // one slab per wall and masonry part, in the shell's own frame; each failure then drops only its part's slab.
  releaseCollider(r,c){
   let changed=this.splitColliders(r);
   if(c.collider&&!c.collider.disasterDisabled){disableCollider(c.collider);changed=true;}
@@ -197,12 +200,21 @@ export class StructuralDamage {
   const event={x,y,z,vx,vy,vz,size:Math.max(c.hi[0]-c.lo[0],c.hi[1]-c.lo[1],c.hi[2]-c.lo[2]),mass:c.mass,area:c.area,kind:c.kind,material:c.spans[0]?.member?.material??r.material,record:r.name};
   for(const fn of this.debrisSinks)fn(event);
  }
+ // A failed record with no free rigid body (the village spent the budget first) still fails: its load path and
+ // colliders go at once, and its skin leaves through the debris hook carrying the local flow, as a large house
+ // piece does past PIECE_WAIT. Restore brings both back (restoreSpans, initialColliders).
+ washAway(r,s){
+  r.broken=true;for(const c of r.colliders)disableCollider(c);
+  const mat=STRENGTHS[r.material]??STRENGTHS.timber,h=r.half,mass=8*h.x*h.y*h.z*mat.density; // kg, bulk density
+  this.hidePiece({r,c:{center:r.center.toArray(),lo:r.lo.toArray(),hi:r.hi.toArray(),spans:r.spans,mass,area:4*h.y*Math.max(h.x,h.z),kind:'section'},vx:s.ux,vy:0,vz:s.uz});
+  return true;
+ }
  fractureLegacy(r){
   // Imported unstructured meshes retain their declared legacy coarse proxy.
   // Four sectors inside a geometrically clipped 10 m imported cell. Coarse rigid
   // proxies approximate assemblies; imported surfaces have no internal cut caps.
   const bins=[[],[],[],[]];for(const s of r.spans){const b=spanBounds([s]),i=(b.center.x>r.center.x?1:0)+(b.center.z>r.center.z?2:0);bins[i].push(s);}
-  const used=bins.filter(x=>x.length);if(this.bodies.size+used.length>this.bodyBudget){this.deferred++;return false;}
+  const used=bins.filter(x=>x.length);if(this.bodies.size+used.length>this.bodyBudget){r.starved=true;this.deferred++;return false;}
   const proxies=used.map(spans=>({spans,proxy:fragmentProxy(spanBounds(spans),this.app.terrainData)}));if(proxies.some(p=>!p.proxy)){this.deferred++;return false;}
   const created=[];for(const {spans,proxy:b} of proxies){const half=b.half,volume=8*half.x*half.y*half.z,mass=Math.max(2,volume*(STRENGTHS[r.material]?.density??65));
    const body={id:this.nextId++,kind:'structure',name:r.name,origin:b.center.clone(),position:b.center.clone(),quaternion:new Quaternion(),spans,half,mass,area:4*half.y*Math.max(half.x,half.z),volume:mass/(STRENGTHS[r.material]?.solidDensity??600),height:2*half.y,foundationCut:b.cut};
@@ -218,7 +230,7 @@ export class StructuralDamage {
   // Restore. Build the material description once, not every exposed frame.
   const members=r.memberDescriptions??=(materialMembers(r,terrain)),created=[],jointIds=[],anchorId=this.nextId++;
   const projectedCount=members.reduce((n,m)=>n+(!m.module&&m.material!=='masonry'&&m.length>1.5?2:1),0);
-  if(this.bodies.size+projectedCount>this.bodyBudget){this.deferred++;return false;}
+  if(this.bodies.size+projectedCount>this.bodyBudget){r.starved=true;this.deferred++;return false;}
   if(!physics.add_structure_anchor(anchorId,new Float32Array([...r.center.toArray(),0,0,0,1])))return false;
   const rollback=()=>{for(const id of jointIds){physics.remove_structure_joint(id);this.joints.delete(id);}for(const body of created)physics.sleep_prop(body.id);physics.remove_structure_anchor(anchorId);this.deferred++;return false;};
   for(const member of members){member.record=r;member.sections=[];member.severed=false;
@@ -247,7 +259,7 @@ export class StructuralDamage {
   const useful=members.filter(m=>m.sections.length);if(!useful.length)return rollback();
   // Member and anchor connection strengths scatter per run too (force and moment capacity).
   const strength=m=>capacityFactor(this.owner.runSeed,STREAM.member,r.scatterIndex*4096+members.indexOf(m),CAPACITY_COV[m.material]??CAPACITY_COV.timber);
-  const connect=(a,b,point,parameters,member=null,factor=1)=>{parameters[2]*=factor;parameters[3]*=factor;const id=this.nextId++;if(!physics.add_structure_joint(id,a,b,new Float32Array(point.toArray()),new Float32Array(parameters)))return false;jointIds.push(id);this.joints.set(id,{id,record:r,member,broken:false});if(member)member.joint=id;return true;};
+  const connect=(a,b,point,parameters,member=null,factor=1)=>{parameters[2]*=factor;parameters[3]*=factor;const id=this.nextId++;if(!physics.add_structure_joint(id,a,b,new Float32Array(point.toArray()),new Float32Array(parameters)))return false;jointIds.push(id);this.joints.set(id,{id,record:r,member,broken:false,a,b});if(member)member.joint=id;return true;};
   for(const m of useful)if(m.sections.length===2&&!connect(m.sections[0].id,m.sections[1].id,m.center,beamConnection(m),m,strength(m)))return rollback();
   let foundations=useful.filter(m=>m.grounded);if(!foundations.length)foundations=[useful.reduce((a,b)=>a.center.y-a.half.y<b.center.y-b.half.y?a:b)];
   const connected=new Set();for(const m of foundations){const body=m.sections.reduce((a,b)=>a.position.y<b.position.y?a:b),point=body.position.clone();point.y-=Math.min(body.half.x,body.half.y);

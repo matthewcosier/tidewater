@@ -197,10 +197,11 @@ export class DebrisPlacer {
 
 	_idx( x, z ) {
 
+		// nearest texel on the rectangular domain: i clamps to resX, j to resZ, rows are resX long
 		const T = this.T;
-		const i = Math.max( 0, Math.min( T.res - 1, Math.round( ( x - T.origin ) / T.texel - 0.5 ) ) );
-		const j = Math.max( 0, Math.min( T.res - 1, Math.round( ( z - T.origin ) / T.texel - 0.5 ) ) );
-		return j * T.res + i;
+		const i = Math.max( 0, Math.min( T.resX - 1, Math.round( ( x - T.originX ) / T.texel - 0.5 ) ) );
+		const j = Math.max( 0, Math.min( T.resZ - 1, Math.round( ( z - T.originZ ) / T.texel - 0.5 ) ) );
+		return j * T.resX + i;
 
 	}
 
@@ -1300,25 +1301,30 @@ export class DebrisPlacer {
 
 	_mask() {
 
+		// 2 m texels over the rectangular terrain domain (was 1024 x 1024 over the old 2048 m square):
+		// MRX texels along x, MRZ rows along z, row-major o = ( j * MRX + i ) * 4. The pebble
+		// shader samples it with terrainUvOf, so it must span the terrain domain exactly on each axis.
 		const T = this.T;
-		const MR = 1024;
-		const texel = T.size / MR;
-		const data = new Uint8Array( MR * MR * 4 );
+		const MASK_TEXEL = 2; // m
+		const MRX = Math.round( T.sizeX / MASK_TEXEL );
+		const MRZ = Math.round( T.sizeZ / MASK_TEXEL );
+		const texel = T.sizeX / MRX;
+		const data = new Uint8Array( MRX * MRZ * 4 );
 		const nz = this.noise;
-		const res = T.res, H = T.heights;
+		const resX = T.resX, resZ = T.resZ, H = T.heights;
 		const step = Math.round( texel / T.texel );
 		const vc = WORLD.village.center;
-		for ( let j = 0; j < MR; j ++ ) {
+		for ( let j = 0; j < MRZ; j ++ ) {
 
-			const z = T.origin + ( j + 0.5 ) * texel;
-			const tj = Math.min( res - 1, j * step );
-			for ( let i = 0; i < MR; i ++ ) {
+			const z = T.originZ + ( j + 0.5 ) * texel;
+			const tj = Math.min( resZ - 1, j * step );
+			for ( let i = 0; i < MRX; i ++ ) {
 
-				const ti = Math.min( res - 1, i * step );
-				const k = tj * res + ti;
+				const ti = Math.min( resX - 1, i * step );
+				const k = tj * resX + ti;
 				const h = H[ k ];
 				if ( h < - 0.6 || h > 45 ) continue;
-				const x = T.origin + ( i + 0.5 ) * texel;
+				const x = T.originX + ( i + 0.5 ) * texel;
 				const sand = T.sand[ k ] / 255, rock = T.rock[ k ], path = T.path ? T.path[ k ] / 255 : 0;
 				const n1 = nz.noise( x / 9, z / 9 ), n2 = nz.noise( x / 3.1 + 5, z / 3.1 );
 				// wrack band on the beach
@@ -1337,7 +1343,7 @@ export class DebrisPlacer {
 				grit += shore * sstep( 0.25, 0.5, rock ) * 0.1;
 				// palette: coral limestone on the white-sand beach, basalt on the rocky shores
 				const pal = Math.max( 0, Math.min( 1, 0.22 + sand * 0.5 - rock * 0.35 + n2 * 0.12 + village * 0.1 ) );
-				const o = ( j * MR + i ) * 4;
+				const o = ( j * MRX + i ) * 4;
 				data[ o ] = Math.min( 255, peb * 255 );
 				data[ o + 1 ] = Math.min( 255, cob * 255 );
 				data[ o + 2 ] = Math.min( 255, grit * 255 );
@@ -1350,13 +1356,13 @@ export class DebrisPlacer {
 		// cobbles and pebbles around the base of shore rocks and cove stones
 		const stamp = ( x, z, r, peb, cob ) => {
 
-			const i0 = Math.floor( ( x - r - T.origin ) / texel ), i1 = Math.floor( ( x + r - T.origin ) / texel );
-			const j0 = Math.floor( ( z - r - T.origin ) / texel ), j1 = Math.floor( ( z + r - T.origin ) / texel );
-			for ( let j = Math.max( 0, j0 ); j <= Math.min( MR - 1, j1 ); j ++ ) for ( let i = Math.max( 0, i0 ); i <= Math.min( MR - 1, i1 ); i ++ ) {
+			const i0 = Math.floor( ( x - r - T.originX ) / texel ), i1 = Math.floor( ( x + r - T.originX ) / texel );
+			const j0 = Math.floor( ( z - r - T.originZ ) / texel ), j1 = Math.floor( ( z + r - T.originZ ) / texel );
+			for ( let j = Math.max( 0, j0 ); j <= Math.min( MRZ - 1, j1 ); j ++ ) for ( let i = Math.max( 0, i0 ); i <= Math.min( MRX - 1, i1 ); i ++ ) {
 
-				const px = T.origin + ( i + 0.5 ) * texel, pz = T.origin + ( j + 0.5 ) * texel;
+				const px = T.originX + ( i + 0.5 ) * texel, pz = T.originZ + ( j + 0.5 ) * texel;
 				const f = sstep( r, r * 0.4, Math.hypot( px - x, pz - z ) );
-				const o = ( j * MR + i ) * 4;
+				const o = ( j * MRX + i ) * 4;
 				data[ o ] = Math.min( 255, data[ o ] + peb * f * 255 );
 				data[ o + 1 ] = Math.min( 255, data[ o + 1 ] + cob * f * 255 );
 
@@ -1366,20 +1372,14 @@ export class DebrisPlacer {
 
 		if ( this.rocks ) for ( const r of this.rocks.instances ) if ( r.y < 4 && r.y > - 1.5 && r.size > 0.5 ) stamp( r.x, r.z, r.size * 2.2 + 1, 0.25, 0.35 );
 		for ( const [ x, z, s ] of this.rockSpots ) stamp( x, z, s * 4 + 0.6, 0.15, 0.1 );
-		// Built sites keep their ground clear here too (TerrainData.addClearZone, obs.clear above): painted from the
-		// terrain alone, 1,781 of 4,160 texels inside built sites (chairlift stations and approach, evacuation path,
-		// wind farm pads) carried pebbles and shell grit. Not the white dots on the chairlift deck planks
-		//: those were unchanged with this mask, so their source is elsewhere.
-		// The pad is one texel because PebbleField samples the mask bilinearly: a slot inside a site reads only
-		// texels within one texel of it.
 		for ( const c of T.clearZones || [] ) {
 
-			const i0 = Math.max( 0, Math.floor( ( c.x0 - texel - T.origin ) / texel ) ), i1 = Math.min( MR - 1, Math.floor( ( c.x1 + texel - T.origin ) / texel ) );
-			const j0 = Math.max( 0, Math.floor( ( c.z0 - texel - T.origin ) / texel ) ), j1 = Math.min( MR - 1, Math.floor( ( c.z1 + texel - T.origin ) / texel ) );
+			const i0 = Math.max( 0, Math.floor( ( c.x0 - texel - T.originX ) / texel ) ), i1 = Math.min( MRX - 1, Math.floor( ( c.x1 + texel - T.originX ) / texel ) );
+			const j0 = Math.max( 0, Math.floor( ( c.z0 - texel - T.originZ ) / texel ) ), j1 = Math.min( MRZ - 1, Math.floor( ( c.z1 + texel - T.originZ ) / texel ) );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				if ( shapeDistance( c.poly, true, T.origin + ( i + 0.5 ) * texel, T.origin + ( j + 0.5 ) * texel ) > texel ) continue;
-				const o = ( j * MR + i ) * 4;
+				if ( shapeDistance( c.poly, true, T.originX + ( i + 0.5 ) * texel, T.originZ + ( j + 0.5 ) * texel ) > texel ) continue;
+				const o = ( j * MRX + i ) * 4;
 				data[ o ] = 0;
 				data[ o + 1 ] = 0;
 				data[ o + 2 ] = 0;
@@ -1387,7 +1387,7 @@ export class DebrisPlacer {
 			}
 
 		}
-		this.mask = { data, res: MR, texel };
+		this.mask = { data, resX: MRX, resZ: MRZ, texel, originX: T.originX, originZ: T.originZ };
 
 	}
 
