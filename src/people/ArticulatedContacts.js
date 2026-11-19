@@ -11,17 +11,27 @@ function axis(b){
  return{x:v.x+q.w*tx+q.y*tz-q.z*ty,y:v.y+q.w*ty+q.z*tx-q.x*tz,z:v.z+q.w*tz+q.x*ty-q.y*tx};
 }
 function atVelocity(b,r){return{x:b.v.x+b.w.y*r.z-b.w.z*r.y,y:b.v.y+b.w.z*r.x-b.w.x*r.z,z:b.v.z+b.w.x*r.y-b.w.y*r.x};}
-export function capsuleContact(a,b){
- const reach=a.len*.5+b.len*.5+a.r+b.r,delta=sub(b.x,a.x);if(dot(delta,delta)>reach*reach)return null;
- const aa=axis(a),ba=axis(b),p=add(a.x,aa,-a.len*.5),q=add(b.x,ba,-b.len*.5),d=add({x:0,y:0,z:0},aa,a.len),e=add({x:0,y:0,z:0},ba,b.len),r=sub(p,q);
+export function capsuleContact(a,b){const out={normal:{x:0,y:0,z:0},point:{x:0,y:0,z:0},penetration:0};return capsuleContactTo(a,b,out)&&out;}
+// The same narrow phase into out ({normal, point, penetration}; null when apart): the ragdoll runs it for every
+// self pair on every substep, so it keeps its vectors in module storage. Same operations, same order, same bits.
+const C=Array.from({length:10},()=>({x:0,y:0,z:0})),ZERO=Object.freeze({x:0,y:0,z:0});
+const subTo=(a,b,o)=>{const x=a.x-b.x,y=a.y-b.y,z=a.z-b.z;o.x=x;o.y=y;o.z=z;return o;};
+const addTo=(a,b,s,o)=>{const x=a.x+b.x*s,y=a.y+b.y*s,z=a.z+b.z*s;o.x=x;o.y=y;o.z=z;return o;};
+function axisTo(b,o){
+ const q=b.q,v=b.ax,tx=2*(q.y*v.z-q.z*v.y),ty=2*(q.z*v.x-q.x*v.z),tz=2*(q.x*v.y-q.y*v.x),x=v.x+q.w*tx+q.y*tz-q.z*ty,y=v.y+q.w*ty+q.z*tx-q.x*tz,z=v.z+q.w*tz+q.x*ty-q.y*tx;
+ o.x=x;o.y=y;o.z=z;return o;
+}
+export function capsuleContactTo(a,b,out){
+ const reach=a.len*.5+b.len*.5+a.r+b.r,delta=subTo(b.x,a.x,C[0]);if(dot(delta,delta)>reach*reach)return null;
+ const aa=axisTo(a,C[1]),ba=axisTo(b,C[2]),p=addTo(a.x,aa,-a.len*.5,C[3]),q=addTo(b.x,ba,-b.len*.5,C[4]),d=addTo(ZERO,aa,a.len,C[5]),e=addTo(ZERO,ba,b.len,C[6]),r=subTo(p,q,C[7]);
  const A=dot(d,d),E=dot(e,e),F=dot(e,r);let s=0,t=0;
  if(A<=1e-12)t=E>1e-12?clamp(F/E):0;
  else{const C=dot(d,r);if(E<=1e-12)s=clamp(-C/A);else{const B=dot(d,e),den=A*E-B*B;s=den>1e-12?clamp((B*F-C*E)/den):0;t=(B*s+F)/E;if(t<0){t=0;s=clamp(-C/A);}else if(t>1){t=1;s=clamp((B-C)/A);}}}
- const x=add(p,d,s),y=add(q,e,t),n=sub(y,x),distance=Math.hypot(n.x,n.y,n.z),penetration=a.r+b.r-distance;
+ const x=addTo(p,d,s,C[8]),y=addTo(q,e,t,C[9]),n=subTo(y,x,out.normal),distance=Math.hypot(n.x,n.y,n.z),penetration=a.r+b.r-distance;
  if(penetration<=0)return null;
  if(distance>1e-8){n.x/=distance;n.y/=distance;n.z/=distance;}else{const l=Math.hypot(delta.x,delta.y,delta.z);if(l>1e-8){n.x=delta.x/l;n.y=delta.y/l;n.z=delta.z/l;}else{n.x=1;n.y=n.z=0;}}
- const point=add(x,n,a.r-penetration*.5);
- return{normal:n,point,penetration};
+ addTo(x,n,a.r-penetration*.5,out.point);out.penetration=penetration;
+ return out;
 }
 export function solveCapsules(A,a,B,b,{project=true,restitution=.1}={}){
  const c=capsuleContact(a,b);if(!c)return null;

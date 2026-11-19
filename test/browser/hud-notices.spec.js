@@ -8,13 +8,13 @@ test('Ferry status and a tsunami warning remain readable above the world control
   await page.goto('/?scale=.6&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});
   await page.keyboard.press('Enter');await click('Skip');await click('Disasters');
   const ship=await page.evaluate(()=>window.__app.ferry.ship.position.toArray());
-  await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('custom');
+  await page.getByLabel('Disaster type').selectOption('tsunami'); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }await page.getByLabel('Target location').selectOption('custom');
   await page.getByLabel('Target X (m)').fill(String(ship[0]));await page.getByLabel('Target Z (m)').fill(String(ship[2]));
   await page.getByLabel('Warning lead time (s)').fill('300');await click('View target');
   await expect(page.getByRole('status',{name:'Ferry departures'})).toBeVisible();
  });
  await test.step('When I start a tsunami warning and close its controls',async()=>{await click('Start disaster');await click('Close disaster controls');});
- await test.step('Then the card PIN and the cooler leave the top of the screen while the warning shows',async()=>{
+ await test.step('Then the card PIN and the cooler leave the top of the screen while the warning shows (ledger D3)',async()=>{
   await expect(page.getByLabel(/^Card PIN/)).toBeHidden();await expect(page.locator('.gm-purse')).toBeHidden();
  });
  await test.step('Then the full warning, departure notice and world controls occupy separate visible rows',async()=>{

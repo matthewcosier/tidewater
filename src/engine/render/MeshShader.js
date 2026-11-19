@@ -53,6 +53,7 @@ export function buildMeshShader( material, layout, pass ) {
 	defs.LIT = material.lit ? 1 : 0;
 	defs.INSTANCED = has.has( 'instanceMatrix0' ) ? 1 : 0;
 	defs.INSTANCE_COLOR = has.has( 'instanceColor' ) ? 1 : 0;
+	defs.INSTANCE_PREV = has.has( 'instancePrevMatrix0' ) ? 1 : 0;
 	Object.assign( defs, pass.defines || {} );
 	defs.CLIP_DISTANCES = defs.REFRACTION_CLIP && GPU.features.has( 'clip-distances' ) ? 1 : 0;
 
@@ -178,6 +179,10 @@ ${ fetch }#if !HAS_POSITION
 #else
 	v.model = draw.model;
 	v.prevModel = draw.prevModel;
+#endif
+#if INSTANCE_PREV
+	// an instance that moves inside its object (a wheel turning on its car): last frame's own matrix
+	v.prevModel = draw.prevModel * mat4x4f( i.instancePrevMatrix0, i.instancePrevMatrix1, i.instancePrevMatrix2, i.instancePrevMatrix3 );
 #endif
 #if INSTANCE_COLOR
 	v.color = vec4f( v.color.rgb * i.instanceColor, v.color.a );

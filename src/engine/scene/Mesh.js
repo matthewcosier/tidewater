@@ -55,6 +55,19 @@ export class InstancedMesh extends Mesh {
 
 	getMatrixAt( i, m ) { return m.fromArray( this.instanceMatrix.array, i * 16 ); }
 	setMatrixAt( i, m ) { m.toArray( this.instanceMatrix.array, i * 16 ); }
+
+	// Opt-in motion vectors for instances that move INSIDE their object (a traffic car's wheels turning
+	// on their axles). Without it the renderer reprojects an instance with this frame's instance matrix
+	// (MeshShader: prevModel = draw.prevModel * instance), so only the object's own motion reaches the
+	// velocity target. The owner copies the drawn matrices here before it writes the next frame's
+	// (Traffic.drawWheels). Opt-in because it is one more vertex buffer per draw: heavily instanced
+	// materials (vegetation) already sit near the 8 a pipeline may use (post/CameraVelocity.js).
+	trackPreviousMatrices() {
+
+		this.instancePrevMatrix = new InstancedBufferAttribute( new Float32Array( this.instanceMatrix.array ), 16 );
+		return this;
+
+	}
 	getColorAt( i, c ) { return c.fromArray( this.instanceColor.array, i * 3 ); }
 
 	setColorAt( i, c ) {

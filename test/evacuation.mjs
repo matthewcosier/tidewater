@@ -57,13 +57,10 @@ test('the production walking controller climbs every real step on foot within th
  assert.equal(routeObservation(route,lifted,null).atRefuge,false,'Airborne proximity does not count as reaching the platform');
 });
 
-test('a real severe shallow-water event exposes the entrance and leaves measured high ground dry without a safety flag',()=>{
+function routeEvent(intensity){
  const field=new DisasterField((x,z)=>terrain.heightAt(x,z));
- // A mechanism test (route observation on real water): one fixed seed. A 25 m wave's run-up reaches 38-39 m on
- // some draws (2 of 5 fresh seeds, seed sweep), over this 37.6 m refuge: physically fine, R up to about 1.5 H.
- const e=field.start('tsunami',{x:58,z:-46,intensity:25,warningLead:3,duration:65,seed:3});
+ const e=field.start('tsunami',{x:58,z:-46,intensity,warningLead:3,duration:65,seed:3});
  let entrancePeak=0,refugePeak=0,entranceWet=0;
- // The whole event: warning, the planned approach from the open sea (60-120 s with the current solver), then the flood.
  const steps=Math.ceil((e.warning+e.approach+e.duration)/.1);
  for(let i=0;i<steps&&field.events.has('tsunami');i++){
   field.advance(.1);
@@ -71,6 +68,11 @@ test('a real severe shallow-water event exposes the entrance and leaves measured
   refugePeak=Math.max(refugePeak,field.waterAt(route.refuge.x,route.refuge.z));
   entranceWet=Math.max(entranceWet,field.acceleration(route.entry,{x:0,y:0,z:0},{mass:75,area:.7,volume:.075,height:1.8,supported:true,dt:.1},{}).wet);
  }
+ return {field,entrancePeak,refugePeak,entranceWet};
+}
+
+test('a real severe shallow-water event exposes the entrance and leaves measured high ground dry without a safety flag',()=>{
+ const {field,entrancePeak,refugePeak,entranceWet}=routeEvent(10);
  assert.ok(entrancePeak>route.entry.y,`Actual entrance peak ${entrancePeak} exceeds deck ${route.entry.y}`);
  assert.ok(entranceWet>.5,'Standing at the entrance receives real fluid loading');
  assert.ok(refugePeak<route.refuge.ground,`Actual refuge water ${refugePeak} below natural ground ${route.refuge.ground}`);
@@ -80,9 +82,38 @@ test('a real severe shallow-water event exposes the entrance and leaves measured
  assert.equal(routeObservation(route,{position:route.refuge,mode:'walk'},overtopped).refugeWaterDepth,2,'A higher physical flood is reported as flooded, never made immune');
 });
 
+test('a 25 m wave tops the refuge now that Joey Island no longer shelters the village, and the water there is real',()=>{
+ const {refugePeak}=routeEvent(25);
+ assert.ok(refugePeak>route.refuge.ground+2,`a 25 m wave's water at the refuge ${refugePeak.toFixed(1)} m must top its ${route.refuge.ground} m ground`);
+ assert.ok(refugePeak<route.refuge.ground+3*25,`run-up stays bounded: ${refugePeak.toFixed(1)} m at the refuge`);
+});
+
 test('passing beside or beyond the refuge does not misleadingly report zero distance',()=>{
  const p={position:{x:route.refuge.x+8,y:route.refuge.y+2,z:route.refuge.z-7},mode:'walk'};
  const state=routeObservation(route,p,null);
  assert.equal(state.atRefuge,false);
  assert.ok(state.remainingDistance>10,'Signed refuge is still more than 10 m away');
+});
+
+test('an overloaded boardwalk section fails even when the village has spent every rigid-body slot',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const {default:init,RallyPhysics}=await import('../public/rally/rally_physics.js');
+ const {StructuralDamage}=await import('../src/disasters/Structures.js');
+ await init({module_or_path:await readFile(new URL('../public/rally/rally_physics_bg.wasm',import.meta.url))});
+ const sim=new RallyPhysics();sim.reset(100,100,100,0);
+ // Water 4 m over the low entrance sections (z above -128 m) flowing inland at 6 m/s; the rest stays dry.
+ const flooded=z=>z>-128,level=z=>flooded(z)?route.entry.y+4:-100; // m
+ const field={terrain:(x,z)=>terrain.heightAt(x,z),waterAt:(x,z)=>level(z),sample:(x,y,z)=>({height:level(z),ux:0,uz:flooded(z)?-6:0,wx:0,wy:0,wz:0,ax:0,ay:0,az:0,shake:0})};
+ const damage=new StructuralDamage({terrainData:terrain,colliders,rally:{physics:sim,refreshIslandColliders(){},requestIslandColliders(){}}},{field,runSeed:7});
+ damage.bodyBudget=damage.bodies.size; // every rigid-body slot already holds a village piece
+ const debris=[];damage.onDebris(e=>debris.push(e));
+ for(let t=0;t<2;t+=1/30)damage.update(1/30);
+ const wet=evac.records.filter(r=>flooded(r.center.z)),dry=evac.records.filter(r=>!flooded(r.center.z));
+ assert.ok(wet.length>=3,`${wet.length} sections under the flood`);
+ const summary=wet.map(r=>`${r.name}: broken ${r.broken}, utilization ${r.utilization.toFixed(1)}`).join('; ');
+ assert.ok(wet.every(r=>r.broken&&r.utilization>1),`every section 4 m under a 6 m/s flow fails: ${summary} (deferred ${damage.deferred})`);
+ assert.ok(wet.every(r=>r.colliders.every(c=>!c.solid&&!c.walkable)),'a failed section keeps no walkable or solid collider');
+ for(const r of wet)for(const s of r.spans){const a=s.geo.attributes.position.array,x=a[s.start*3],y=a[s.start*3+1];for(let i=s.start*3;i<(s.start+s.count)*3;i+=3)assert.ok(a[i]===x&&a[i+1]===y,`${r.name}: its skin is carried off with its pieces, not left standing`);}
+ assert.ok(debris.length>=wet.length&&debris.every(e=>e.vz<0),`each failed section reaches the debris hook moving with the flow (${debris.length} events)`);
+ assert.ok(dry.length>0&&dry.every(r=>!r.broken),'dry sections above the flood stand');
 });

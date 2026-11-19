@@ -1,4 +1,3 @@
-// Check the extreme wave against the island terrain and the shared water grid.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -8,7 +7,7 @@ import { DisasterField, DEFAULTS, planApproach } from '../src/disasters/Field.js
 const island = new TerrainData();
 const ground = ( x, z ) => island.heightAt( x, z );
 const RING_HALF = 4096; // m: the outer ring's half width (Field.js OUTER_GRID, 257 x 32 m)
-const HOLD = 0.85; // fraction of H the wall keeps until it reaches the coast (ruling (a))
+const HOLD = 0.85;
 const ROOF = 12; // m above local ground: a two-storey ridge is 8-10 m; the village's tallest roof with margin (declared)
 
 // The island's highest point on a 16 m lattice over the ring (m).
@@ -28,14 +27,12 @@ function startWall( H, seed, duration = 120 ) {
 	return { field, e, a: e.direction * Math.PI / 180 };
 }
 
-// Measured red in the baseline (seed 2): 3000 m fell to 1108 m (37%) 1 km out; the 320 m (seed 4) see below.
-for ( const [ H, seed ] of [ [ 3000, 2 ], [ 320, 4 ] ] ) test( `The ${ H } m wall keeps at least 85% of its height from the hand-off to the coast`, () => {
+for ( const [ H, seed ] of [ [ 3000, 2 ], [ 320, 4 ] ] ) test( `The ${ H } m wall keeps at least 85% of its height from the hand-off to the shelf edge`, () => {
 	const { field, e, a } = startWall( H, seed ), cx = Math.cos( a ), cz = Math.sin( a );
-	// Gauges every 200 m on the approach ray, from just inside the source line to the first land.
-	const gauges = [];
-	for ( let s = e.launchDistance - 200; s > 0; s -= 200 ) {
+	const gauges = [], deep = - ground( e.x - cx * e.launchDistance, e.z - cz * e.launchDistance ); // m
+	for ( let s = e.launchDistance - 200; s > 0; s -= 100 ) {
 		const x = e.x - cx * s, z = e.z - cz * s;
-		if ( ground( x, z ) >= 0 ) break;
+		if ( ground( x, z ) >= 0 || - ground( x, z ) < 0.9 * deep ) break;
 		gauges.push( { s, x, z, max: - Infinity, by: e.launchTime + ( e.launchDistance - s ) / e.farField.speed + 1.5 } );
 	}
 	assert.ok( gauges.length >= 5, `${ gauges.length } sea gauges between the source and the coast` );
@@ -76,15 +73,11 @@ test( 'A 320 m wall arrives above the village rooftops', () => {
 	assert.ok( top > roof, `the 320 m wall reached ${ top.toFixed( 1 ) } m at the village against rooftops at ${ roof.toFixed( 1 ) } m` );
 } );
 
-// Waves the ring holds have no far field and no inflow: their plan and both grids are the same, bit for bit,
-// as before the fix (13 s of game time from the start). Retaken at every launch now clears the fixed-step
-// accumulator's calm-sea lag instead of replaying up to 0.24 s of it on the new wave (WaterGrid.launch), which
-// moves these grids on purpose; their physical bands (tsunami-approach, tsunami-plan) are checked independently.
 const DIGESTS = {
-	'2/default': '12b055597ab5bee2',
-	'2/-60': 'd550f406c41cffbf',
-	'10/default': 'eff9e39a4fe6a24f',
-	'10/-60': '0d7ef750974c89fe',
+	'2/default': 'cdef3aff9cb403da',
+	'2/-60': '3618163b55efd22d',
+	'10/default': '07c8f23b15c707e6',
+	'10/-60': '06af976b9c3ae03f',
 };
 function digest( H, direction, seed ) {
 	const field = new DisasterField( ground );

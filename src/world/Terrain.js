@@ -34,12 +34,12 @@ export class Terrain {
 
 		this.data = terrainData;
 		this.gpu = terrainGPU;
-		const half = terrainData.size / 2;
 
 		this.lod = new CDLOD( {
 			gridSize, leafSize: 8, levels: 9,
 			heightBounds: ( x0, z0, x1, z1 ) => terrainData.boundsFor( x0, z0, x1, z1 ),
-			center: { x: - half, z: - half, size: terrainData.size },
+			// roots tile the WORLD.terrain rectangle from its north-west corner
+			center: { x: terrainData.originX, z: terrainData.originZ, sizeX: terrainData.sizeX, sizeZ: terrainData.sizeZ },
 			rangeFactor,
 			prefix: 'terrainLod',
 		} );
@@ -130,8 +130,9 @@ export class Terrain {
 
 const S = srgb;
 
-// module part: meadow weight shared between the surface and the key-light modulation, the gust
-// field and the wetness fallback
+const SEABED_DEBUG = typeof location !== 'undefined' && /[?&]seabedDebug\b/.test( location.search );
+export const SEABED_WET_ALBEDO = '0.1'; // linear luminance of wet sand / mud (dry sand 0.3-0.4)
+export const SEABED_FLAT = '0.67'; // share of the ground's slope the water film evens out (0 dry, 1 a level film)
 const TERRAIN_MATERIAL_WGSL = /* wgsl */`
 // meadow weight of the current fragment (written by the surface, read by the sun modulation)
 var<private> terMeadowW: f32 = 0.0;
@@ -639,12 +640,33 @@ const TERRAIN_SURFACE = /* wgsl */`
 
 	}
 
+	var seabedFlat = 0.0;
+#if HAS_WETNESS
+	let bare = terrainSeabedWet( xz, h );
+	if ( bare > 0.0 ) {
+		let around = ( terrainHeightAt( xz + vec2f( 4.0, 0.0 ) ) + terrainHeightAt( xz - vec2f( 4.0, 0.0 ) )
+			+ terrainHeightAt( xz + vec2f( 0.0, 4.0 ) ) + terrainHeightAt( xz - vec2f( 0.0, 4.0 ) ) ) * 0.25;
+		let sheet = smoothstep( 0.002, 0.03, disasterSample( xz ).w );
+		let puddle = max( smoothstep( 0.03, 0.14, around - h + ( dM.w - 0.5 ) * 0.08 ), sheet ) * bare;
+		let wetA = terrainSaturation( albedoOut * mat.wetDarken, 1.15 ) * vec3f( 0.97, 0.98, 1.0 );
+		let wetL = dot( wetA, vec3f( 0.2126, 0.7152, 0.0722 ) );
+		albedoOut = mix( albedoOut, wetA * min( 1.0, ${ SEABED_WET_ALBEDO } / max( wetL, 1e-3 ) ), bare );
+		albedoOut *= 1.0 - puddle * 0.5;
+		outRough = mix( outRough, 0.1, bare );
+		outRough = mix( outRough, 0.03, puddle );
+		hdOut *= 1.0 - max( puddle, bare * 0.7 );
+		seabedFlat = max( bare * ${ SEABED_FLAT }, puddle );
+	}
+${ SEABED_DEBUG ? `	{ let dd = disasterSample( xz ); albedoOut = vec3f( bare, smoothstep( 0.002, 0.3, dd.w ), select( 0.0, 0.5, h > 0.1 ) + select( 0.0, 0.5, seabedPath ) ); outRough = 0.95; hdOut = 0.0; }` : '' }
+#endif
+
 	// fine derivatives: per pixel, not per 2x2 quad (the forest's metre-scale relief shaded in
 	// quad blocks, a dotted dark rim along its edge). The canopy term takes the derivative of the
 	// crowns only, weighted by the mask, so the mask's edge adds no step.
 	let dCx = dpdxFine( hdOut ) + dpdxFine( canopyRelOut ) * canopyWOut;
 	let dCy = dpdyFine( hdOut ) + dpdyFine( canopyRelOut ) * canopyWOut;
 	outN = terrainPerturbNormalD( p, N0, dCx, dCy );
+	outN = normalize( mix( outN, vec3f( 0.0, 1.0, 0.0 ), seabedFlat ) );
 
 	s.albedo = albedoOut;
 	s.roughness = outRough;

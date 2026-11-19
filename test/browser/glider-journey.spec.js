@@ -11,7 +11,7 @@ test('Hang glider: uninterrupted summit launch through shared wind to a controll
  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
  const hud=page.getByRole('status',{name:'Glider instruments'});
  const snapshot=()=>page.evaluate(()=>{
-  const a=window.__app,g=a.glider,f=g.flight,s=a.disasters.field.sample(...f.position);
+  const a=window.__app,g=a.glider,f=g.flight,s=g.env.sample(...f.position);
   return {wall:performance.now(),time:f.time,phase:f.phase,reason:f.reason,position:[...f.position],velocity:[...f.velocity],quaternion:[...f.quaternion],omega:[...f.omega],metrics:structuredClone(f.metrics),controls:{...f.controls},sharedWind:[s.wx,s.wy,s.wz],active:g.active,mode:a.player.mode,discardedTime:g.discardedTime,render:[a.sceneRenderer.width,a.sceneRenderer.height],resolution:a.engine.resolution.mode};
  });
  await test.step('Given the real island with a 7 m/s prevailing wind and the intact summit launch',async()=>{
@@ -33,7 +33,7 @@ test('Hang glider: uninterrupted summit launch through shared wind to a controll
   expect(initial.render).toEqual([1440,900]);expect(initial.resolution).toBe('standard');
   rows.push({...initial,stage:'summit-ready'});
  });
- const pilot=createPilot(),held=new Set();let lastStage='',previous;
+ const pilot=createPilot({exitTheta:-2.78,exitWindow:.35}),held=new Set();let lastStage='',previous;
  const keys=async command=>{
   const wanted=new Set();
   if(command.roll>0)wanted.add('ArrowLeft');if(command.roll<0)wanted.add('ArrowRight');
@@ -71,7 +71,7 @@ test('Hang glider: uninterrupted summit launch through shared wind to a controll
    expect(Math.hypot(final.position[0]+92,final.position[2]+91)).toBeLessThan(45);
    expect(final.metrics.run).toBeGreaterThan(4);expect(final.metrics.airTime).toBeGreaterThan(30);
    expect(final.metrics.distance).toBeGreaterThan(400);expect(final.metrics.impactSpeed).toBeLessThan(2.6);
-   expect(final.metrics.landingSpeed).toBeLessThan(9.5);expect(final.metrics.thrust).toBe(0);
+   expect(final.metrics.landingSpeed).toBeLessThanOrEqual(3.5);expect(final.metrics.thrust).toBe(0);
    expect(rows.some(s=>s.phase==='running')).toBe(true);
    const airborne=rows.filter(s=>s.phase==='airborne');expect(airborne.length).toBeGreaterThan(200);
    expect(airborne.every(s=>Math.hypot(...s.metrics.windVector)>1)).toBe(true);

@@ -1,22 +1,3 @@
-// Disaster scenarios wait on game time, not wall time.
-//
-// While a disaster runs, every subsystem gets at most 25 ms of simulated time per frame
-// (DISASTER_MAX_STEP in src/core/SimulationPacing.js, one rally-physics advance of 3 fixed
-// steps). Below 40 fps the event plays in slow motion instead of the physics dropping time.
-// A wall-clock budget then measures how loaded the machine is, not the physics: at load 120
-// on the 18-core Mac a tornado frame took 300 ms or more, so 60 wall seconds were 5 game
-// seconds and the specs failed on base and head alike (lane 2026-10-05).
-//
-// Each wait keeps the budget the spec always had, in game seconds of the disaster clock
-// (Disasters.field.time) counted from the start of the wait. On a quiet machine a game
-// second is a wall second, so the assertions are unchanged; under load they take longer.
-//
-// Every read happens between frames. App.frame awaits the ferry and ragdoll workers in the
-// middle of a frame (src/App.js, _frame then finishFrame), after Disasters.before has
-// stepped the water and before the ocean culling bounds follow it. A read inside that gap
-// sees this frame's flood surface next to last frame's bounds; the frame that draws the
-// water has both (test/browser/disaster-materials.spec.js, Extreme tsunami, failed this
-// way on base the baseline at load 117: bound 25.0 m for a 2875 m surface).
 
 // Wall-clock cap for one wait: only a hang should reach it.
 export const WALL_CAP_MS = 600_000;
@@ -84,5 +65,21 @@ export async function untilGameTimeCheck( page, check, budget ) {
 
 	}
 	return { value, elapsed };
+
+}
+
+export const ASHORE_SLACK = 30; // game s past the planned crest arrival
+
+export async function untilAshore( page ) {
+
+	const planned = await atFrameBoundary( page, () => {
+
+		const e = window.__app.disasters.field.events.get( 'tsunami' );
+		return e ? e.arrival - e.time : 0;
+
+	} );
+	const budget = Math.max( 0, planned ) + ASHORE_SLACK;
+	const r = await untilGameTime( page, () => !! window.__app.disasters.field.events.get( 'tsunami' )?.coastReached, budget );
+	return { ...r, planned, budget };
 
 }
