@@ -6,7 +6,7 @@ view matches the straight-down aerial reference and also writes a side-by-side P
 Run:
   Blender --background assets/ferry/terminal.blend --python tools/ferry/terminal_render.py -- OUT_DIR [view ...]
 Views: overview beach island road topdown jetty landing gangway gangwayup linkspan ramptoe building buildingwest breakwater
-       breakwaterout yard slipway armour counter cafe
+       breakwaterout yard slipway armour counter cafe towerdoor
 The sea is tools/ferry/sea_stage.py (render only). The context land is the real island around the site
 (assets/ferry/site_terrain.json) with the terrain edits the game applies (the build's site data, kept in the .blend);
 the parked and queued cars are the game's own car GLBs from public/rally; the stone, gravel, scrub and surf shaders
@@ -300,6 +300,7 @@ views = {
     'armour': ((-92, 126, 6.5), (-110, 138, 1.5), 30),
     'counter': ((-33.0, -18.5, 5.0), (-40.5, -18.5, 4.4), 20),
     'cafe': ((-36.5, -13.0, 5.3), (-26.0, -30.0, 4.3), 18),
+    'towerdoor': ((-11.6, -41.5, 4.6), (-14.87, -33.3, 4.3), 26),
 }
 FILL = {'counter': ((-36, -18.5, 6.7), 2500), 'cafe': ((-30, -24, 6.7), 3000)}
 bpy.ops.object.light_add(type='AREA', location=(0, 0, -50))

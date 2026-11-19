@@ -1,6 +1,4 @@
-// Read-only independent geometry observations for the real renderer. This uses
-// the displayed model's vertices/matrices, not the camera's collision helper.
-export const gliderVisibility=page=>page.evaluate(()=>{
+export const gliderVisibilityProbe=()=>{
  const app=window.__app,g=app.glider,p=app.player,eye=app.camera.position.toArray(),triangles=[],pilot=[];
  const transform=(v,m)=>[m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]];
  const subtract=(a,b)=>a.map((n,i)=>n-b[i]),dot=(a,b)=>a.reduce((n,v,i)=>n+v*b[i],0),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
@@ -45,10 +43,11 @@ export const gliderVisibility=page=>page.evaluate(()=>{
    surfaces.push({region,candidates:candidates.length,samples});
   }
  }
- return {time:g.flight.time,phase:g.flight.phase,quaternion:g.flight.quaternion.slice(),position:g.flight.position.slice(),eye,boom:Math.hypot(...subtract(eye,g.flight.position)),triangles:triangles.length,
+ return {time:g.flight.time,phase:g.flight.phase,wingFade:g.body?.fade||0,quaternion:g.flight.quaternion.slice(),position:g.flight.position.slice(),eye,boom:Math.hypot(...subtract(eye,g.flight.position)),triangles:triangles.length,
   pilot:pilot.map(v=>({...v,blocked:blocked(v.point),screen:screen(v.point)})),swimmer:swimmer.map(v=>({...v,blocked:blocked(v.point),screen:screen(v.point)})),
   joints,surfaces,avatar:{visible:p.avatar?.visible,view:p.avatar?.view,headHidden:p.avatar?.headHidden},contactCount:g.body?.contacts||0,lastContact:g.body?.lastContact||null,render:[app.sceneRenderer.width,app.sceneRenderer.height],resolution:app.engine.resolution.mode};
-});
+};
+export const gliderVisibility=page=>page.evaluate(gliderVisibilityProbe);
 
 // Install before the X key, then record the first eight rendered swim updates.
 // Waiting until a visibility assertion becomes true would miss a remote avatar

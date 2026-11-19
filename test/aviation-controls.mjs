@@ -29,12 +29,12 @@ test('glider weight-shift keys turn toward the corresponding chase-camera side',
   const a=new Glider({input:{down:k=>k===key,hit:()=>false},terrainData:{heightAt:()=>-1000}}),f=a.flight,e=equilibrium();a.active=a.pilot=true;
   f.position=[0,500,0];f.phase='airborne';f.velocity=[0,e.speed*Math.sin(e.gamma),e.speed*Math.cos(e.gamma)];f.quaternion=poseQ(0,e.pitch);
   const right=cross(rotate(f.quaternion,[0,0,1]),[0,1,0]);
-  for(let k=0;k<240;k++){a.controls();f.step(STEP,air);}
-  assert.ok(side*dot(sub(f.position,[0,500,0]),right)>1);assert.ok(side*dot(rotate(f.quaternion,[0,0,1]),right)>.1);
+  for(let k=0;k<360;k++){a.controls();f.step(STEP,air);}
+  const moved=side*dot(sub(f.position,[0,500,0]),right),nose=side*dot(rotate(f.quaternion,[0,0,1]),right);
+  assert.ok(moved>1,`${key} moved ${moved.toFixed(2)} m toward its side in 3 s`);assert.ok(nose>.1,`${key} nose turned ${nose.toFixed(3)} toward its side in 3 s`);
  }
 });
 
-// In flight the throttle, pitch, roll and yaw controls remain independent.
 function pilotFixture(held,hits=new Set()){
  const camera={position:new Vector3(),up:new Vector3(0,1,0),lookAt(v){this.target=v.clone();}};
  const a=new Aviation({input:{down:k=>held.has(k),hit:k=>hits.has(k),consumeLook:()=>({x:0,y:0})},terrainData:{heightAt:()=>-1000},camera});

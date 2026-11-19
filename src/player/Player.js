@@ -374,7 +374,7 @@ export class Player {
 
 			this.mode = 'walk';
 			this.grounded = true;
-			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+			this.colliders.place( p, RADIUS, HEIGHT, 0.4 );   // boxes, cylinders and trunks, as walking meets them
 
 		}
 
@@ -410,7 +410,7 @@ export class Player {
 			this.mode = 'walk';
 			this.grounded = true;
 			p.y = this.groundAt( x, z, y + 2 );
-			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+			this.colliders.place( p, RADIUS, HEIGHT, 0.4 );   // boxes, cylinders and trunks, as walking meets them
 
 		}
 
@@ -628,6 +628,24 @@ export class Player {
 
 		}
 
+		// hang glider (src/glider/Glider.js): E clips in at the summit launch deck
+		if ( this.glider && ! this.busy && ! this.prompt ) {
+
+			const o = this.glider.offer( this );
+			if ( o ) {
+
+				this.prompt = { key: 'E', text: o.text };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					o.act();
+					return;
+
+				}
+
+			}
+
+		}
+
 		// jetskis (src/jetski/Jetski.js): ride one, climb aboard from the water, right a capsized one
 		if ( this.jetskis && ! this.busy && ! this.prompt ) {
 
@@ -734,7 +752,15 @@ export class Player {
 
 			const load = this.walkLoad = this.environment.acceleration( _v.copy( this.position ).add( _v2.set( 0, 0.9, 0 ) ), this.velocity,
 				{ mass: 75, area: 0.7, volume: 0.075, height: 1.8, supported: this.grounded, dt }, {} );
-			this.velocity.x += load.ax * dt; this.velocity.y += load.ay * dt; this.velocity.z += load.az * dt;
+			// On his feet his legs hold the push: what the motor's grip (accel) did not spend this frame reaching the
+			// speed he wants holds the load across the ground, and only a push past it moves him. Before this the load
+			// was left in his velocity every frame, so a player standing still in the default 8 m/s breeze (0.4 m/s² on
+			// him) crept downwind at 0.4 m/s² times the frame: 0.7 cm/s at 60 frames a second, 1.5 m in three minutes
+			// on the terminal walkway. A push his feet cannot hold trips him (TRIP_PUSH, below) as before.
+			let hx = load.ax * dt, hz = load.az * dt;
+			const held = this.grounded ? Math.max( 0, accel * dt - Math.hypot( dx, dz ) ) : 0, across = Math.hypot( hx, hz );
+			if ( held > 0 && across > 0 ) { const k = Math.max( 0, across - held ) / across; hx *= k; hz *= k; }
+			this.velocity.x += hx; this.velocity.y += load.ay * dt; this.velocity.z += hz;
 			// The trip reads the fluid's own push: the same body sampled at rest. The load above is
 			// relative to his velocity, so in calm sea it is his own wading drag (2.8 m/s through
 			// 16 cm read 3.24 m/s² against the 3.2 m/s² line), and W rebuilt that speed within
@@ -783,7 +809,8 @@ export class Player {
 			// The provider's full transform already carried us above, including a
 			// jump frame. Subtract its velocity exactly once across this whole sweep.
 			if ( carried ) p.addScaledVector( carrierVelocity, - h );
-			this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+			// boxes, cylinders and the palm and tree trunks (Colliders.resolveWalker)
+			this.colliders.resolveWalker( p, RADIUS, HEIGHT, 0.4 );
 			for ( const provider of this.groundProviders ) provider.resolveCapsule?.( p, RADIUS, HEIGHT, 0.4 );
 			const g = this.groundAt( p.x, p.z, p.y + 0.45 );
 			// Supported walking can follow a small downward step. An intentional
@@ -925,7 +952,9 @@ export class Player {
 		}
 
 		p.addScaledVector( this.velocity, dt );
-		this.colliders.resolveCapsule( p, RADIUS, 1.0, 0 );
+		// the palms and trees as well as the boxes (Colliders.resolveWalker): a swimmer carried through a
+		// flooded palm grove went through every trunk
+		this.colliders.resolveWalker( p, RADIUS, 1.0, 0 );
 		if ( this.obstacleProviders.size ) {
 
 			// Dynamic wreck geometry uses an upright body envelope at actual feet;

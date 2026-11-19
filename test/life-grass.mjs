@@ -12,20 +12,21 @@ const L = await setupLife( { W, H } );
 const T = L.terrain;
 let t0 = performance.now();
 const mask = buildGrassMask( new VegSite( T ) );
-console.log( 'mask ms', ( performance.now() - t0 ).toFixed( 0 ), 'res', mask.res );
+console.log( 'mask ms', ( performance.now() - t0 ).toFixed( 0 ), 'res', mask.resX, 'x', mask.resZ );
 // densest meadow (G) and dune (R) spots
 const best = [ { v: 0 }, { v: 0 } ];
-const mres = mask.res, texel = T.size / mres;
-for ( let j = 0; j < mres; j += 2 ) for ( let i = 0; i < mres; i += 2 ) {
+// the mask is resX texels along x by resZ rows along z over the rectangular terrain domain
+const mresX = mask.resX, mresZ = mask.resZ, texel = mask.texel;
+for ( let j = 0; j < mresZ; j += 2 ) for ( let i = 0; i < mresX; i += 2 ) {
 
-	const o = ( j * mres + i ) * 4;
-	const x = T.origin + ( i + 0.5 ) * texel, z = T.origin + ( j + 0.5 ) * texel;
+	const o = ( j * mresX + i ) * 4;
+	const x = mask.originX + ( i + 0.5 ) * texel, z = mask.originZ + ( j + 0.5 ) * texel;
 	if ( Math.hypot( x, z ) > 500 ) continue;
 	for ( const [ k, ch ] of [ [ 0, 1 ], [ 1, 0 ] ] ) {
 
 		// average over a 5x5 neighbourhood so we land inside a patch
 		let s = 0;
-		for ( let b = - 2; b <= 2; b ++ ) for ( let a = - 2; a <= 2; a ++ ) s += mask.data[ ( ( Math.min( mres - 1, Math.max( 0, j + b ) ) * mres + Math.min( mres - 1, Math.max( 0, i + a ) ) ) * 4 ) + ch ];
+		for ( let b = - 2; b <= 2; b ++ ) for ( let a = - 2; a <= 2; a ++ ) s += mask.data[ ( ( Math.min( mresZ - 1, Math.max( 0, j + b ) ) * mresX + Math.min( mresX - 1, Math.max( 0, i + a ) ) ) * 4 ) + ch ];
 		if ( s > best[ k ].v ) best[ k ] = { v: s, x, z };
 
 	}

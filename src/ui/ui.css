@@ -272,8 +272,6 @@ body {
 	display: grid;
 	place-items: center;
 	padding: 16px;
-	/* Opaque, the loader's own ground: nothing draws after the loss, and a see-through scrim showed
-	   the half-built HUD behind it. */
 	background: #05090d;
 	color: var(--tw-ink);
 	font-family: var(--tw-font);
@@ -851,9 +849,6 @@ body {
 	white-space: nowrap;
 	opacity: 0;
 	transform: translate(-50%, calc(10 * var(--tw-u))) scale(0.97);
-	/* Off: hidden once the fade ends, not just transparent. At opacity 0 alone the last prompt
-	   ("Get in") stayed in the accessibility tree and a screen reader still read it 3.6 m from the
-	   car (car-aboard.spec.js:75, red on the baseline). */
 	visibility: hidden;
 	transition: opacity var(--tw-med) var(--tw-ease), transform var(--tw-slow) var(--tw-ease), visibility 0s linear var(--tw-med);
 }
@@ -2395,12 +2390,6 @@ body {
 
 /* ── controls sheet (F1) ───────────────────────────────────────────────── */
 
-/* The world toolbar and its panels are body siblings at 110 and 111. The
-   modal needs its parent stacking context above both for its Close button. */
-.tw-root:has( > .tw-help:not([hidden]) ) {
-	z-index: 112;
-}
-
 .tw-help {
 	position: absolute;
 	inset: 0;
@@ -2525,7 +2514,7 @@ body {
 	gap: calc(18 * var(--tw-u));
 	text-align: center;
 	/* The grid centres the margin box, so this lifts the cluster by 14vh: the wordmark and the
-	   call to action sit in open sky instead of on the pier-head sign (1440x900). */
+	   call to action sit in open sky instead of on the pier-head sign (ledger D8, 1440x900). */
 	margin-bottom: 28vh;
 	transform: translateY(calc(8 * var(--tw-u)));
 	transition: transform 900ms var(--tw-ease);
@@ -2693,7 +2682,7 @@ body {
 }
 
 /* ---- World-tool panel shell. src/ui/WorldTools.js adds .tw-world-panel.tw-glass.tw-shell to every
-   registered panel, so a panel needs no stylesheet of its own (the wind farm panel drew a
+   registered panel, so a panel needs no stylesheet of its own (ledger D18: the wind farm panel drew a
    serif heading and its own colours). A panel adopts the shell by dropping its injected <style> and
    using plain elements and these names: .tw-shell-kicker (eyebrow above the h2), h2, h3, p, button
    (.is-primary for the one main action), .tw-shell-close (the x in a header), label (text left,

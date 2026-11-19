@@ -27,6 +27,13 @@ const LINKED = new Set( [ 'crate', 'trap', 'barrel' ] );
 const CELL = 8;
 export const MAX_AWAKE = 80;
 const BREAK_SPEED = 4; // m/s of the hitter
+// kg m/s a body must carry into a fence panel, as well as BREAK_SPEED, to break it (declared): a 15 kg crate at
+// 4 m/s. A loose crab trap (about 3 kg) bounces off; a crate, a barrel, a felled trunk, a piece of a house or a car
+// carried in by a flood or a gust breaks it. The speed floor keeps a car nosing into a fence at walking pace (1,250 kg
+// at 1.4 m/s carries 1,750 kg m/s) from breaking it: it meets a solid fence, as a person on foot always does.
+const PANEL_MOMENTUM = 60;
+const CAR_MASS = 1250; // kg, the lightest car the player drives (rally/Vehicles.js)
+const CAR_REACH = 3;   // m from a car's middle to a panel it is touching: half its length (2.3 m on the Aster) and a margin
 const REST = 0.6; // seconds at rest before a prop may sleep
 const EPS = 1e-4;
 const REACH = 0.15; // how far the walker may get ahead of their stopped body (m)
@@ -401,7 +408,7 @@ export class PropPhysics {
 			const speed = poses[ i + 8 ], flag = poses[ i + 9 ];
 			if ( p.panel ) {
 
-				this.panelContact( p, speed, flag, pushers );
+				this.panelContact( p, speed, flag, pushers, poses );
 				continue;
 
 			}
@@ -442,12 +449,31 @@ export class PropPhysics {
 
 	}
 
-	panelContact( panel, speed, flag, pushers ) {
+	panelContact( panel, speed, flag, pushers, poses = null ) {
 
+		// A panel breaks for a body that hits it faster than BREAK_SPEED carrying at least PANEL_MOMENTUM: the car
+		// (its middle within CAR_REACH of the panel), or a loose body touching it (a crate or a barrel, the
+		// disaster's felled trees and pieces of houses: its own speed from the physics, its mass where it was
+		// woken, its middle within its own size of the panel). Never a person on foot: the physics reports the
+		// fastest body touching the panel, and the walker's pusher is one (a sprint, 6.2 m/s, broke a panel a
+		// passing car had woken), so the hitter is found among the car and the loose bodies, never the walker.
+		// While only the car was looked for, wreckage carried by a flood stopped breaking fences (docs/people.md).
 		if ( flag === 3 && speed > BREAK_SPEED ) {
 
-			this.breakPanel( panel, pushers.find( h => h.car ) );
-			return;
+			const car = pushers.find( h => h.car && h.speed > BREAK_SPEED && ( h.mass ?? CAR_MASS ) * h.speed >= PANEL_MOMENTUM && ( h.x - panel.centre.x ) ** 2 + ( h.z - panel.centre.z ) ** 2 < ( CAR_REACH + panel.half.z ) ** 2 );
+			if ( car ) { this.breakPanel( panel, car ); return; }
+			const D = this.app?.disasters, c = panel.centre, ph = panel.half, pr = Math.hypot( ph.x, ph.y, ph.z );
+			for ( let i = 0; poses && i < poses.length; i += 10 ) {
+
+				const v = poses[ i + 8 ];
+				if ( v <= BREAK_SPEED ) continue;
+				const prop = PROPS.all[ poses[ i ] ], body = prop ? null : D?.bodies?.bodies?.get( poses[ i ] ) || D?.structures?.bodies?.get( poses[ i ] );
+				const mass = prop ? ( prop.panel ? 0 : prop.physical?.mass ) : body?.mass, half = prop ? prop.local?.half : body?.half;
+				if ( ! mass || ! half || mass * v < PANEL_MOMENTUM ) continue;
+				const r = Math.hypot( half.x, half.y, half.z ) + pr, dx = poses[ i + 1 ] - c.x, dy = poses[ i + 2 ] - c.y, dz = poses[ i + 3 ] - c.z;
+				if ( dx * dx + dy * dy + dz * dz < r * r ) { this.breakPanel( panel ); return; }
+
+			}
 
 		}
 		const solid = flag === 3;

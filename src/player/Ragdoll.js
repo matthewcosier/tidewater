@@ -36,12 +36,6 @@ import { articulatedContact, jointCoordinates } from './JointVelocity.js';
 
 const G = 9.81, SUB = 2, MASS = 75, D2R = Math.PI / 180;
 const MAX_ROTATION_STEP = 0.1, CONTACT_TRAVEL = 0.15, MAX_SUBSTEPS = 192;
-// PLANE_REACH (m): how far a contact sphere may move across the ground from where its plane was taken
-// before the plane is taken again at its new place. The plane is a tangent (height there, normal from
-// +-0.25 m differences), so on a creased or curving hillside it parts from the terrain with distance:
-// The solver could move a forearm 0.26 m from its plane in one 38-substep frame while the pelvis stayed inside the
-// 0.15 m whole-rig refresh, the plane saying 0.8 cm clear and the terrain 8.3 cm deep (tornado seed 1).
-// Near the ground a sphere moves at most CONTACT_TRAVEL * r a substep, so this is a few substeps of travel.
 const PLANE_REACH = 0.05;
 const STILL = Object.freeze( [ 0, 0, 0 ] ), SUPPORT_REACH = Object.freeze( { maxRise: 0.001, maxDrop: 0.001 } );
 const FRACTION = { Pelvis: 0.142, Spine: 0.139, Spine2: 0.216, Head: 0.081, UpperArm: 0.028, Forearm: 0.022, Thigh: 0.1, Calf: 0.0465, Foot: 0.0145 };
@@ -56,6 +50,13 @@ const MU = 0.65, MU_WALL = 0.3, BOUNCE = 0.15, JOINT_VISCOSITY = 1, SPIN_DAMP = 
 // sliding across it is lifted by C (v_h^2 - skimMin^2), so a shallow entry skips like a stone until he slows;
 // drag (per m): the water's drag on him grows with the square of his speed (spray, the wave he pushes)
 export const ENTRY = { plane: 0.9, skim: 0.012, skimMin: 8, drag: 0.06 };
+const SURFACE_TAU = 0.3;
+// Bore front (boreFront): ROLLER_SPIN is the declared share of the roller's shear rate U / d that a
+// caught body takes up; ROLLER_GRIP (1/s) how fast it takes it up; ROLLER_AIR the void fraction of the
+// roller water, declared 0.3 inside the 0.1 to 0.5 measured in hydraulic-jump rollers (Chanson).
+// FRONT_MIN_DEPTH (m) keeps U / d finite on a wet film.
+const HOLD_TAU = 0.25; // s: a hold reached at 0.7 m closes at about 2.8 m/s, a lunge, not a snap
+const ROLLER_SPIN = 1, ROLLER_GRIP = 3, ROLLER_AIR = 0.3, FRONT_MIN_DEPTH = 0.2;
 const DEPEN = 1.5, SETTLE_V = 0.35, SETTLE_W = 1.5, SETTLE_T = 1.0, FLAT_T = 0.5, RISE_T = 0.75, BLEND_T = 0.6, OUT_T = 0.3, SWIM_T = 0.6, EYE = 1.62;
 
 const V = () => ( { x: 0, y: 0, z: 0 } );
@@ -125,6 +126,8 @@ function basis( x, y, z, o ) {
 }
 
 const _a = V(), _b = V(), _c = V(), _d = V(), _e = V(), _f = V(), _q1 = Q(), _q2 = Q(), _q3 = Q(), _gq = Q(), _up = new THREE.Vector3( 0, 1, 0 );
+// rest-test frame (update): the flood flow under the pelvis (m/s) and its sample; the still frame is STILL above
+const _carried = [ 0, 0, 0 ], _flow = {};
 // scratch for the solver (no allocation per substep)
 const _rp = V(), _rc = V(), _n = V(), _P = V(), _a1 = V(), _a2 = V(), _x = V(), _b1 = V(), _b2 = V(), _an = V(), _aP = V(), _t = V();
 
@@ -407,7 +410,7 @@ export class Ragdoll {
 		for ( const b of this.bodies ) b.supported = false;
 		this.push( opts.impulse, opts.point );
 		this.phase = 'sim';
-		this.t = 0; this.rest = 0; this.nearT = 0; this.trunks = opts.trunks || this.trunks;
+		this.t = 0; this.rest = 0; this.nearT = 0; this.surfacePrev = NaN; this.surfaceVy = 0; this.trunks = opts.trunks || this.trunks;
 		this.stats = { substeps: 0, substepsMax: 0, consumedTime: 0, protectionEnergy: 0, protectionCount: 0, protectionLast: null, above40: 0, above70: 0, maxIntegratedAngle: 0, maxNearTravelRatio: 0, forceRetries: 0, maxGeometricTravelRatio: 0, acceptedTime: 0, droppedTime: 0, droppedSteps: 0, protectionTranslationEnergy: 0, protectionRotationEnergy: 0, protectionWorldEnergyChange: 0, protectionSupportWork: 0, protectionBoundExceeded: 0, capped: 0, frames: 0, ms: 0, msMax: 0, nan: 0, clearance: Infinity, swing: 0, twist: 0, hinge: 0, flexMax: 0, simT: 0, settleSpeed: 0, water: false };
 		this.focus.set( this.pelvis.x.x, this.pelvis.x.y, this.pelvis.x.z );
 		this.floorY = this.ground( this.pelvis.x.x, this.pelvis.x.z, this.pelvis.x.y );
@@ -576,8 +579,16 @@ export class Ragdoll {
 		nb.length = 0; nc.length = 0;
 		for ( const b of C.boxes ) if ( Math.abs( b.center.x - P.x ) < b.radius + reach && Math.abs( b.center.z - P.z ) < b.radius + reach ) nb.push( b );
 		for ( const c of C.cylinders ) if ( Math.abs( c.x - P.x ) < c.radius + reach && Math.abs( c.z - P.z ) < c.radius + reach ) nc.push( c );
-		const t = this.trunks && this.trunks();
-		if ( t ) for ( let i = 0; i < t.length; i += 5 ) if ( Math.abs( t[ i ] - P.x ) < reach && Math.abs( t[ i + 1 ] - P.z ) < reach ) nc.push( { x: t[ i ], z: t[ i + 1 ], radius: t[ i + 2 ], yMin: t[ i + 3 ], yMax: t[ i + 4 ] } );
+		const t = this.trunks && this.trunks(), pool = this.trunkPool || ( this.trunkPool = [] );
+		let k = 0;
+		if ( t ) for ( let i = 0; i < t.length; i += 5 ) if ( Math.abs( t[ i ] - P.x ) < reach && Math.abs( t[ i + 1 ] - P.z ) < reach ) {
+
+			const c = pool[ k ] || ( pool[ k ] = { x: 0, z: 0, radius: 0, yMin: 0, yMax: 0 } );
+			k ++;
+			c.x = t[ i ]; c.z = t[ i + 1 ]; c.radius = t[ i + 2 ]; c.yMin = t[ i + 3 ]; c.yMax = t[ i + 4 ];
+			nc.push( c );
+
+		}
 
 	}
 
@@ -671,6 +682,40 @@ export class Ragdoll {
 		this.stats.protectionLast = { cause, remaining: h, scale, removed, translation, rotation, worldChange, supportWork, support: provider?.id || null };
 	}
 
+	// The breaking front of a flood bore. Where the flow is supercritical (Froude U / sqrt(g d) > 1)
+	// it is the roller: the water turns over across its depth, so a body caught in it is rolled about
+	// the horizontal axis across the flow, at the shear rate U / d (1/s) scaled by how far past
+	// critical the flow is (declared ROLLER_SPIN 1, reached over 1 / ROLLER_GRIP s). The roller is
+	// also aerated: its water carries less weight, so a body loses that share of its buoyancy and goes
+	// under until the front has passed. Before this a swept body slid flat and upright on the current.
+	boreFront( b, ux, uz, water, sub, h ) {
+
+		const U = Math.sqrt( ux * ux + uz * uz );
+		const depth = Math.max( FRONT_MIN_DEPTH, water - this.disasterField.terrain( b.x.x, b.x.z ) );
+		const front = Math.min( 1, Math.max( 0, U / Math.sqrt( G * depth ) - 1 ) );
+		if ( ! ( front > 0 ) ) return;
+		const ax = uz / U, az = - ux / U; // cross-flow axis: the top of the body moves downstream
+		const spin = ROLLER_SPIN * front * U / depth, along = b.w.x * ax + b.w.z * az;
+		const add = ( spin - along ) * ( 1 - Math.exp( - ROLLER_GRIP * sub * h ) );
+		b.w.x += ax * add; b.w.z += az * add;
+		b.v.y -= G * b.float * sub * h * ROLLER_AIR * front;
+
+	}
+
+	// Clinging (src/people/Cling.js): steer the gripping body onto the hold's surface, as an arm pulls
+	// in. A velocity target with time constant HOLD_TAU, not a spring, so a stiff hold cannot ring or
+	// blow up at the substep; the rest of the rig trails downstream on its joints. Vertical motion is
+	// left to buoyancy and the bore front, so a holder can still be pushed under.
+	holdOn( b, h ) {
+
+		const hold = this.cling.hold;
+		const dx = b.x.x - hold.x, dz = b.x.z - hold.z;
+		const l = Math.hypot( dx, dz ) || 1, reach = hold.radius + b.r;
+		b.v.x = ( hold.x + dx / l * reach - b.x.x ) / HOLD_TAU;
+		b.v.z = ( hold.z + dz / l * reach - b.x.z ) / HOLD_TAU;
+
+	}
+
 	integrateForces( h, W ) {
 		for ( const b of this.bodies ) {
 
@@ -696,8 +741,10 @@ export class Ragdoll {
 					b.v.x *= kq; b.v.y *= kq; b.v.z *= kq;
 					const k = Math.exp( - WATER_DRAG * sub * h ), kw = Math.exp( - WATER_SPIN * sub * h );
 					b.v.x = ux + b.v.x * k; b.v.y *= k; b.v.z = uz + b.v.z * k; b.w.x *= kw; b.w.y *= kw; b.w.z *= kw;
+					if ( this.disasterField && ( ux !== 0 || uz !== 0 ) ) this.boreFront( b, ux, uz, water, sub, h );
 
 				}
+				if ( this.cling && b === this.cling.body ) this.holdOn( b, h );
 
 				const kw = Math.exp( - SPIN_DAMP * h );
 				b.w.x *= kw; b.w.y *= kw; b.w.z *= kw;
@@ -956,11 +1003,16 @@ export class Ragdoll {
 			this.t += dt;
 			this.ground( this.pelvis.x.x, this.pelvis.x.z, this.pelvis.x.y );
 			const movingSupport = this.supported ? this.groundProvider : null;
-			const carriedSpin = movingSupport?.angularVelocity?.() || [ 0, 0, 0 ];
+			const carriedSpin = movingSupport?.angularVelocity?.() || STILL;
+			const P0 = this.pelvis.x, flow = ! movingSupport && this.disasterField && P0.y < this.waterY ? this.disasterField.sample( P0.x, P0.y, P0.z, _flow ) : null;
+			const surfaceRate = flow && Number.isFinite( this.surfacePrev ) ? ( this.waterY - this.surfacePrev ) / dt : 0;
+			this.surfacePrev = flow ? this.waterY : NaN;
+			this.surfaceVy = flow ? this.surfaceVy + ( surfaceRate - this.surfaceVy ) * Math.min( 1, dt / SURFACE_TAU ) : 0;
+			_carried[ 0 ] = flow ? flow.ux : 0; _carried[ 1 ] = flow && ! this.supported ? this.surfaceVy : 0; _carried[ 2 ] = flow ? flow.uz : 0;
 			let e = 0, spin = 0, ok = true;
 			for ( const b of this.bodies ) {
 
-				const carried = movingSupport?.velocityAt( [ b.x.x, b.x.y, b.x.z ] ) || [ 0, 0, 0 ];
+				const carried = movingSupport?.velocityAt( [ b.x.x, b.x.y, b.x.z ] ) || _carried;
 				e += b.m * ( ( b.v.x - carried[ 0 ] ) ** 2 + ( b.v.y - carried[ 1 ] ) ** 2 + ( b.v.z - carried[ 2 ] ) ** 2 );
 				const wx = b.w.x - carriedSpin[ 0 ], wy = b.w.y - carriedSpin[ 1 ], wz = b.w.z - carriedSpin[ 2 ];
 				rot( b.q, b.ax, _a );
@@ -984,12 +1036,12 @@ export class Ragdoll {
 
 			}
 
-			const speed = Math.sqrt( e / this.mass ), P = this.pelvis.x, wet = P.y < this.waterY + 0.05 && this.waterY > this.ground( P.x, P.z, P.y ) + 0.4;
+			const speed = Math.sqrt( e / this.mass ), P = this.pelvis.x, inWater = P.y < this.waterY + 0.05, wet = inWater && this.waterY > this.ground( P.x, P.z, P.y ) + 0.4;
 			st.water = st.water || wet;
-			st.restSpeed = speed; st.restSpin = spin;
-			// in the sea: still enough, and floated back up to the surface
-			const floating = wet && P.y > this.waterY - 0.6;
-			this.rest = ( ( this.supported && ! wet ) || floating ) && speed < SETTLE_V * ( wet ? 1.8 : 1 ) && spin < SETTLE_W ? this.rest + dt : 0;
+			st.restSpeed = speed; st.restSpin = spin; st.surfaceVy = this.surfaceVy;
+			const floating = inWater && P.y > this.waterY - 0.6;
+			const swims = floating && wet, stands = ! wet && ( this.supported || floating );
+			this.rest = ( swims || ( stands && ! this.pinned ) ) && speed < SETTLE_V * ( wet ? 1.8 : 1 ) && spin < SETTLE_W ? this.rest + dt : 0;
 			this.measure();
 			this.focus.set( P.x, P.y, P.z );
 			this.floorY = Math.max( this.ground( P.x, P.z, P.y ), wet ? this.waterY - 1 : - Infinity );

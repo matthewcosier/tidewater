@@ -37,9 +37,10 @@ export async function placeJetskiHire( app ) {
 // The gate wraps app.jetskis.offer (Jetski.js stays untouched): unpaid, near the stand or a beach ski, the
 // hire offer comes first. ?freeHire skips the fee (other lanes' checks).
 export const HIRE_FEE = 20;
-// from the stool (inside the east end) out the open back, round the west end to the sea side (stand frame): the
-// east end is the counter, where the customer stands, so he never walks through them
-const AROUND = [ [ 0.7, - 1.05 ], [ - 1.95, - 1.05 ], [ - 1.95, 1.4 ] ];
+// from the stool (behind the stand, src/people/Beach.js) along its back, round the west end to the sea side (stand
+// frame): the east end is the counter, where the customer stands, so he never walks through them. 1.1 m behind the
+// middle keeps his body (0.27 m) clear of the stand's back (half depth 0.8 m; test/walker-routes.mjs).
+const AROUND = [ [ 0.7, - 1.1 ], [ - 1.95, - 1.1 ], [ - 1.95, 1.4 ] ];
 const FACE = Math.PI / 2;   // the attendant faces the path down from the village, over the counter (+x)
 
 export class HireDesk {

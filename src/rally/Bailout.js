@@ -39,7 +39,7 @@ export class Bailout {
 		if ( ! this.active ) {
 			// no character to throw (still loading): step out beside the car
 			player.position.set( this.position.x, Math.max( terrain.heightAt( this.position.x, this.position.z ), colliders.groundHeightAt( this.position.x, this.position.z, from.y ) ), this.position.z );
-			colliders.resolveCapsule( player.position, RADIUS, 1.8 );
+			colliders.place( player.position, RADIUS, 1.8 );   // boxes, cylinders and trunks, as walking meets them
 			player.mode = 'walk';
 			player.velocity.set( 0, 0, 0 );
 		}

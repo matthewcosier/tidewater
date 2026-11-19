@@ -123,6 +123,11 @@ export class Brain {
 	sense( t, dt, P, ctx ) {
 
 		const T = this.traits, M = this.mood, stand = ctx.posture !== 'sit';
+		// on their way (a route, even while held on it): they greet on the move, a look and perhaps a word, with no
+		// clip (the owners' clips are whole-body, so a wave stands them still), and never the second, long greeting.
+		// Before this a walker counted as standing, and a foot passenger on its way to the gate stood beside the
+		// player for the wave (5.6 s), then a talk (27.4 s) or a point (14.2 s)
+		const walking = ctx.posture === 'walk';
 		// seated with the player in front of their knees: tucked in while they are there, a word if they come past
 		if ( ! stand && t - this.closeAt < 0.35 ) {
 
@@ -142,7 +147,7 @@ export class Brain {
 		const near = P.d < NEAR && Math.abs( P.dy ) < 1.9 && P.looking && ( stand || ( P.speed < 0.5 && t - this.closeAt > 1 ) );
 		if ( near ) {
 
-			this.nearT += dt;
+			if ( ! walking ) this.nearT += dt;   // the time he stays by them, for the second greeting
 			// the player holds their eye, unless something else just caught it (a bird, the horn)
 			if ( t >= this.reactUntil ) { this.lookAt( P.head, t + 1 ); this.engagedUntil = t + 1; }
 			if ( t < this.coolUntil || this.greets >= 2 || this.gesture ) return;
@@ -150,11 +155,11 @@ export class Brain {
 
 				// a wave or a nod, and perhaps a word (the bird on their shoulder, if they are curious)
 				this.greets = 1;
-				if ( stand ) this.gesture = { clip: Math.random() < T.wave ? 'wave' : 'nod', greet: true };
+				if ( stand && ! walking ) this.gesture = { clip: Math.random() < T.wave ? 'wave' : 'nod', greet: true };
 				const key = this.keepAway ? 'wary' : P.bird && Math.random() < 0.3 + 0.5 * M.curiosity ? 'bird-shoulder' : this.memory.friendly > 0 ? 'greet-again' : 'greet';
 				if ( this.memory.ignored < 2 ) this.spokeToPlayer = this.speak( t, key, ( 0.25 + 0.6 * T.chat ) * ( key === 'bird-shoulder' ? 1.3 : 1 ) );
 
-			} else if ( this.nearT > ( this.type === 'shy' ? 4 : 2.5 ) ) {
+			} else if ( ! walking && this.nearT > ( this.type === 'shy' ? 4 : 2.5 ) ) {
 
 				// the player stays: a word with the hands, or a point
 				this.greets = 2; this.coolUntil = t + 15; this.memory.friendly ++;
@@ -165,8 +170,8 @@ export class Brain {
 
 		} else if ( this.nearT > 0 || this.greets ) {
 
-			// they walked off: spoken to and gone at once is being ignored
-			if ( this.greets === 1 && this.spokeToPlayer && this.nearT < 1.5 ) this.memory.ignored ++;
+			// they walked off: spoken to and gone at once is being ignored (not when it is this one walking on)
+			if ( this.greets === 1 && this.spokeToPlayer && this.nearT < 1.5 && ! walking ) this.memory.ignored ++;
 			if ( this.greets ) this.coolUntil = Math.max( this.coolUntil, t + 8 );
 			this.greets = 0; this.nearT = 0; this.spokeToPlayer = false;
 

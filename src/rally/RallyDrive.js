@@ -1,9 +1,8 @@
-import { Vector3, Quaternion } from '../engine/index.js';
+import { Vector3, Quaternion, Euler } from '../engine/index.js';
 import { Colliders } from '../world/Colliders.js';
 import { loadVehicle } from './VehicleModel.js';
 import { CATCH_UP_PHYSICS_STEPS } from '../core/SimulationPacing.js';
 import { Bailout } from './Bailout.js';
-import { bindWheels, poseWheel } from './WheelRig.js';
 import { VEHICLES } from './Vehicles.js';
 import { TyreTracks } from './TyreTracks.js';
 import { EngineSound } from './EngineSound.js';
@@ -13,7 +12,7 @@ import { DriveHUD } from './DriveHUD.js';
 import { clearSpawn, recoverySpot } from './Spawn.js';
 import { CarWater } from './CarWater.js';
 import { Damage } from './Damage.js';
-import { terrainMaterialCodes, trunkCylinders, cameraPlants } from './WorldPhysics.js';
+import { terrainMaterialCodes, trunkCylinders, cameraPlants, uploadTerrain, leftWorld } from './WorldPhysics.js';
 import './rally.css';
 
 const SURFACE_ASPHALT = 3, SURFACE_WOOD = 5;   // rally-physics Surface codes
@@ -23,6 +22,7 @@ const smoothstep = x => { const t = Math.min( 1, Math.max( 0, x ) ); return t * 
 // Bailing out: full speed for the shout and the leap, then a fifth speed in the air, easing
 // back to full speed around the landing (seconds of unslowed time).
 const bulletTime = t => t > 2.6 ? null : t < 1.1 ? 1 - 0.8 * smoothstep( ( t - 0.45 ) / 0.15 ) : 0.2 + 0.8 * smoothstep( ( t - 1.1 ) / 1.5 );
+const WHEEL_NAMES = [ 'WheelFrontL', 'WheelFrontR', 'WheelRearL', 'WheelRearR' ];
 // The walker's old spawn at (18, -60) contains decorative dinghies. The
 // vehicle needs a full chassis-sized patch and a clear launch along the beach.
 const SPAWN = { x: - 55, z: - 64, yaw: Math.PI / 2 };
@@ -49,7 +49,6 @@ export class RallyDrive {
 	constructor( app ) {
 		this.app = app;
 		this.active = false;
-		this.assists = true;
 		this.vehicleKey = 'aster';
 		this.profile = VEHICLES.aster;
 		this.spawnOffset = 0;
@@ -69,6 +68,7 @@ export class RallyDrive {
 		this.cameraDesired = new Vector3();
 		this.cameraDir = new Vector3();
 		this.quaternion = new Quaternion();
+		this.wheelEuler = new Euler( 0, 0, 0, 'YXZ' );
 		this.cameraReady = false;
 		this.cameraYaw = 0;
 		this.orbit = { yaw: 0, pitch: 0, idle: 0 };
@@ -91,9 +91,13 @@ export class RallyDrive {
 		await module.default( { module_or_path: `${ base }rally_physics_bg.wasm` } );
 		this.physics = new module.RallyPhysics();
 		this.model = aster;
-		this.wheels = bindWheels( aster, this.profile );
+		this.wheels = WHEEL_NAMES.map( name => {
+			const wheel = aster.pivots.get( name );
+			if ( ! wheel ) throw new Error( `Rally model is missing ${ name }` );
+			return wheel;
+		} );
 		const { terrainData: terrain, colliders, scene } = this.app;
-		if ( ! this.physics.set_terrain( terrain.heights, terrain.res, terrain.size, terrain.origin ) ) throw new Error( 'Rally terrain collision could not be created' );
+		if ( ! uploadTerrain( this.physics, terrain ) ) throw new Error( 'Rally terrain collision could not be created' );
 		if ( terrain.roads ) this.physics.set_roads( terrain.roads.physicsData() );
 		// Sand, wet sand, soil and rock grip from the terrain splat; trunks a car can hit.
 		this.physics.set_surface_map( terrainMaterialCodes( terrain ) );
@@ -211,6 +215,8 @@ export class RallyDrive {
 		this.physics.clear_island_statics();
 		this.trunks=trunkCylinders(this.app.vegetation,this.app.terrainData);
 		this.physics.add_cylinders(this.trunks);
+		// the same trunks for people on foot, in their own grid: never in colliders.cylinders, which goes to the car below
+		colliders.setTrunks(this.trunks);
 		const boxes=colliders.boxes.filter(b=>(b.solid||b.walkable)&&!b.prop&&b!==this.walkingProxy);
 		this.physics.add_surface_boxes(new Float32Array(boxes.flatMap(b=>[...carBox(b),b.rotY,b.tag.includes("pier")?0.8:0.65])),new Uint8Array(boxes.map(b=>b.tag==="terminal-car"?SURFACE_ASPHALT:SURFACE_WOOD)));
 		this.physics.add_cylinders(new Float32Array(colliders.cylinders.filter(c=>!c.prop&&c.yMax>c.yMin).flatMap(c=>[c.x,c.z,c.radius,c.yMin,c.yMax])));
@@ -246,7 +252,7 @@ export class RallyDrive {
 		this.model = this.models[ key ];
 		this.model.root.visible = true;
 		this.damage?.select();
-		this.wheels = bindWheels( this.model, this.profile );
+		this.wheels = WHEEL_NAMES.map( name => this.model.pivots.get( name ) );
 		this.physics.select_vehicle( this.profile.id );
 		this.walkingProxy.half.fromArray( this.profile.proxy );
 		this.walkingProxy.radius = Math.hypot( this.walkingProxy.half.x, this.walkingProxy.half.z );
@@ -260,12 +266,6 @@ export class RallyDrive {
 
 	repair() {
 		this.damage?.repair();
-		this.refreshUI();
-	}
-
-	toggleAssists() {
-		this.assists = ! this.assists;
-		this.physics.set_assists( this.assists );
 		this.refreshUI();
 	}
 
@@ -324,14 +324,19 @@ export class RallyDrive {
 		this.app.freeCam = false;
 		// Safe dry ground next to the car, falling back to the beach after a dunk.
 		const car = this.model.root.position;
-		let exit = new Vector3( car.x, car.y, car.z );
+		let exit = null, dry = null;
 		for ( const side of [ - 1, 1 ] ) {
 			const trial = new Vector3( side * 2.2, 0, 0 ).applyQuaternion( this.model.root.quaternion ).add( car );
 			trial.y = Math.max( terrain.heightAt( trial.x, trial.z ), colliders.groundHeightAt( trial.x, trial.z, car.y + 2 ) );
-			if ( trial.y > 0.8 ) { exit = trial; break; }
+			if ( trial.y <= 0.8 ) continue;
+			dry = dry || trial;
+			// the same solid world as walking (boxes, cylinders and trunks: Colliders.place); a side with no room
+			// for a body (a palm against the door and a wall behind it) gives way to the other
+			if ( colliders.place( trial, 0.3, 1.8 ) ) { exit = trial; break; }
 		}
+		exit = exit || dry || new Vector3( car.x, car.y, car.z );
 		if ( exit.y < 0.8 ) exit.set( SPAWN.x - 3, terrain.heightAt( SPAWN.x - 3, SPAWN.z ), SPAWN.z );
-		colliders.resolveCapsule( exit, 0.3, 1.8 );
+		colliders.place( exit, 0.3, 1.8 );
 		player.position.copy( exit );
 		player.mode = 'walk';
 		player.grounded = true;
@@ -354,7 +359,6 @@ export class RallyDrive {
 		const pad = controls ? this.gamepad() : null;
 		if ( controls && ( input.hit( 'KeyR' ) || pad?.recover ) ) this.recover();
 		if ( controls && input.hit( 'KeyE' ) ) this.leave();
-		if ( controls && input.hit( 'KeyJ' ) ) this.toggleAssists();
 		if ( controls && ( input.hit( 'KeyY' ) || pad?.yeet ) ) this.yeet();
 		const down = code => controls && this.active && input.down( code );
 		// Keyboard is all-or-nothing; a gamepad adds analog steering and pedals on top.
@@ -380,7 +384,7 @@ export class RallyDrive {
 		this.shared?.update( dt );
 		const position = this.model.root.position;
 		// The sea floats cars now; only a car that has left the world entirely is rescued.
-		if ( ! Number.isFinite( position.x + position.y + position.z ) || position.y < - 40 || Math.abs( position.x ) > 1010 || Math.abs( position.z ) > 1010 ) {
+		if ( leftWorld( this.app.terrainData, position ) ) {
 			this.recover( true );
 		}
 		if ( this.active ) {
@@ -421,10 +425,10 @@ export class RallyDrive {
 		this.up.set( 0, 1, 0 ).applyQuaternion( root.quaternion );
 		for ( let i = 0; i < 4; i ++ ) {
 			const offset = 13 + i * 4;
-			const angle = s[ offset + 2 ] / this.wheels[ i ].radius * dt;
-			this.spin[ i ] = ( this.spin[ i ] + angle ) % ( Math.PI * 2 );
-			this.turns[ i ] += angle / ( Math.PI * 2 );
-			poseWheel( this.wheels[ i ], this.profile.mount - s[ offset ], s[ offset + 1 ], this.spin[ i ] );
+			this.spin[ i ] = ( this.spin[ i ] + s[ offset + 2 ] / this.profile.radius * dt ) % ( Math.PI * 2 );
+			this.turns[ i ] += s[ offset + 2 ] / this.profile.radius * dt / ( Math.PI * 2 );
+			this.wheels[ i ].position.y = this.profile.mount - s[ offset ];
+			this.wheels[ i ].quaternion.setFromEuler( this.wheelEuler.set( this.spin[ i ], s[ offset + 1 ], 0, 'YXZ' ) );
 		}
 		const proxy = this.walkingProxy;
 		if ( proxy ) {

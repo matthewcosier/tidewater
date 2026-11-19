@@ -1,6 +1,16 @@
-"""Build a lifted black Jeep in Blender, plus editable source and QA renders.
-Z-up / -Y nose in Blender; Y-up / +Z nose in the exported game GLB.
-Run: Blender --background --factory-startup --python tools/rally/build_black_jeep.py
+"""Build the Ridgeback 4x4 (file black_jeep) in Blender, plus editable source and QA renders.
+Reference: a lifted two-door body-on-frame off-roader on 37-inch mud tyres (0.94 m, r 0.47 m),
+wheelbase 2.76 m, track 2.04 m, 2100 kg; a class, not one maker's model (no brand shapes or badges).
+Z-up / -Y nose in Blender; Y-up / +Z nose in the exported game GLB. Origin on the ground under the
+body centre; pivots WheelFrontL/R, WheelRearL/R at the hubs (z 0.47 m) and RearSpare on the tailgate
+carrier. Vehicles.js and rally-physics vehicle.rs hold these numbers: change them together or not at all.
+Run: Blender --background --factory-startup --python tools/rally/build_black_jeep.py [-- --no-render]
+(--no-render skips the studio renders, which overwrite the tracked previews.)
+(2026-10-06, ledger -3 "boxy, toy-like, cartoon round lamps, slab bonnet"): lofted bonnet
+with a crowned centre and character lines, lamp units with a chrome reflector bowl, clear lens,
+small projector and a thin running ring, rolled-lip arch flares, a winged steel bumper with
+recovery tabs, a wrapped rear bumper with tabs and a hitch receiver, a sports bar behind the
+front seats and the spare on a carrier clear of the tailgate (it sat 11 cm inside it).
 """
 from pathlib import Path
 import json, math, struct, sys
@@ -39,6 +49,46 @@ interior=material("CabinCharcoal",(.021,.025,.028),.02,.88)
 seat=material("StitchedSeats",(.065,.07,.073),.02,.86)
 spring=material("CoilSpring",(.075,.085,.09),.72,.34)
 plate=material("PlateWhite",(.66,.68,.65),.04,.58)
+chrome=material("LampReflectorChrome",(.80,.82,.84),1.0,.07)
+lens=material("ClearLampLens",(.86,.90,.93,.20),.0,.03)
+lens.node_tree.nodes.get("Principled BSDF").inputs["Alpha"].default_value=.20
+lens.surface_render_method="DITHERED"
+
+def lathe(name, centre, profile, mat, group="BodyStatic", segments=40, smooth=True):
+    """Revolve (radius, dy) pairs about a Y-parallel axis through centre: lamp bowls and lenses.
+    A radius of 0 is a pole (one vertex, a triangle fan)."""
+    cx, cy, cz = centre
+    verts, faces, rings = [], [], []
+    for r, dy in profile:
+        if r < 1e-6:
+            rings.append([len(verts)])
+            verts.append((cx, cy + dy, cz))
+            continue
+        start = len(verts)
+        for i in range(segments):
+            a = math.tau * i / segments
+            verts.append((cx + r * math.sin(a), cy + dy, cz + r * math.cos(a)))
+        rings.append(list(range(start, start + segments)))
+    for a, b in zip(rings, rings[1:]):
+        for i in range(segments):
+            j = (i + 1) % segments
+            if len(a) == 1:
+                faces.append((a[0], b[j], b[i]))
+            elif len(b) == 1:
+                faces.append((a[i], a[j], b[0]))
+            else:
+                faces.append((a[i], a[j], b[j], b[i]))
+    return mesh(name, verts, faces, mat, group, smooth)
+
+def loft(name, sections, mat, group="BodyStatic", sharp=32):
+    """Quads between equal-length point rows, both ends capped (each end row lies in one plane)."""
+    n = len(sections[0])
+    verts = [p for s in sections for p in s]
+    faces = [(k*n+i, (k+1)*n+i, (k+1)*n+i+1, k*n+i+1) for k in range(len(sections)-1) for i in range(n-1)]
+    faces += [tuple(range(n)), tuple(range((len(sections)-1)*n, len(sections)*n))]
+    obj = mesh(name, verts, faces, mat, group, True)
+    obj.data.set_sharp_from_angle(angle=math.radians(sharp))
+    return obj
 
 root=bpy.data.objects.new("BlackJeep",None)
 bpy.context.collection.objects.link(root)
@@ -81,44 +131,67 @@ for side in (-1,1):
     mesh("Sculpted side with open arches",verts,faces,black)
     for axle in (-1.38,1.38):
         v,f=[],[]
-        for i in range(49):
-            a=math.pi*i/48
-            for x,r in ((.89,.61),(1.19,.64),(1.20,.60),(.89,.57)):
+        section=((.89,.57),(.905,.625),(.97,.662),(1.09,.672),(1.165,.657),(1.203,.627),(1.21,.60),(1.19,.583),(1.05,.585))
+        m=len(section)
+        for i in range(53):
+            a=math.radians(-8)+(math.pi+math.radians(16))*i/52
+            for x,r in section:
                 v.append((side*x,axle+math.cos(a)*r,.47+math.sin(a)*r))
-        for i in range(48):
-            for j in range(4): f.append((i*4+j,(i+1)*4+j,(i+1)*4+(j+1)%4,i*4+(j+1)%4))
-        # Smooth round the arch, crisp at the box section's corners: flat-shaded, its 48 facets
-        # showed as steps in the front review render.
+        for i in range(52):
+            for j in range(m): f.append((i*m+j,(i+1)*m+j,(i+1)*m+(j+1)%m,i*m+(j+1)%m))
         flare=mesh("Wide bolt-on fender flare",v,f,trim,smooth=True)
         flare.data.set_sharp_from_angle(angle=math.radians(35))
         for i in range(7):
             a=(i+.5)*math.pi/7
-            cylinder("Fender mounting bolt",(side*.908,axle+math.cos(a)*.61,.47+math.sin(a)*.61),.012,.015,bolt,segments=10)
+            cylinder("Fender mounting bolt",(side*1.212,axle+math.cos(a)*.612,.47+math.sin(a)*.612),.011,.014,bolt,segments=10)
     line("Rock slider",[(side*1.0,-.68,.8),(side*1.07,-.5,.79),(side*1.07,.67,.79),(side*1.0,.82,.8)],.055,satin)
     cube("Door skin",(side*.908,-.03,1.2),(.042,1.25,.51),black,.025)
     for y in (-.55,.49):
         cube("Exposed door hinge",(side*.94,y,1.26),(.045,.065,.13),satin,.008)
     cube("Door handle",(side*.959,.39,1.46),(.04,.19,.043),satin,.015)
+    # Shut lines round the door, so it reads as a panel that opens (the body was one smooth box).
+    line("Door shut line",[(side*.932,-.655,.95),(side*.932,-.655,1.45),(side*.932,.595,1.45),(side*.932,.595,.95)],.004,trim)
     line("Mirror arm",[(side*.9,-.65,1.53),(side*1.12,-.66,1.69)],.024,satin)
     cube("Mirror shell",(side*1.15,-.65,1.74),(.11,.20,.19),satin,.035)
     cube("Mirror glass",(side*1.15,-.544,1.74),(.085,.008,.14),bolt,.014)
 
-# Hood and cowl, hood latches, a recessed bar grille and round LED lamps.
-cube("Bonnet",(0,-1.40,1.48),(1.75,1.3,.115),black,.055)
-cube("Raised hood centre",(0,-1.45,1.544),(1.02,.9,.038),black,.035)
+half=((.875,-.115),(.878,-.06),(.872,-.03),(.86,-.012),(.835,-.002),(.79,.004),(.60,.008),(.40,.010),(.345,.012),(.33,.026),(.31,.034),(.15,.040))
+row=[(-x,dz) for x,dz in half]+[(0.0,.042)]+[(x,dz) for x,dz in reversed(half)]
+sections=[]
+for y,drop,narrow in [(-.82,0,1),(-.95,0,1),(-1.15,0,1),(-1.4,0,1),(-1.65,0,1),(-1.85,0,1),(-2.0,0,1),(-2.06,0,1),(-2.085,.012,.99),(-2.10,.04,.975)]:
+    t=1.522-.010*(-.82-y)/1.24-drop
+    taper=narrow*(1-.015*(-.82-y)/1.28)
+    sections.append([(x*taper,y,t+(dz if drop<.03 else dz*.6)) for x,dz in row])
+loft("Lofted bonnet",sections,black)
 for side in (-1,1):
     for y in (-1.86,-.98): cube("Bonnet latch",(side*.87,y,1.43),(.048,.075,.14),trim,.009)
-cube("Front grille surround",(0,-2.075,1.235),(1.76,.12,.61),black,.06)
+    # Recessed bonnet vents on the wings, slats inset in a black bezel.
+    cube("Bonnet vent bezel",(side*.58,-1.22,1.525),(.30,.34,.012),trim,.006)
+    for k in range(6): cube("Bonnet vent slat",(side*.58,-1.36+k*.056,1.531),(.27,.016,.006),satin,0)
+cube("Cowl vent grille",(0,-.87,1.528),(1.42,.07,.014),trim,.005)
+cube("Front grille surround",(0,-2.075,1.22),(1.76,.12,.58),black,.05)
 cube("Recessed grille opening",(0,-2.144,1.225),(.88,.018,.43),trim,.035)
 for k in range(11): cube("Recessed grille mesh",((k-5)*.078,-2.152,1.225),(.008,.008,.40),satin,.002)
-for k in range(5): cube("Grille bar",(0,-2.160,1.065+k*.08),(.86,.016,.028),satin,.007)
+for k in range(5): cube("Grille bar",(0,-2.160,1.065+k*.08),(.82,.016,.028),satin,.007)
 cube("Grille centre post",(0,-2.163,1.225),(.05,.018,.42),satin,.01)
 for side in (-1,1):
-    cylinder("Round headlight bezel",(side*.657,-2.151,1.26),.195,.055,satin,"Y")
-    cylinder("Projector lens",(side*.657,-2.188,1.26),.139,.018,glass,"Y")
-    ring("Round LED daytime ring",(side*.657,-2.20,1.26),.153,.016,lamp,"Y")
+    c=(side*.657,-2.151,1.26)
+    lathe("Headlamp bucket",c,((.196,-.012),(.196,-.036),(.178,-.040),(.170,-.022)),satin,segments=48)
+    lathe("Headlamp reflector bowl",c,((.170,-.022),(.150,-.004),(.110,.026),(.060,.046),(.030,.050)),chrome,segments=48)
+    lathe("Headlamp lens",c,((.172,-.040),(.150,-.048),(.100,-.056),(0,-.060)),lens,segments=48)
+    ring("Thin running lamp ring",(c[0],c[1]-.030,c[2]),.158,.0045,lamp,"Y",segments=48)
+    cylinder("Projector shroud",(c[0],c[1]+.012,c[2]),.052,.07,chrome,"Y",segments=24)
+    cylinder("Projector lens",(c[0],c[1]-.024,c[2]),.040,.012,glass,"Y",segments=24)
     cube("Amber marker",(side*.91,-1.94,1.2),(.075,.14,.055),amber,.018)
-cube("Steel front bumper",(0,-2.21,.88),(1.95,.32,.23),satin,.07)
+# Steel bumper: a centre beam, wings swept back 22 degrees for approach angle, an angled bash plate
+# under it and recovery tabs that carry the shackles (the old one was a single rounded box).
+cube("Steel front bumper",(0,-2.21,.88),(1.30,.30,.22),satin,.02)
+for side in (-1,1):
+    wing=cube("Steel front bumper wing",(side*.84,-2.14,.89),(.44,.24,.19),satin,.02)
+    wing.rotation_euler.z=side*math.radians(22)
+    cube("Recovery tab",(side*.66,-2.37,.87),(.03,.13,.13),satin,.006)
+plate_bash=cube("Front bash plate",(0,-2.13,.73),(1.12,.30,.025),satin,.006)
+plate_bash.rotation_euler.x=math.radians(-24)
 cube("Winch motor",(.13,-2.21,1.085),(.52,.24,.19),satin,.045)
 cylinder("Winch drum",(-.12,-2.24,1.09),.077,.35,steel)
 for i in range(16): ring("Winch cable winding",(-.275+i*.018,-2.24,1.09),.08,.007,alloy,segments=24)
@@ -141,10 +214,22 @@ for x in (-.42,.32): line("Windshield wiper",[(x,-.791,1.57),(x+.21,-.69,1.74)],
 cube("Hardtop",(0,.74,2.13),(1.73,2.58,.13),trim,.065)
 cube("Tailgate",(0,2.09,1.17),(1.79,.14,.57),black,.035)
 mesh("Rear window",[(-.82,2.049,1.53),(.82,2.049,1.53),(.78,1.971,2.06),(-.78,1.971,2.06)],[(0,1,2,3)],glass,"GlassPanels")
-cube("Rear bumper",(0,2.21,.80),(1.98,.24,.20),satin,.05)
+# Rear bumper: a centre beam with corners wrapped 24 degrees round the body, recovery tabs with
+# shackles on the corners and a square hitch receiver (was one rounded box).
+cube("Rear bumper",(0,2.21,.80),(1.36,.24,.20),satin,.02)
+for side in (-1,1):
+    wrap=cube("Rear bumper corner",(side*.84,2.15,.80),(.40,.22,.19),satin,.02)
+    wrap.rotation_euler.z=-side*math.radians(24)
+    cube("Rear recovery tab",(side*.86,2.20,.925),(.03,.12,.07),satin,.006)
+    ring("Rear recovery shackle",(side*.86,2.20,.97),.05,.015,red,"X",segments=24)
+cube("Hitch receiver",(0,2.36,.74),(.075,.16,.075),satin,.008)
+cube("Hitch receiver mouth",(0,2.441,.74),(.05,.004,.05),trim,0)
 for side in (-1,1):
     cube("Rear lamp housing",(side*.76,2.176,1.25),(.23,.10,.27),satin,.03)
     cube("Rear red lamp",(side*.76,2.235,1.27),(.16,.016,.16),tail,.025)
+    for k in range(3): cube("Rear lamp divider",(side*.76,2.245,1.215+k*.04),(.15,.006,.006),satin,0)
+    for dx,dz,sx,sz in ((0,.085,.17,.008),(0,-.085,.17,.008),(.085,0,.008,.17),(-.085,0,.008,.17)):
+        cube("Rear lamp chrome bezel",(side*.76+dx,2.243,1.27+dz),(sx,.008,sz),chrome,0)
     cube("Reverse lamp",(side*.76,2.236,1.17),(.14,.015,.038),lamp,.008)
 cube("Rear licence plate",(-.60,2.345,.79),(.31,.017,.105),plate,.008)
 lettering("Rear @cosier plate","@cosier",(-.60,2.36,.79),.053,trim)
@@ -163,6 +248,11 @@ ring("Steering wheel",(-.44,-.33,1.48),.185,.02,satin,"Y","InteriorAssembly",48)
 line("Steering column",[(-.44,-.48,1.39),(-.44,-.33,1.48)],.029,satin,"InteriorAssembly")
 line("Gear lever",[(.13,-.03,1.02),(.13,-.06,1.26)],.015,steel,"InteriorAssembly")
 cube("Gear knob",(.13,-.06,1.27),(.055,.055,.075),satin,.025,"InteriorAssembly")
+# Sports bar behind the front seats, seen through the glass: main hoop, harness bar and two tubes
+# back along the roof sides to the rear corners (game choice after common aftermarket cages).
+line("Sports bar hoop",[(-.74,.62,.98),(-.74,.62,1.90),(-.62,.62,2.02),(.62,.62,2.02),(.74,.62,1.90),(.74,.62,.98)],.032,satin,"InteriorAssembly")
+line("Sports bar harness bar",[(-.74,.62,1.52),(.74,.62,1.52)],.024,satin,"InteriorAssembly")
+for x in (-.70,.70): line("Sports bar rear tube",[(x,.62,2.0),(x,1.80,1.96),(x,1.86,.98)],.028,satin,"InteriorAssembly")
 
 # Roof rack, LED light bar, snorkel and compact expedition hardware.
 for x in (-.69,.69):
@@ -222,7 +312,10 @@ def make_wheel(name, side, location, spare=False):
 
 for name,side,axle in (("WheelFrontL",-1,-1.38),("WheelFrontR",1,-1.38),("WheelRearL",-1,1.38),("WheelRearR",1,1.38)):
     make_wheel(name,side,(side*1.02,axle,.47))
-make_wheel("RearSpare",1,(.0,2.25,1.34),True)
+# The spare stands 4 cm clear of the tailgate on a carrier (it sat 11 cm inside it), above the bumper.
+make_wheel("RearSpare",1,(.0,2.405,1.40),True)
+cube("Spare wheel carrier plate",(0,2.185,1.40),(.30,.05,.30),satin,.01)
+cylinder("Spare wheel carrier hub",(0,2.27,1.40),.07,.18,steel,"Y",segments=24)
 for name,objects in list(groups.items()):
     if objects: join_group(name,objects,root)
 

@@ -26,7 +26,7 @@ export class CDLOD {
 		minY = - 20,
 		maxY = 20,
 		heightBounds = null, // optional (x0,z0,x1,z1) => [minY,maxY]
-		center = null, // optional fixed world bounds for root grid { x, z, size }
+		center = null, // optional fixed world bounds for the root grid { x, z, sizeX, sizeZ } (min corner and extent, m)
 		prefix = 'cdlod', // WGSL name prefix of this instance's module
 	} = {} ) {
 
@@ -36,6 +36,11 @@ export class CDLOD {
 		this.minY = minY;
 		this.maxY = maxY;
 		this.heightBounds = heightBounds;
+		if ( center && ! ( center.sizeX > 0 && center.sizeZ > 0 && Number.isFinite( center.sizeX + center.sizeZ + center.x + center.z ) ) ) {
+
+			throw new Error( `CDLOD: a fixed root needs finite x, z, sizeX and sizeZ (m), got ${ JSON.stringify( center ) }` );
+
+		}
 		this.fixedRoot = center;
 
 		this.ranges = [];
@@ -192,9 +197,11 @@ fn ${ P }Morph( node: vec4f, grid: vec2f, viewPos: vec3f, y0: f32 ) -> ${ Cap }V
 
 		if ( this.fixedRoot ) {
 
-			const { x, z, size } = this.fixedRoot;
-			const n = Math.ceil( size / rootSize );
-			for ( let j = 0; j < n; j ++ ) for ( let i = 0; i < n; i ++ ) {
+			// whole roots per axis over a rectangle; the last root may overhang the far edge, where
+			// heightBounds reports the - 90 m outside floor
+			const { x, z, sizeX, sizeZ } = this.fixedRoot;
+			const nx = Math.ceil( sizeX / rootSize ), nz = Math.ceil( sizeZ / rootSize );
+			for ( let j = 0; j < nz; j ++ ) for ( let i = 0; i < nx; i ++ ) {
 
 				this._select( x + i * rootSize, z + j * rootSize, rootSize, top );
 

@@ -1,11 +1,36 @@
 // Island data the car physics needs beyond the heightfield and walker colliders.
 
+// The car physics' heightfield: TerrainData's whole grid (the WORLD.terrain rectangle), uploaded
+// through the per-axis call. The square set_terrain wrapper would cover only z -1024..1024 and
+// leave Joey Island (its terminal at z 1802) with no ground under a car.
+export function uploadTerrain( physics, terrain ) {
+
+	return physics.set_terrain_grid( terrain.heights, terrain.resX, terrain.resZ, terrain.texel, terrain.originX, terrain.originZ );
+
+}
+
+// A car that has left the world entirely (not a car afloat: the sea floats cars) is rescued:
+// non-finite, 40 m under the sea, or within EDGE of the heightfield's edge on either axis. The
+// edge is the WORLD.terrain rectangle (x -1024..1024, z -1024..2304), read from the terrain itself.
+// It was |x| or |z| over 1010 m, the old square domain: after Joey moved to z 1802 that rescued a
+// car at Joey's terminal every frame and threw a car off the ferry as she passed z 1010.
+const EDGE = 14; // m inside the heightfield's edge, as before (1024 - 1010)
+export function leftWorld( terrain, p ) {
+
+	if ( ! Number.isFinite( p.x + p.y + p.z ) || p.y < - 40 ) return true;
+	const x0 = terrain.originX + EDGE, x1 = terrain.originX + terrain.resX * terrain.texel - EDGE;
+	const z0 = terrain.originZ + EDGE, z1 = terrain.originZ + terrain.resZ * terrain.texel - EDGE;
+	return p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1;
+
+}
+
 // Terrain material per height texel, from the same splat data the renderer uses:
 // 0 dry sand, 1 soil/grass, 2 rock, 7 wet sand (firm, near the waterline).
 export function terrainMaterialCodes( terrain ) {
 
-	const { res, heights } = terrain;
-	const codes = new Uint8Array( res * res );
+	// one code per height texel, same row-major grid ( k = j * resX + i ) as terrain.heights
+	const { heights } = terrain;
+	const codes = new Uint8Array( terrain.resX * terrain.resZ );
 	for ( let i = 0; i < codes.length; i ++ ) {
 
 		const sand = ( terrain.sand?.[ i ] ?? 255 ) / 255, rock = terrain.rock?.[ i ] ?? 0;
@@ -16,8 +41,9 @@ export function terrainMaterialCodes( terrain ) {
 
 }
 
-// Palm and tree trunks as solid cylinders for cars only (the walker already steers
-// between them). Young palms and banana plants are soft enough to drive through.
+// Palm and tree trunks as solid cylinders: the car physics takes them, and so do people on foot
+// (Colliders.setTrunks, from RallyDrive.refreshIslandColliders), the ragdoll and flood clinging.
+// Young palms and banana plants are soft enough to drive and walk through.
 export function trunkCylinders( vegetation, terrain ) {
 
 	const out = [];

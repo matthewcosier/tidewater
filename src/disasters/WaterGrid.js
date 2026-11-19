@@ -9,15 +9,40 @@ function wetComponent(bed,n,seeds) {
  while(head<tail){const k=queue[head++],i=k%n,j=Math.floor(k/n);add(i>0?k-1:-1);add(i<n-1?k+1:-1);add(j>0?k-n:-1);add(j<n-1?k+n:-1);}
  return connected;
 }
+// Cells (8-connected steps) from each cell to the nearest land (ground above datum), counted up to `cap`; land is
+// 0 and anything farther than cap reads cap. Built once per grid (the bed never changes) for the launch taper.
+function shoreDistance(bed,n,cap) {
+ const distance=new Uint8Array(bed.length).fill(cap),queue=new Int32Array(bed.length);let head=0,tail=0;
+ for(let k=0;k<bed.length;k++) {
+  if(bed[k]>0) {
+   distance[k]=0;
+   queue[tail++]=k;
+  }
+ }
+ while(head<tail) {
+  const k=queue[head++],i=k%n,j=Math.floor(k/n),next=distance[k]+1;
+  if(next>=cap)continue;
+  for(let dj=-1;dj<=1;dj++) {
+   for(let di=-1;di<=1;di++) {
+    const ii=i+di,jj=j+dj;
+    if(ii<0||jj<0||ii>=n||jj>=n)continue;
+    const m=jj*n+ii;
+    if(distance[m]>next) {
+     distance[m]=next;
+     queue[tail++]=m;
+    }
+   }
+  }
+ }
+ return distance;
+}
+export const LAUNCH_SHORE_CELLS=3;
+function shoreWeight(distance) {
+ const t=Math.min(1,Math.max(0,(distance-1)/(LAUNCH_SHORE_CELLS-1)));
+ return t*t*(3-2*t);
+}
 const TROUGH_LEAD=2.2; // crest widths (Gaussian sigma) from crest to trough centre; an event's e.troughLead (Field.js, drawn per event) wins
 const TROUGH_FLOOR=0.05; // fraction of the still depth a trough may leave (keeps h > 0 for the flux)
-// Second order (the default, order 2). First order smeared a bore over 3-5 cells and ate most of the
-// leading drawdown before it reached the shore: 0.13 H was left at the 2 m surge gauge
-// (test/tsunami-approach.mjs in the baseline). Order 2: per-cell slopes with the generalised minmod limiter
-// on the surface, depth and velocities; the central-upwind flux of Kurganov and Petrova (2007) on
-// the hydrostatic reconstruction of Audusse et al. (2004) with its second-order centred bed term, so
-// a lake at rest stays exactly at rest, wet or dry; Heun's SSP-RK2 in time. CPU reference: the GPU
-// compute port is the next step and must match it.
 const THETA=1.3; // generalised minmod (Kurganov and Petrova 2007): 1 is minmod (most diffusive), 2 is MC
 const DRY=1e-3; // m: a cell touching water this thin is reconstructed first order (wet/dry fronts stay balanced and positive)
 const NEST_BAND=8; // cells: a nested grid's edge band takes its water from the parent (was a sponge to rest)
@@ -31,16 +56,6 @@ function limited(a,b) {
  if(a<0&&b<0)return Math.max(THETA*a,0.5*(a+b),THETA*b);
  return 0;
 }
-// The N-wave surface (m) a tsunami source puts over still depth `depth` (m) at `along` m shoreward of its
-// crest line and `cross` m off its ray. One function for the solver's launch and the analytic wall beyond the
-// ring (Field.js farFieldAt, mirrored in WGSL by Water.js disasterFar), so the hand-off is exact.
-// Flat along the crest for crestHalfLength (m), then the old Gaussian falloff of `radius`. A 440 m wide patch
-// spread like a ripple and kept 0.18 of its height after 600 m.
-// Leading-depression N-wave: a trough of e.drawdown x H runs ahead (shoreward, along > 0) of the crest, so the
-// sea draws back before the wall arrives (was: a positive mound only, no drawdown). A trough deeper than the
-// water uncovers the bed; it cannot dig below it (TROUGH_FLOOR).
-// A wall fed from beyond the ring (e.farField) holds its crest at H for farField.length m behind the front
-// (seaward, along < 0) before the Gaussian falls away: the leading edge of a long wave, not a lone hump.
 export function nWaveEta(e,along,cross,depth) {
  const sigma=e.crestWidth??e.width;
  const lateral=Math.exp(-2*(Math.max(0,Math.abs(cross)-(e.crestHalfLength??0))/e.radius)**2);
@@ -49,16 +64,6 @@ export function nWaveEta(e,along,cross,depth) {
  const trough=Math.exp(-0.5*((along-(e.troughLead??TROUGH_LEAD)*sigma)/sigma)**2);
  return Math.max((TROUGH_FLOOR-1)*depth,e.intensity*(crest-(e.drawdown??0)*trough)*lateral);
 }
-// Depth-averaged water speed (m/s, along the heading) under the source at still depth `depth` and depth h (m).
-// A long wave takes the simple-wave relation u = 2 ( sqrt( g h ) - sqrt( g depth ) ): no arbitrary launch speed;
-// under the trough u < 0, the water runs out to sea ahead of the crest.
-// A wall that came in from beyond the ring (e.farField) is a bore moving at its Stoker speed C (Field.js
-// crestCelerity, sustained): its water moves at the flux of a profile translating at C, u = C ( h - depth ) / h,
-// which across the front is the Rankine-Hugoniot mass condition, so the state behind is the bore's own (3000 m
-// over 90 m: 711 m/s, Froude 4.1; 320 m: 83 m/s, Froude 1.3). Was: C held to the dam-break 348 m/s and u
-// limited to C - sqrt( g h ) = 174 m/s; a 3090 m column moving that slowly is no bore of its height, and the
-// wall slumped to 1430 m within 3 s (41% of H at the coast). Under the trough the simple wave stays: the
-// translating flux over the TROUGH_FLOOR film would ask for 19 C of outflow.
 export function nWaveSpeed(e,depth,h) {
  const simple=2*(Math.sqrt(9.81*h)-Math.sqrt(9.81*depth));
  if(!e.farField||h<=depth)return simple;
@@ -93,11 +98,12 @@ export class WaterGrid {
   if(!this.oceanMask){const edges=[];for(let i=0;i<this.n;i++)edges.push(i,(this.n-1)*this.n+i,i*this.n,i*this.n+this.n-1);this.oceanMask=wetComponent(this.bed,this.n,edges);}
   let seed=-1,best=Infinity;for(let j=0;j<this.n;j++)for(let i=0;i<this.n;i++){const k=j*this.n+i;if(this.bed[k]>=-.3||!this.oceanMask[k])continue;const d=(this.x+i*this.dx-x)**2+(this.z+j*this.dx-z)**2;if(d<best){best=d;seed=k;}}
   const connected=wetComponent(this.bed,this.n,[seed]);
+  if(!this.shoreDistance)this.shoreDistance=shoreDistance(this.bed,this.n,LAUNCH_SHORE_CELLS+1);
 
   for(let j=0;j<this.n;j++)for(let i=0;i<this.n;i++){
    const k=j*this.n+i,b=this.bed[k];if(b>=-0.3||!connected[k])continue;
    const dx=this.x+i*this.dx-x,dz=this.z+j*this.dx-z,along=dx*c+dz*s,cross=-dx*s+dz*c;
-   const d=this.h[k],eta=nWaveEta(e,along,cross,d);
+   const d=this.h[k],eta=nWaveEta(e,along,cross,d)*shoreWeight(this.shoreDistance[k]);
    if(Math.abs(eta)<0.0001)continue;
    this.h[k]=d+eta;
    const u=nWaveSpeed(e,d,this.h[k]);
@@ -107,11 +113,6 @@ export class WaterGrid {
   // A wall from beyond the ring keeps coming in through this grid's open boundary (the outer ring only; a
   // nested grid takes it from its parent). See sources().
   this.inflow=e.farField&&!this.nest?{e,elapsed:0,c,s}:null;
-  // The wave just written is the sea at this instant, so the fixed-step accumulator owes it no time. The calm
-  // sea's unspent lag (up to one 0.24 s step on the 32 m ring) was replayed on the launched wave in the next
-  // frame: the 3000 m wall's face jumped 97-161 m (0.13-0.22 s x 732 m/s) ahead of the analytic face it took
-  // over (test/tsunami-farfield.mjs). pack() above already dropped the cached step; the
-  // grid clock moves on to the instant the state now holds.
   if(this.fixedStep){this.time+=this.lag;this.lag=0;}
  }
  // A bounded local vertical water displacement paired with a surrounding depression.
@@ -140,7 +141,7 @@ export class WaterGrid {
    // Petrova 2007, Theorem 2.1); the summed rate above allowed 0.45 on one axis.
    if(this.order>=2)rate=Math.max(rate,2*(Math.max(u,v)+c)/this.dx);}}
   if(!Number.isFinite(rate))throw new RangeError('Non-finite shallow-water characteristic speed');
-  const step=.45/Math.max(1,rate);this.stats.cfl=step*rate;this.stats.maxSpeed=speed;return step;
+  let step=.45/Math.max(1,rate);if(step*rate>.45)step*=1-1e-12;this.stats.cfl=step*rate;this.stats.maxSpeed=speed;return step;
  }
  // Fixed-step mode (the game's grids): whole CFL-sized steps from an accumulator, and the packed
  // field shown and sampled is the blend of the last two steps. Stepping every frame at the frame's
@@ -311,15 +312,6 @@ export class WaterGrid {
    if(this.sponge&&!this.nest){const edge=Math.min(i,j,n-1-i,n-1-j);if(edge<8&&this.inflow&&this.inflowAt(p,i,j,edge,dt))continue;if(edge<8){const damp=Math.exp(-dt*0.7*(1-edge/8)**2),rest=Math.max(0,-bed[p]),before=h[p];h[p]=rest+(h[p]-rest)*damp;qx[p]*=damp;qz[p]*=damp;this.stats.boundaryVolume+=(before-h[p])*dx*dx;}}
   }
  }
- // Inflow: while the analytic wall (Field.farFieldAt, the same nWaveEta and nWaveSpeed) covers an edge
- // cell, the cell takes the wall's state instead of relaxing to rest: copied outright on the outer NEST_HARD cells,
- // relaxed at the nest's rate across the rest of the band (a wave-making relaxation zone, Mayer, Garapon and
- // Sorensen 1998). The wall's water outruns its waves there (Froude 4.1 for 3000 m, 1.3 for 320 m), so every
- // characteristic enters and both h and q are given, as the nest's Dirichlet band does. It lasts as long as the
- // crest does (farField.length / speed, Field.js LONG_WAVE), then the band is a sponge to rest again. Without it
- // the ring's sponge ate the wall's back and the 3000 m wall reached the coast at 41% of H. Returns false where no
- // wall is drawn (the old sponge applies). The crest is at the step's end time; stats.boundaryVolume keeps the
- // volume budget (negative: water let in).
  inflowAt(p,i,j,edge,dt){
   const {e,elapsed,c,s}=this.inflow,rest=Math.max(0,-this.bed[p]);
   if(!(rest>0.3))return false; // m: the launch's own sea test
@@ -363,16 +355,16 @@ export class WaterGrid {
   this.stats.boundaryVolume+=moved*this.dx*this.dx;
  }
  contains(x,z){const span=(this.n-1)*this.dx;return x>=this.x&&z>=this.z&&x<=this.x+span&&z<=this.z+span;}
- // Cell indices of the land (ground above datum) within r m of (x, z): the coast a warning names. Built once
- // per launch so the per-frame check (floods) walks a fixed list and allocates nothing.
- landWithin(x,z,r) {
+ landWithin(x,z,r,heading=null,reach=Infinity) {
   const n=this.n,dx=this.dx,i0=Math.max(0,Math.floor((x-r-this.x)/dx)),i1=Math.min(n-1,Math.ceil((x+r-this.x)/dx));
   const j0=Math.max(0,Math.floor((z-r-this.z)/dx)),j1=Math.min(n-1,Math.ceil((z+r-this.z)/dx));
   const cells=[];
+  const a=heading===null?0:heading*Math.PI/180,cx=heading===null?0:Math.cos(a),cz=heading===null?0:Math.sin(a);
   for(let j=j0;j<=j1;j++) {
    for(let i=i0;i<=i1;i++) {
     const k=j*n+i,ex=this.x+i*dx-x,ez=this.z+j*dx-z;
-    if(this.bed[k]>0&&ex*ex+ez*ez<=r*r)cells.push(k);
+    const seaward=-(ex*cx+ez*cz); // m out from (x, z) against the heading
+    if(this.bed[k]>0&&ex*ex+ez*ez<=r*r&&seaward<=reach)cells.push(k);
    }
   }
   return Int32Array.from(cells);
