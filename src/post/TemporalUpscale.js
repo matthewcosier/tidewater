@@ -177,11 +177,12 @@ export class TemporalUpscale {
 
 		// FSR2 ffxFsr2GetJitterPhaseCount / ffxFsr2GetJitterOffset
 		const b = this._beautyTexture();
-		const ratio = b && b.width ? this._outW / b.width : 1;
-		const phases = this.jitterPhaseOverride || Math.max( 1, Math.ceil( 8 * ratio * ratio ) );
+		const ratio = b && b.width ? Math.max( 1, this._outW / b.width ) : 1;
+		const phases = this.jitterPhaseOverride ? Math.ceil( this.jitterPhaseOverride * ratio * ratio - 1e-6 ) : Math.max( 1, Math.ceil( 8 * ratio * ratio ) );
 		this.uniforms.fields.jitterPhases.value = phases;
 		const i = this._jitterIndex % phases;
-		const k = this.jitterScale * ( 1 + ( this.jitterMoving - 1 ) * this._cameraMotion() );
+		const still = this.jitterScale + ( 1 - this.jitterScale ) * Math.min( 1, ( ratio - 1 ) / 0.15 );
+		const k = still * ( 1 + ( this.jitterMoving - 1 ) * this._cameraMotion() );
 		this.jitterNow = k; // (the UI shows it)
 		const jx = ( halton( i + 1, 2 ) - 0.5 ) * k, jy = ( halton( i + 1, 3 ) - 0.5 ) * k;
 		this._jitterOffset.value.set( jx, jy );
@@ -440,9 +441,7 @@ struct TaauOut { @location( 0 ) color: vec4f, @location( 1 ) lock: vec4f, @locat
 	lockStatus.x *= select( 0.0, 1.0, depthClip < 0.1 );
 	let lockContribution = sat( sat( sat( lockStatus.x - 1.0 ) * 4.0 ) * sat( taauMinDivMax( lockStatus.y, shadingLuma ) ) ) * taau.locks;
 
-	// ---- this frame at the output pixel: Lanczos-2 over the 3x3 taps, and the rectification box
-	// (FSR2 ComputeUpsampledColorAndWeight)
-	let kernelReactive = max( thisFrameReactive, select( 0.0, 1.0, isNewSample ) );
+	let kernelReactive = max( max( thisFrameReactive, select( 0.0, 1.0, isNewSample ) ), sat( cloudCoverage * 2.0 ) );
 	let maxKernelWeight = min( 1.99, 1.0 + ( 1.0 / downscale.x - 1.0 ) );
 	let kernelBiasMax = maxKernelWeight * ( 1.0 - kernelReactive );
 	let kernelBiasMin = max( 1.0, ( 1.0 + kernelBiasMax ) * 0.3 );
@@ -517,7 +516,7 @@ struct TaauOut { @location( 0 ) color: vec4f, @location( 1 ) lock: vec4f, @locat
 	var accumulation = taau.maxAccumulation * select( 0.0, 1.0, isExistingSample ) * ( 1.0 - thisFrameReactive ) * ( 1.0 - depthClip );
 	accumulation = min( accumulation, mix( accumulation, upsampledWeight * taau.motionAccumulation, max( select( 0.0, 1.0, inMotionLastFrame ), sat( hrVelocity * 10.0 ) ) ) );
 	accumulation = min( accumulation, mix( accumulation, upsampledWeight, sat( hrVelocity / 20.0 ) ) );
-	if ( reactiveCloud ) { accumulation = min( accumulation, upsampledWeight * 0.5 ); }
+	if ( reactiveCloud ) { accumulation = min( accumulation, mix( accumulation, upsampledWeight * 0.5, sat( cloudCoverage * 2.0 ) ) ); }
 
 	// Resampling blur (not in FSR2): even the Catmull-Rom loses fine detail when it samples between
 	// texels, and in motion the history is resampled that way every frame (at 0.2 px ~80% of the
@@ -635,7 +634,7 @@ DEBUG_OUTPUT
 		// size, and the resolve reads both by uv against textureDimensions (taauPreviousDepth, the cloud
 		// taps), so they stay valid for this resolve: they follow the new size only after it, just before
 		// this frame's copy. Resizing them here with a restart threw the whole history away on every
-		// governor step, a full-frame shimmer of the forest canopy (cap-d5 red: restarts 1).
+		// governor step, a full-frame shimmer of the forest canopy (ledger D5, cap-d5 red: restarts 1).
 		const cloudMask = this.waterMaskTexture;
 
 		// camera cut (teleport, free-camera jump, respawn, or reset() below): the old history and its

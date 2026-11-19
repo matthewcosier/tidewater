@@ -156,6 +156,11 @@ const INTERIOR = {
 	let g = ${ hash( 'floor( vec2f( p.x, along ) * 120.0 )' ) };
 	s.albedo = s.albedo * ( 0.85 + 0.2 * g ) * mix( 1.0, 0.8, step( 0.5, fract( along * 30.0 ) ) * lev );
 	${ indoor( '0.7' ) }`,
+	RampSteel: `
+	let rg = ${ hash( 'floor( vec2f( p.x, along ) * 40.0 )' ) };
+	var rc = s.albedo * 2.3 * ( 0.9 + 0.12 * rg ) * ( 0.92 + 0.16 * perlin3( p * 0.6 ) );
+	let rwp = 1.0 - smoothstep( 0.5, 1.1, abs( abs( p.x ) - 0.8 ) );
+	s.albedo = mix( rc, rc * 1.2, rwp * lev );`,
 	// Ceilings: a 600 by 1200 tile grid in white tees; walls of the same lining get panel joints and a skirting.
 	CeilingLining: `
 	let tc = fract( vec2f( p.x / 0.6, along / 1.2 ) );

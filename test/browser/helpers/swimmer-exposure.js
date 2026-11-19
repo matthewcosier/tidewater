@@ -10,7 +10,7 @@ export function captureSwimmerExposure(options={}){
   const tick=()=>{if(!run.active)return;if(app.engine.frame!==run.lastFrame){run.lastFrame=app.engine.frame;run.rows.push(captureSwimmerExposure({app,cache:run.cache}));}requestAnimationFrame(tick);};
   requestAnimationFrame(tick);return;
  }
- const cache=options.cache||{},g=app.glider,p=app.player,model=p.avatar?.model,eye=app.camera.position.toArray();
+ const cache=options.cache||{},g=app.glider,wingFade=g.body?.fade||0,p=app.player,model=p.avatar?.model,eye=app.camera.position.toArray();
  const add=(a,b)=>a.map((n,i)=>n+b[i]),sub=(a,b)=>a.map((n,i)=>n-b[i]),scale=(a,s)=>a.map(n=>n*s),dot=(a,b)=>a.reduce((n,v,i)=>n+v*b[i],0),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
  const transform=(v,m)=>[m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]];
  const rootInverse=g.model.root.matrixWorld.clone().invert().elements;
@@ -53,7 +53,10 @@ export function captureSwimmerExposure(options={}){
  for(const sample of cache.samples){
   const points=sample.vertices.map(v=>transform(skin(v),sample.mesh.matrixWorld.elements)),point=scale(add(add(points[0],points[1]),points[2]),1/3),normal=cross(sub(points[1],points[0]),sub(points[2],points[0])),delta=sub(eye,point),distance=Math.hypot(...delta),nlen=Math.hypot(...normal),cosine=dot(normal,delta)/Math.max(1e-15,nlen*distance);
   if(cosine<=0)continue;const w=cosine/(distance*distance),hit=occlusion(point),screen=project(point),onscreen=screen.front&&Math.abs(screen.x)<.95&&Math.abs(screen.y)<.95,water=point[1]>p.waterH-.02;
-  weight+=w;front++;if(water)above+=w;if(!hit.blocked&&onscreen){visible+=w;if(water)aboveVisible+=w;}
+  // a faded wing (GliderBody.occlude, the dither of src/people/Fade.js) drops that share of its pixels: a sample behind
+  // it counts as seen by the fade, not whole (0.85 at most, so a ghost wing still costs 15 %)
+  const seen=onscreen?(hit.blocked?wingFade:1):0;
+  weight+=w;front++;if(water)above+=w;visible+=w*seen;if(water)aboveVisible+=w*seen;
   if(hit.blocked){blockedBy[hit.material]=(blockedBy[hit.material]||0)+w;if(hit.distance<.03)nearFoil++;}
   samples.push({point,weight:w,blocked:hit.blocked,material:hit.material,distance:hit.distance,screen,aboveWater:water});
  }
@@ -61,7 +64,7 @@ export function captureSwimmerExposure(options={}){
  const orbit=p.boom?.swimOrbit||p.thirdPersonCamera?.swimOrbit||p.cameraBoom?.swimOrbit;
  return{frame:app.engine?.frame,wall:typeof performance!=='undefined'?performance.now():0,time:g.flight.time,mode:p.mode,view:p.view,avatarVisible:p.avatar?.visible,headHidden:p.avatar?.headHidden,
   player:p.position.toArray(),velocity:p.velocity.toArray(),water:p.waterH,yaw:p.yaw,aircraft:g.flight.position.slice(),quaternion:g.flight.quaternion.slice(),eye,cameraQuaternion:app.camera.quaternion.toArray(),
-  orbit:orbit?{angle:orbit.angle,radius:orbit.radius,height:orbit.height,continuing:!!orbit.continuing}:null,contacts:g.body?.contacts||0,
+  orbit:orbit?{angle:orbit.angle,radius:orbit.radius,height:orbit.height,continuing:!!orbit.continuing}:null,contacts:g.body?.contacts||0,wingFade,
   head:{triangles:cache.headTriangles,samples:192,front,visibleFraction:visible/weight,aboveFraction:above/weight,aboveVisibleFraction:above?aboveVisible/above:1,blockedBy,nearFoil},
   skin:{group:model.group.matrixWorld.elements.slice(),joints:cache.joints.map(index=>({index,matrix:Array.from(model.jointData.subarray(index*16,index*16+16))}))},
   probes:samples,gliderTriangles:cache.triangleCount};

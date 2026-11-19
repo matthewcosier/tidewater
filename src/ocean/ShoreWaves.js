@@ -670,30 +670,33 @@ fn shoreFoamAt( xz: vec2f, depth: f32 ) -> f32 {
 	// vec3f( dir.x, dir.z, exposure ).
 	buildDirTexture( { min, size, res = 128 } ) {
 
-		// the shore field (T, dirX, dirZ, exposure / swash time) as float data on the CPU
-		const T = this.terrain;
-		const field = T.shoreField || null;
-		const data = field ? field.data : T.shoreData || T.shoreTexture?.image?.data || T.shoreTexture?.pendingData;
-		const fres = field ? field.res : T.shoreRes;
-		if ( ! data || ! fres ) {
+		// the shore field (T, dirX, dirZ, exposure / swash time) as float data on the CPU, kept by
+		// TerrainGPU.setShoreField. It carries its own rectangle (ShoreField.js: resX x resZ cells of
+		// cellSize m from originX, originZ, row-major with stride resX); the terrain is no longer square,
+		// so a texture without that geometry cannot be read and is not used as a fallback.
+		const field = this.terrain.shoreField || null;
+		const data = field ? field.data : null;
+		if ( ! data || ! field.resX || ! field.resZ || ! field.cellSize ) {
 
 			console.warn( 'ShoreWaves.buildDirTexture: no shore field data on the terrain; using terrainShoreSample instead' );
 			return null;
 
 		}
 
-		const origin = T.origin, tsize = T.size;
+		const fresX = field.resX, fresZ = field.resZ, cell = field.cellSize;
+		const originX = field.originX, originZ = field.originZ;
 		const out = new Float32Array( res * res * 4 );
 		for ( let j = 0; j < res; j ++ ) for ( let i = 0; i < res; i ++ ) {
 
+			// this region is the caller's square ( min, size, res ); only the field is rectangular
 			const x = min.x + ( i + 0.5 ) / res * size, z = min.y + ( j + 0.5 ) / res * size;
-			const fx = Math.min( Math.max( ( x - origin ) / tsize * fres - 0.5, 0 ), fres - 1.001 );
-			const fz = Math.min( Math.max( ( z - origin ) / tsize * fres - 0.5, 0 ), fres - 1.001 );
+			const fx = Math.min( Math.max( ( x - originX ) / cell - 0.5, 0 ), fresX - 1.001 );
+			const fz = Math.min( Math.max( ( z - originZ ) / cell - 0.5, 0 ), fresZ - 1.001 );
 			const i0 = Math.floor( fx ), j0 = Math.floor( fz ), tx = fx - i0, tz = fz - j0;
 			const at = ( c ) => {
 
-				const a = data[ ( j0 * fres + i0 ) * 4 + c ], b = data[ ( j0 * fres + i0 + 1 ) * 4 + c ];
-				const cc = data[ ( ( j0 + 1 ) * fres + i0 ) * 4 + c ], d = data[ ( ( j0 + 1 ) * fres + i0 + 1 ) * 4 + c ];
+				const a = data[ ( j0 * fresX + i0 ) * 4 + c ], b = data[ ( j0 * fresX + i0 + 1 ) * 4 + c ];
+				const cc = data[ ( ( j0 + 1 ) * fresX + i0 ) * 4 + c ], d = data[ ( ( j0 + 1 ) * fresX + i0 + 1 ) * 4 + c ];
 				return ( a * ( 1 - tx ) + b * tx ) * ( 1 - tz ) + ( cc * ( 1 - tx ) + d * tx ) * tz;
 
 			};
