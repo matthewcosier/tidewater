@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {WaterGrid} from '../src/disasters/WaterGrid.js';
 import {DisasterField} from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 import {AIR_DENSITY,SEA_WATER_DENSITY} from '../src/physics/Loads.js';
 
 const near=(a,b,tolerance,label='')=>assert.ok(Math.abs(a-b)<=tolerance,`${label}: ${a} versus ${b}, tolerance ${tolerance}`);
@@ -41,9 +42,10 @@ test('Surface stress: thin wet-cell integration cannot overshoot the air or crea
 });
 
 test('Tornado air field drives the shared production water grid and sampled current without a volume source',()=>{
- const field=new DisasterField(()=>-10);field.ambient=()=>({x:3,z:-1});field.start('tornado',{x:0,z:0,intensity:90,radius:180,speed:0});
+ const field=new DisasterField(()=>-10);field.ambient=()=>({x:3,z:-1});const e=field.start('tornado',{x:0,z:0,intensity:90,radius:180,speed:0});e.time=tornadoLifecycle(e,{}).genesis;
  assert.equal(field.water.n,257);const initial=field.water.volume();for(let i=0;i<13;i++)field.advance(.1);
- const w=field.water,i=132,j=128,k=j*w.n+i,x=w.x+i*w.dx,z=w.z+j*w.dx,s=field.sample(x,0,z);
+ // the stress is driven by the wind 10 m above the water, the height its 0.0015 drag coefficient is quoted for
+ const w=field.water,i=132,j=128,k=j*w.n+i,x=w.x+i*w.dx,z=w.z+j*w.dx,s=field.sample(x,10,z);
  near(w.wind.x[k],s.wx,1e-5);near(w.wind.z[k],s.wz,1e-5);assert.ok(Math.hypot(s.ux,s.uz)>.0001);
  near(s.ux,w.pixels[k*4+1],1e-12);near(s.uz,w.pixels[k*4+2],1e-12);
  near(w.volume()-initial+w.stats.boundaryVolume,0,1e-5);assert.equal(w.stats.massAdded,0);assert.equal(w.stats.positivityCorrection,0);assert.equal(w.stats.droppedTime,0);assert.ok(w.stats.cfl<=.45+1e-12);assert.ok(w.stats.windWork>0);

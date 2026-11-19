@@ -16,7 +16,7 @@ Tornado and ambient wind also drive this same grid while a water-coupled event i
 
 A controllable offshore elevation pulse adds a declared water volume. Its initial simple-wave velocity is `2*(sqrt(g*(h+eta))-sqrt(g*h))`, directed toward the target. Width and radius shape the source. Source volume and boundary removal appear in the conservation budget. This models an imposed incoming wave; it does not solve the generating earthquake or seabed uplift.
 
-Start issues the warning immediately. Warning lead defaults to 90 s and is configurable 3–300 s. The source starts after that lead; Duration is the time after source launch. Crest arrival is estimated from source distance and the finite-amplitude simple-wave characteristic `3*sqrt(g*(h+eta))-2*sqrt(g*h)`. Bathymetry and dispersion error can change the actual arrival. The warning separately reports actual inundation once emerged cells exceed 0.1 m depth. Audio starts only after the Start gesture; mute, volume, global M, pause, stop and reset control the real oscillator sources.
+Start issues the warning immediately. Warning lead defaults to 90 s and is configurable 3–300 s. The source starts after that lead; Duration is the length of the incoming wave train from the first crest's arrival (one crest today; see "Design: the wave train"), and the event then runs until its flood has drained ("How a tsunami ends"). Crest arrival is estimated from source distance and the finite-amplitude simple-wave characteristic `3*sqrt(g*(h+eta))-2*sqrt(g*h)`. Bathymetry and dispersion error can change the actual arrival. The warning separately reports actual inundation once emerged cells exceed 0.1 m depth. Audio starts only after the Start gesture; mute, volume, global M, pause, stop and reset control the real oscillator sources.
 
 Stop is an explicit laboratory control: it clears the wave field immediately and cancels disaster forcing/alarm, while damaged geometry and body momentum remain. Baseline sea buoyancy and ambient fluid drag continue. Restore reinstates saved geometry, collision surfaces and affected poses without changing the economy/save. Each new experiment after Restore captures fresh vessel, player and car state; simultaneous disasters retain one shared snapshot. Full car orientation and velocity, prior dents, detached parts and pre-existing loose car debris are restored.
 
@@ -24,24 +24,326 @@ Crests from 0.5 to 3,000 m are accepted without visual scaling. The extreme uppe
 
 ### Far field, inflow and hand-off (walls the ring cannot hold)
 
-The 2 km grid above is nested one-way inside an outer ring of 257 x 257 cells at 32 m (8.2 km square, `Field.js` `OUTER_GRID`), both second-order central-upwind with fixed-step accumulators (`WaterGrid.js` `advanceFixed`). A wave the ring can hold (2 m and 10 m: 60-90 s of approach inside 4 km) is launched in the ring at the warning's end. A wall is not: at 3000 m it crosses 4 km in about 3 s. Such a wave gets a far field (`Field.js` `planApproach`, `wall`) when all three hold: it is a bore at its source (H >= 0.78 d, McCowan), the ring's own approach is shorter than the drawn approach, and its crest stands above the horizon from beyond the ring edge (sqrt(2 R H) > ring edge, R = 6371 km). The far-field time is drawn per event from 25-30 s (`FAR_FIELD_BAND`, a game choice: long enough to see it come; drawn last in the seed stream so every other plan is unchanged).
-
-- **Speed.** A wall fed from behind is a bore, so its celerity is Stoker's uncapped (`crestCelerity(d, H, sustained)`): over the 90 m source depth 732 m/s at 3000 m and 106 m/s at 320 m. Capped at the dam-break 2 sqrt(g (d + H)) = 348 m/s the column had too little momentum and slumped to 1430 m within 3 s of the hand-off.
-- **Length.** The crest is a plateau 20 x (d + H) long behind the front (`LONG_WAVE`, the shallow-water limit L/h >= 20, declared): 61.8 km (84 s) at 3000 m, 8.2 km (78 s) at 320 m. The Gaussian (sigma = max(width, 192 m, 0.03 H), 1:33 width to height) shapes only the front and the back.
-- **Water speed.** Behind the front u = C (h - d) / h (`nWaveSpeed`), the Rankine-Hugoniot mass condition across a bore moving at C: 710 m/s at 3000 m (Froude 4.1), 82 m/s at 320 m (Froude 1.3). The trough ahead keeps the simple-wave relation.
-- **Drawn and sampled.** Until the hand-off (`e.launchTime` = warning + far time) the analytic wall (`farFieldAt`) is the water everywhere: people, boats, props, worker ragdolls (`RigSnapshot`) and the shader (`Water.js` `disasterFar`, the WGSL twin) read the same surface. After it, only outside the ring.
-- **Inflow.** After the hand-off the analytic wall keeps driving the ring's open boundary for the crest's length / speed (`WaterGrid.js` `inflowAt`): hard copy of h and u on the outer 2 cells, relaxation at the nesting rate on the next 6, only where the wall is drawn; elsewhere the old 8-cell sponge. `stats.boundaryVolume` keeps the budget (negative: water let in). Without it the sponge ate the wall's back and 3000 m reached the coast at 37-41% of H.
-- **Hand-off.** At launch the state written is the sea at that instant, so the accumulator's lag is cleared (`launch`). Previously, the calm ring's unspent lag (up to one 0.24 s step) was replayed on the new wall and the 3000 m face jumped 97 m (seed 2) and 161 m (seed 7) ahead of the analytic face in one frame. Now 5 m and 0 m.
-
 Measured on the real island (`test/tsunami-farfield.mjs`, `test/tsunami-mega.mjs`): hand-off height within 3%, face within 64 m (two ring cells), face speed over the next 3 s within 25% of C; the 3000 m wall keeps 3000-3525 m at every gauge to the coast and overtops the 297 m summit; 320 m keeps 279-358 m and arrives above the village roofs; 2 m and 10 m get no far field. Cost: the ring's CFL step at 3000 m is about 8 ms of CPU (u + c = 885 m/s), so the mega run takes 40-50 s of CPU per 8-12 s of game time in node; the GPU port is open.
+
+### How a tsunami ends
+
+Design note (tsunami round of 12 November 2026).
+
+- **Reference.** A tsunami flood ends when the water has run back to the sea; the backwash is as violent as the run-up (2011 Tohoku and 2004 Indian Ocean footage: debris and people carried seaward). Ponds in closed hollows stand for hours to days after a real event. The old end was a timer: at warning + approach + Duration the event was deleted and both grids dropped, so for the Severe 10 m (seed 1) 532,000 m3 of water on 12.3 ha of land, moving at up to 118 m2/s, vanished in one frame (2 m seed 7: 42,700 m3 on 4.7 ha).
+- **Source of truth.** The solver's own state, computed in loops that already run: `WaterGrid.pack` on the CPU, `WaterGridGPU.readback` on the GPU, both through `WaterGrid.drainStats` (largest land discharge h|u|, land cells deeper than `INUNDATION_DEPTH` 0.1 m moving faster than `STILL_SPEED` 0.2 m/s, wet land cells, the largest departure of a wet sea cell from datum). The ring's cells under the village grid are left out (`WaterGrid.nestIn`, `covered`): the village grid is what is drawn and sampled there.
+- **Phases** (`Field.js` `tsunamiOver`). Warning, approach, train (from the first crest at `e.arrival` to `e.trainEnd = arrival + Duration`), drain, hand-back, end.
+- **Drain condition.** After the train, no land cell deeper than 0.1 m moving faster than 0.2 m/s (slower water cannot move fine sand, Hjulstrom 1935: it stands), and no land discharge at or over 0.4 m2/s (`FloodHazard` `HU_CHILD`, the lowest line the game knocks anyone at): the backwash can no longer carry a person seaward. Held 2 s (`DRAIN_HOLD`). The drain is the solver's flow: nothing is softened to end it sooner.
+- **Hand-back.** Then standing water on land soaks in at 0.04 m/s and every other wet cell returns to its still level at 0.5/s (`CALM`, `WaterGrid.calmCell`, the same maths in the WGSL `sources` pass). 0.04 m/s is about 700 times the saturated conductivity of sand (5.8e-5 m/s, Rawls, Brakensiek and Saxton 1982): a declared compression, because real ponds stand for hours. The grids drop when no land cell holds water (the 2 mm packed wet line) and no sea cell is more than 1 cm off datum, so nothing the player sees or a hull feels moves by more than that across the end. A tornado on the same grid skips the hand-back (the grid stays for it).
+- **Bounds.** `DRAIN_LIMIT` 600 s after the train and `CALM_LIMIT` 120 s exist only to stop a stuck state; `e.drainCapped` records a drain the limit ended (a defect, not a flood). `Field.endTime` for a tsunami is now that latest end.
+- **Stop** still clears at once.
+- **Edges found while building it.** Friction used a 2 cm depth floor, so a film ran at up to 12.7 times its Manning speed (2-7 m/s in 2-4 mm of water, 200 land cells 60 s after the 10 m crest); it now uses the cell's own depth (`test/tsunami-film.mjs`: a draining film stays within 2 times Manning). The surface-slope reconstruction across a step in the free surface lifted a downhill face's bed above the water: a 1.86 m pool held 30 m/s for 100 s on a 1:2 hillside at (360, -128) without moving (56 m2/s at one cell, which alone would have kept the drain open). Such a cell is now first order (`WaterGrid.sweep`, WGSL `slopeAxis`); a lake at rest has no step.
+- **Open.** The land floods a second time 255-290 s after a single crest (10 m seed 1: land volume 25,000 to 144,000 m3; 2 m seed 7: 1,500 to 12,600 m3). It is not the ring's edges: the sponge returns 1.0 % of a radial wave (`test/tsunami-open-sea.mjs`; a characteristic absorbing band was tried, returned 0.7 %, and left the re-flood as it was). Candidates: the crest's reflection off Joey Island and the strait's far coasts, edge waves on the shelf, or the plane crest's flanks eaten by the ring's side bands, whose deficit diffracts in. The drain waits for it, as it should if it is real. Not yet met for the Severe 10 m (seed 1): its land water was still moving 600 s after the train, so the drain bound fired, and the hand-back's 120 s bound fired with 1.56 m (803 m3) still on land (`test/tsunami-drain.mjs` fails on it). The Surge 2 m (seed 7) drains through the solver 455 s after its train, the hand-back takes 15 s, and 363 m3 of a 120,000 m3 flood is left to soak in.
+- **Evidence.** `test/tsunami-drain.mjs` (both presets: no water on land and the sea within 5 cm at the last frame; under 5 % of the peak flood volume left when the hand-back starts; the drain held on the water, not the limit), `test/tsunami-film.mjs`, `test/tsunami-open-sea.mjs`.
+- **What a depth-averaged solver cannot give the look lane.** No overturning lip, no spray, no air entrainment, no sediment or debris load in the water: the front is a steep bore in the solver, and the dark, debris-laden, foaming front of the 2004 and 2011 footage must come from the look (`FloodLook.js`, spray, sediment).
+
+### The wave asked for is the wave launched
+
+`test/tsunami-launch-at-sea.mjs` read the launched crest from the village grid (+-1024 m). Since the plan stands the crest out on its C+ characteristic, every 10 m source sits 1.4-2.2 km out, in the ring only, and the village grid held the crest's tail (4.04 m for the Severe 10 m, seed 1) while the ring held 10.00 m. The test now reads the grid that holds the source line. The launch was right. `test/tsunami-crest-height.mjs` holds the arrival: the first crest at the wet shoreline gauge stands between 0.85 times the smaller of Green's law height (Green 1838) and the McCowan breaking height, and 2 times Green's height (incident plus full reflection). Measured on seeds 1-10: 2 m 0.87-0.98 of Green, 10 m 0.84-1.49, 25 m 0.80-1.59 (the 25 m sources sit in 10-13 m of water, so the excess is the beach's reflection and the bore's set-up).
+
+### Design: the wave train (not built this round)
+
+Real tsunamis arrive as several waves over hours, the first often not the largest (2004 Banda Aceh eyewitness reconstruction, Lavigne et al. 2009; 2011 Tohoku tide gauges). The design for the next round:
+- Crests 2..N may not appear in one step (anti-pattern "an event that appears instead of arriving"), so they are not host writes at the source line (and on the GPU path the host grid holds the blended readback, not the solver state). The train is one analytic field, a sum of N-waves with crest k at D_k(t) = launchDistance + gap_k - c_k t: written as the initial condition at launch for the part inside the ring, then fed through the ring's upwave band (a generalised `inflowAt` and WGSL `inflow()`, per-crest uniforms in the 128 bytes still free per 256-byte parameter slot), only on band cells upwave of the target.
+- The interval is the crest's own period, about 2 pi sigma_t with sigma_t = crestWidth / c at the source depth (a Gaussian matched to a cosine crest), times a drawn 0.9-1.4: 40-120 s. Shorter would overlap the crests and lose the draw-back between them. Number of crests drawn 2-4, cut to those that arrive within Duration; heights drawn with the largest equal to H, which crest is largest drawn (first or second most often). Draws come after the existing ones in `planApproach`, so every seed's plan stays as it is. Crest k's countdown is the Dijkstra line time at D_k, scaled by the ray-travel ratio for H_k. Walls keep one crest (their plateau already spans the train).
+- `e.arrival` stays the first crest: `EvacuationAI` (dawdling, read only in its warning phase) needs no change, and the all-clear fires only when the event ends, so nobody walks back to the beach between crests. The banner names the next crest's estimate and that more waves are expected until the event ends.
 
 ### Coastal flooding detected (the warning's coast)
 
-`e.coastReached` (banner "Coastal flooding detected", `src/evacuation/Route.js`) means the bore is ashore at the coast the warning names: land (ground above datum) within the event's Radius of the target holding more than `INUNDATION_DEPTH` 0.1 m of water (`WaterGrid.landWithin` once at launch, `floods` per frame, allocation-free). A target with no land in its radius falls back to any wet land in the grid. It used to be any wet land in the grid: on the -90 deg heading the source line lies just north of Joey Island (Surge 2 m seed 7: launchDistance 1052 m), the plane crest's forward Gaussian tail sits on Joey's north beach (ground 0.00-0.25 m), and that beach carried 0.3-1.3 m of water at 2-6 m/s within 1 s of the launch, so the banner said "Coastal flooding detected" with the crest about 100 s from the village. Measured now (`test/tsunami-coast.mjs`, red on the old detector at 0.2 s and 0.1 s): Surge 2 m seed 7 at the Fishing village floods its shore 75.3 s after launch (sea front at the ray's shoreline 72.4 s, countdown 99.2 s); Severe 10 m seed 1 at 50.5 s (front 54.1 s, countdown 60.5 s). The beach floods on the crest's rising limb (σ at least 6 x 32 m), so the flag leads the crest countdown by up to a quarter of it. Open: the source mound still lands on Joey's north beach in one step (a fork on the source placement).
+### The wave is generated at sea
 
 ### Seeds and replay
 
-To replay one, set the one-shot `window.__app.disasters.nextSeed = n` before Start: `Disasters.start` takes it as the event's seed and as `runSeed`, then clears it; a start deferred to the frame boundary keeps it until it runs (`test/disaster-next-seed.mjs`). It is internal plumbing for the browser specs and bug reports. No panel, key or HUD shows or sets it. The Tsunami control scenario (`test/browser/disasters.spec.js`) replays Surge 2 m at the village with seed 7 and asserts the outcome physically: loose furniture moves, every footprint the water never wetted (depth over the base above 0.08 m, the structures' own exposure rule) stands untouched, and every broken building saw a load above half its scattered anchor capacity (the member model's activation ratio).
+**Reference.** The maths does not change: second-order central-upwind (Kurganov and Petrova 2007) with hydrostatic reconstruction (Audusse et al. 2004) and Heun's SSP-RK2, Manning friction, the edge sponge, the far-field inflow band (Mayer, Garapon and Sorensen 1998) and the one-way nest. `src/disasters/WaterGridGPU.js` is a pass-for-pass WGSL mirror of `WaterGrid.step`, with the CPU line each pass mirrors named in its comment. The CPU `WaterGrid` stays the reference and the node path: every node test keeps running it, and the parity test holds the two together.
+
+**Passes (one step, one compute pass, 64-thread workgroups over the n^2 cells, 1033 groups at n 257).** `slopes` (both axes' limited slopes of eta, h and the normal and tangential speeds, first order at the edge and next to water under DRY 1 mm: `WaterGrid.sweep`'s first loop), `faces` (each face's central-upwind flux once: mass, normal momentum less the left side's face pressure, tangential momentum, and the pressure difference the right side adds), `update1` (gathers its four faces and the centred bed term `-g h sEta`, saves the stage copy, positive Euler step: `stepSecond` stage one), then `slopes`, `faces`, `update2` (the Heun average), `sources` (friction, then on an un-nested grid the inflow band or the sponge: `WaterGrid.sources` / `inflowAt`), `nest` (the edge band relaxed to the parent's blended field: `nestToParent`), `pack` (previous <- state, state <- (surface, u, v, h): `WaterGrid.pack`). Per frame: `blend` (pixels = mix(previous, state, lag / step): `WaterGrid.blend`) and `rate` (the CFL rate's maximum, atomicMax on the float's bits: `WaterGrid.stableStep`). Each face is computed once and read by both its cells, so the mass a face moves leaves one cell and enters the other exactly (conservative in f32). The state is f32 on the GPU (f64 on the CPU); a lake at rest stays exactly at rest because the bed and the still depth round to the same magnitude.
+
+**Layout.** Per grid: `U` 2 n^2 vec4 (h, qx, qz, bed; then the stage copy), `S` 2 n^2 vec4 (x then z slopes), `F` 2 n^2 vec4 (x then z faces), `PK` 3 n^2 vec4 (state, previous, pixels: the same (surface, u, v, h) the CPU `pixels` holds, the layout the renderer's `disasterGridTex` reads and `Field.sample` interpolates). 6 storage bindings per pass (the engine requests 10). 257^2: 4.2 MB per grid, 8.5 MB for both. The ring's `PK` is bound read-only to the village grid's `nest` pass.
+
+**Source of truth.** The GPU `PK` pixels are the field: the renderer reads them in place (no upload: the texture becomes a storage buffer the water shader indexes, or `pack` writes the texture as a storage texture), and the CPU consumers read a copy. Launch and `addImpulse` stay on the CPU (they are one-off writes onto water at rest) and upload `U` once; the event's inflow bookkeeping (`inflow.elapsed`, `time`, `stats.steps`) stays on the host `WaterGrid`, which the GPU wrapper advances.
+
+**CPU consumers.** Every reader of `Field.waterAt` / `Field.sample` / `WaterGrid.sample` (Ragdoll, RagdollPool and RigSnapshot, Structures, Disasters, EvacuationAI, Contact, FerryShip and FerryDeck, Chairlift, Aviation, Glider, OnFootExit, Habitat, Brain, Sharks, Route) reads `pixels` through the same bilinear `sample`. In GPU mode those `pixels` are an async readback: `copyBufferToBuffer` of the pixels third of `PK` into one of two MAP_READ staging buffers, `mapAsync` resolved one or two frames later and copied into the host grid's `pixels` (same layout, so `sample`, `floods`, `landWithin` and every consumer are unchanged). Gameplay never waits on the GPU: a frame whose readback has not resolved keeps the previous field (one to two frames, 17-33 ms, late: under a body's 0.3 s surface smoothing and the 1 s ragdoll rest test). Readback: 1.06 MB per grid per frame, 2.1 MB for both (unified memory on the M-series target). `stats` that need a reduction (inundated area, min and max surface) come from the readback on the CPU, as `pack` computes them today; `positivityCorrection` and `boundaryVolume` are not kept on the GPU (named gap: a reduction pass if a test needs them in GPU mode).
+
+**Detail by distance.** Unchanged: the ring (32 m cells, 8.2 km) holds the approach and the far field, the village grid (8 m, 2 km) the coast; beyond the ring the analytic wall (`disasterFar`).
+
+**Transitions.** CPU to GPU happens at grid creation (a device exists: GPU; node or no device: CPU). Launch and an impulse upload the host state once (a readback copied before the upload is dropped by epoch, so the calm sea never lands on a just-launched wave). Stop, and the end of the last water event, destroy the GPU buffers with the grids (a readback still mapping is caught, not thrown). GPU to CPU happens mid-event in two cases, both from the last readback: a tornado starts (its wind stress is not on the GPU) and the device is lost (`device.lost`; once, for the session).
+
+**Edges.** Non-finite rate: the CPU throws; the GPU rate pass ignores NaN (atomicMax on bits) so the host checks the readback for a non-finite or zero rate and falls back. f32 positions: cell centres within 4.1 km of the origin carry 0.25 mm of rounding, the far-field crest position the same. The nest's `pn - 1.000001` clamp rounds to `pn - 1` in f32, so the GPU clamps the base cell to `pn - 2` instead (same bilinear weights).
+
+**Evidence plan.** `test/tsunami-gpu-parity.mjs` (headless WebGPU through `test/headless.mjs`): the real island, the Surge 2 m and 320 m events (seed 1) in the real `DisasterField`, both grids snapshotted in flight, then the same CFL steps on the CPU and the GPU: eta and momentum within a stated tolerance, volume within 1e-6 of the CPU's, and a closed basin (no sponge) conserving its volume to 1e-6. Then the readback path, the switch in `Field` and the before / after bench.
+
+## Rendering the flood
+
+**Reference.**
+- Bore strength is the bore Froude number Fr1 = c / sqrt(g h1). Undular (smooth crests, no roller) below 1.3-1.5,
+  breaking roller beyond, fully breaking by about 2 (Chanson 2009, Eur. J. Mech. B/Fluids 28, 191-210). The
+  renderer sees only the state behind the front, so it inverts the jump relations for a front running into still
+  water or a dry bed: Fr2 = sqrt((r + 1) / 2) (r - 1) / r with r = h2 / h1. Fr1 = 1.3 is a local Fr2 of 0.316 and
+  Fr1 = 2.0 is 0.751 (`src/disasters/FloodLook.js` derives both; `test/tsunami-render.mjs` pins them).
+- Overland flow in 2011 ran at Froude numbers of about 0.7-2 and was white and churning where supercritical
+  (Fritz et al. 2012, Geophys. Res. Lett. 39, Kesennuma survivor videos).
+- Suspended sediment in the 2004 and 2011 flows was of order 1-10 kg/m^3 (Jaffe and Gelfenbaum 2007, Sediment.
+  Geol. 200): brown-black water, opaque within centimetres. Fine sand goes into suspension at about 0.5-3 m/s of
+  depth-averaged flow in shallow water (Soulsby 1997, Dynamics of Marine Sands).
+- Declared game choices: the lip leans forward 0.35 of the jump and the roller stands 0.1 of the jump above the
+  conjugate depth (after the plunging lip in `src/ocean/Breakers.js`); sediment optics at turbidity 1 are
+  absorption (9, 11, 14) /m and scattering (12, 11.5, 10.5) /m (`FloodLook.SED_ABSORB`, `SED_SCATTER`, the only
+  copy: extinction 21 to 24.5 /m, so 5 cm of it hides about two thirds of the ground and 15 cm all of it), the ratio giving the
+  brown-grey colour; the foam flow map cycles every 3 s.
+
+**Source of truth.** Everything is read from the solver's packed state (`WaterGrid.pack`: surface, u, v, depth)
+through `DisasterWater` (`src/disasters/Water.js`), the same texture the boats' `WaterQuery` height uses. The
+classifier and the turbidity model are one set of constants in `FloodLook.js`, emitted both as JS (tests, the
+debug stat) and as WGSL. The physics is never changed here.
+
+**What it draws.**
+1. Bore face, per vertex and per pixel: local Fr from the packed depth and velocity, the face slope as the fall of
+   the interpolated surface along the flow; breaking = Fr ramp (0.316..0.751) x face ramp (0.02..0.10 m/m) x depth
+   ramp. The jump h2 (1 - 1/r) scales the lip (vertices thrown forward along u) and the roller.
+2. Whitewater, per pixel: the breaking roller plus the churning supercritical sheet (local Fr 0.6..1.6 in shallow
+   water), as foam coverage and as aeration in the water medium.
+3. Foam streaks advected by u: a two-phase flow map on the foam pattern where the flood flows.
+4. Turbid flood: sediment absorption and scattering added to the water medium by turbidity (0 in water deeper than
+   about 30 m, 1 over flooded land, stirred in fast shallow water).
+5. Surf suppression: the shore waves' displacement, the plunging face, the roller, the surf foam and the shore
+   simulation's foam fade where a surge or drawdown of 0.4-2 m covers the sea, or any flood (0.1-0.6 m) covers the
+   beach. The run-up sheet already drops below the flood surface.
+6. Waterline per pixel: the render surface carries the wet corners' level across the cell
+   (`disasterSurface`), so the waterline is where that level meets the real terrain, not the 8 m (32 m outer) grid.
+
+**Budget.** No new passes, draws or dispatches. Per water vertex the flood now costs 4 samples of the packed state
+(it was 8: height, two 3-sample slopes, foam). Per water pixel, 3 samples plus two foam texture taps where the
+flood flows. Off (no event) every sample returns at the domain check. Measured: see Evidence.
+
+**Detail by distance.** The lip and roller follow the water mesh (fine near, coarse far, as the waves do). Foam
+pattern detail fades into coverage with the pixel footprint (the existing rule), so far water shows the colour and
+the white of the bore, near water the streaks.
+
+**Transitions.** Every term is a smoothstep ramp: the bore appears as the Froude number and the face grow and
+fades as they fall; turbidity grows as the water runs over the land; the surf fades over 0.4-2 m of surge.
+
+**Edges.** Still water has Fr 0, so the still waterline (a large surface step to a dry cell) is never a bore. A
+steady current with no face is not a bore. Depths under 0.02 m carry no face. The ratio iteration contracts (factor
+< 0.5) for every Fr, so it cannot diverge; speeds are divided by max(speed, 1e-4).
+
+Not yet built: GPU spray and mist along the front and at obstacles (a separate emitter, `FloodSpray.js`); the view
+from a camera inside the flood (the underwater composite fogs with the clear sea's optics).
+
+### Design: foam where the water breaks
+
+At 10 m and above the flood drew pale from the air (dunes, chalk, a snow field) and the 320 m wall as a cliff of
+chalk with a white plateau behind its crest. The history made foam wherever a cell classified as breaking (a local
+Froude number and an absolute surface slope, born at twice that), and the shader painted the same classifier white
+on every pixel. In a large event nearly every cell classifies: on the seeded events 92 % of the flooded land held
+dense foam 5 s after a 10 m wave arrived, 97 % behind a 25 m wave, and 91 % of the sea in the grid behind the 320 m
+wall at +20 s (`foamShare`, the share of wet cells whose history foam stands over one half).
+
+**Reference.**
+- A bore of depth ratio r = h2 / h1 has the bore Froude number sqrt( r ( r + 1 ) / 2 ) (Belanger). Under about 1.3
+  it is undular, a train of smooth waves; between about 1.3 and 1.8 its first crest breaks into a roller (Chanson
+  2009, "Current knowledge in hydraulic jumps and related phenomena", Eur. J. Mech. B/Fluids 28; Chanson 2010 on
+  tidal bores, the lower end in the field). The head a jump loses is ( h2 - h1 )^3 / ( 4 h1 h2 ), which is
+  ( r - 1 )^3 / ( 4 r ) of h1: 1.2 % at a bore Froude number of 1.3, 11 % at 1.7. The roller is where that energy
+  goes, and the roller is the white.
+- The water behind a tsunami front is a deep, fast, smooth body: black-brown water with foam in streaks (Tohoku
+  2011 from the air; Fritz et al. 2012). On the seeded 10 m event the median depth ratio across four cells among
+  fast, rising water is 1.06 to 1.25, under the undular bore.
+- Whitecap foam on clean sea water decays with an e-folding time of about 3.5 s (Monahan and Zietlow 1969): the
+  dense stage. Loaded water keeps a thin residue many times longer (Callaghan, Deane and Stokes 2013), streaks
+  minutes old in the Tohoku footage.
+
+**Real outcome.** A dark body with a torn white front at every height from 2 m to the 320 m wall: at most about a
+third of the flooded land in dense foam 5 s after arrival and less by +20 s; foam over loaded water tan and lit as
+the water round it, in shadow on the lee of the wall and of a building.
+
+**Source of truth.** The solver's packed state, as before. One rule for the roller (`roller`, WGSL `floodRoller`),
+read by the history (`frontFoam`) and by the shader (`disasterLookAt`'s `o.roller`), and one light for the flood's
+body and its foam (`floodLight`, `FLOOD_LIGHT_WGSL`). `classifyBore`'s `breaking` keeps its meaning (the lip, the
+turbulence, the review camera's front).
+
+**What it draws.**
+1. Foam is born where a front carries a roller (`frontFoam`): the depth falls along the flow, the flux converges
+   (`FACE_FILL`), and the jump `JUMP_SPAN` cells behind against `JUMP_SPAN` ahead, the smaller of the surface's and
+   the depth's fall as a share of the depth behind (the depth step alone where the water ahead is under `JUMP_DRY`),
+   ramps from `UNDULAR_FR` to `ROLLER_FR` on its bore Froude number. The fast leading edge still foams (`EDGE_FOAM`).
+2. Two stages in the one foam channel: the excess over `FOAM_RESIDUAL` decays with `FOAM_ACTIVE_LIFE`, the rest with
+   `FOAM_LIFE`. Foam over one half was born in the last 4 s.
+3. Per pixel, the face's white is the classifier's breaking times the larger of the roller of the jump to the two
+   samples the wake already takes ahead (`jumpDrop`, unweighted) and a tall face's crest and foot (`tallFront`).
+   Beyond the grids the far wall's crest band keeps it as before. The carried foam is solid by its share above the
+   residue (`lace`).
+4. Flood foam takes the sun by its facet's cosine and the sky by the share its facet sees, as the body does. It took
+   a wrapped sun, a quarter of it on a face turned away.
+5. The lip leans forward and the roller stands up only where a front carries a roller (`o.roller`, the face's own
+   rule). On the classifier alone the body behind a 10 m and a 25 m front stood in hummocks, a range of dunes.
+6. The silt a bed holds and the water carries is a mass per area, so the load a column carries is at most
+   `SILT_COLUMN` / h (8 m: a 10 cm deposit at about 1600 kg/m^3 makes about 8 m of column as turbid as the opaque
+   flood, taken as 20 kg/m^3 of fines; declared), on top of what its own flow raises. Undiluted, the 320 m wall over a
+   bay the drawdown had silted drew tan from its crest to its foot (water debug view 16, the body alone).
+
+**Budget.** No new pass, draw, dispatch, texture or sample on the GPU: per flooded pixel inside the grids one more
+min, max and square root (the roller reads the two samples the wake takes). CPU: per moving wet cell over the
+undular local Froude number whose flux converges, two bilinear samples of two channels (16 reads), inside the
+history's band; the history step stays under its band budget (median under 1 ms a frame). Measured under Perf.
+
+**Detail by distance.** As before: the history covers the inner grid; the outer ring and the far wall take their
+white per pixel only.
+
+**Transitions.** The roller ramps over a bore Froude number of 1.3 to 1.7; the dense foam fades over seconds and the
+residue over tens of seconds. No term switches.
+
+**Edges.** The source is the front's own jump: speed, depth and slope alone make none (a 10 m deep flow at 12 m/s
+whose depth falls 6 % a cell holds none). Still water: no speed, no source. A sheet thinning down a slope converges
+nothing. A dry cell ahead: the depth step stands alone. The stencil reads the packed state only, so a step taken in
+bands ends where one whole step does. Steps are capped at 0.5 s.
+
+**Evidence.** Node, `test/tsunami-flood-look.mjs`, five tests shown to fail on the previous source: a 10 m deep flow
+at 12 m/s whose depth falls 6 % a cell held foam 1.00 after 5 s; an undular step (depth ratio 1.25) held foam 1.00;
+3.5 s after its source stopped the foam was still 0.92; flood foam on a face turned from the sun took 0.25 of the
+sun; 5 s after the seeded 10 m wave reached the village 92.5 % of the flooded land carried dense foam. Four tests
+moved with the source: the decay on still water is the two stages; the 2 m surge's foam is counted on the cells a
+roller covers (`frontFoam`), not on every cell the classifier calls breaking; the foam behind the face decays as the
+history decays it; the tall face is unchanged (its first argument is now the roller). A sixth: a 300 m column of the
+wall over a bed the drawdown silted carried a load of 0.99 after 1 s (now under 0.05).
+
+Water debug views 16, 17 and 18 (`PW_WDBG`) draw the body, the sky's reflection and the sun's glint alone. From
+`tsunamiAir` toward the sun 20 s after a 25 m wave arrived the flood draws near-white with little foam (view 3): the
+pale is the sun's glint over the flood's rough surface (view 18) on a tan body (view 16).
+
+Dense foam over the flooded land (bed above the datum) and over the sea in the grid, the share of wet cells whose
+history foam stands over one half, seed 7, the history stepped whole every 0.1 s (node probe; moments after
+`e.arrival`; the sea column is diluted by about 53,000 cells of undisturbed sea):
+
+| Height | Moment | Land before | Land after | Sea before | Sea after |
+|---|---|---|---|---|---|
+| 2 m | +1 s | 49.5 % | 24.4 % | 1.7 % | 0.5 % |
+| 2 m | +5 s | 47.2 % | 26.2 % | 1.4 % | 0.3 % |
+| 2 m | +20 s | 20.3 % | 9.9 % | 0.6 % | 0.1 % |
+| 10 m | +1 s | 94.1 % | 29.6 % | 16.2 % | 0.8 % |
+| 10 m | +5 s | 92.5 % | 21.7 % | 16.0 % | 0.6 % |
+| 10 m | +20 s | 80.6 % | 9.3 % | 12.3 % | 0.5 % |
+| 25 m | +1 s | 97.1 % | 48.4 % | 33.0 % | 1.6 % |
+| 25 m | +5 s | 97.2 % | 32.6 % | 32.4 % | 1.1 % |
+| 25 m | +20 s | 96.7 % | 7.2 % | 26.7 % | 0.7 % |
+| 320 m | +1 s | no land wet | no land wet | 38.9 % | 4.9 % |
+| 320 m | +5 s | 99.4 % | 17.0 % | 61.6 % | 2.1 % |
+| 320 m | +20 s | 100.0 % | 0.0 % | 90.8 % | 0.0 % |
+
+### Design: water that moves, a torn front, a film edge and wet ground
+
+The flood drew as a flat brown mirror with lace scribbles, a straight seam across the beach, a stepped edge with a
+dark rim against dry sand, and ground that was dry the instant the water left. Once it moved, the big waves showed
+what was still wrong: a 320 m wall and the water behind a 25 m front drew white from top to toe (a cliff of chalk, a
+field of snow), the far wall drew as a pale curtain, a 2 m surge turned the whole bay brown, the sheet arriving over
+the beach had no foam at its edge and no direction, the wet ground ended on smooth lobes, and fast water smeared.
+
+**Reference.**
+- Tohoku 2011 (the Sendai plain from the air, the Miyako sea wall, Kesennuma harbour: Fritz et al. 2012), Banda
+  Aceh 2004 and Lituya Bay 1958 for a wall: black-brown water with a matte, chaotic surface, chop of decimetres to
+  metres, boils, foam in streaks along the streamlines for minutes behind the front, a leading edge that is a thin
+  running film behind a tumbling line of froth, white where the water breaks (the crest and the foot of a face) and
+  dark between, and ground left dark and glossy under a sheet of silt.
+- A free surface breaks up when the turbulence under it overcomes gravity and surface tension, at velocity
+  fluctuations of about 0.3 m/s (Brocchini and Peregrine 2001, J. Fluid Mech. 449). What deforms it is the turbulent
+  energy against gravity over the eddy's size, q^2 / ( g L ): q follows the speed (10 to 20 % of it over the rough
+  ground of a flooded town) and L the depth, so the slope variance follows the Froude number squared in any regime.
+  `floodTurbulence` is the square root of a speed term (`TURB_SPEED` 0.2 to 2.5 m/s) times a Froude term
+  (`TURB_FROUDE` 0.05 to 0.7): 0.9 for 2 m/s through a metre of water in a street, nothing under Froude 0.05, so the
+  open sea keeps its own surface.
+- The largest eddies and the boils they raise scale with the depth (Nezu and Nakagawa 1993): chop wavelength 2.5
+  depths on fixed wavelengths from 0.5 to 86 m, and every finer wavelength keeps `CHOP_FINE` of the slope (the
+  cascade). The streaks and boils of a thin sheet are a few depths across, so its foam gathers on the fine streaks.
+- A gale-driven sea has a mean square slope of 0.003 + 0.00512 U (Cox and Munk 1954), 0.075 at 14 m/s. A boiling
+  flood is at least that rough: 0.06 to 0.09 at full turbulence (declared, the violent end).
+- A rough surface seen at a grazing angle reflects the mean Fresnel share of the sky over its facets, not nearly
+  all of it (Bruneton, Neyret and Holzschuch 2010): `meanFresnel`.
+- Whitecap foam on clean sea water decays with an e-folding time of about 3.5 s (Monahan and Zietlow 1969); water
+  loaded with surfactants and fines holds it many times longer (Callaghan, Deane and Stokes 2013, J. Phys. Oceanogr.
+  43). The Tohoku footage shows streaks minutes old: `FOAM_LIFE` 40 s (declared, the long end).
+- The bed's fines reach the surface once they have mixed up through the column: about 0.4 h^2 / Dz with
+  Dz = 0.067 u* h (Elder 1959; Fischer et al. 1979) and u* about a tenth of the speed, 60 h / u seconds. A surge
+  passes in a minute or two, so water shows its bed where its depth over its speed is under 0.3 s and keeps the
+  sea's colour over 1.2 s (`STIR_MIX`, declared band).
+- Wet ground is about half as bright as dry (Twomey et al. 1986; Lekner and Dorf 1988), darkens before it turns
+  glossy (Lagarde 2013) and stays dark for tens of minutes to hours. `WET_DRY` 300 s e-folding (declared: the fast
+  end, so the player sees it dry). A tsunami leaves a sheet of sand and mud 1 to 30 cm thick, thicker in the lows
+  (Jaffe and Gelfenbaum 2007).
+
+**Source of truth.** The solver's packed state, as before. Every constant lives in `FloodLook.js` and reaches the
+shaders through `FLOOD_LOOK_WGSL`. The history is computed from the packed state alone. The ground's small relief
+(`floodRelief`, two grains of noise fixed to the ground) is one function for the film's edge and the wet ground.
+
+**What it draws.**
+1. One cover rule across the waterline (`floodCover`, Water.js `disasterLookAt`): the thresholds run from the sea's
+   (0.4 to 2 m) to the land's (0.1 to 0.6 m) over bed -2 to 0 m.
+2. A history of the flood (`FloodHistory`), stepped on the CPU at the solver's cadence on the inner grid, a band
+   of rows a frame (`HISTORY_BANDS`): foam (born on the breaking face and at the leading edge, carried along the
+   flow, decaying), turbulence (it outlives the front by `TURB_LIFE`), sediment load (water that has run over the
+   land stays brown when it runs back to sea, and the bed keeps the silt it dropped) and wet ground (1 under water,
+   drying with `WET_DRY`). It rides in the third block of rows of the one disaster texture and keeps its own
+   domain, so the wet ground outlives the grids; a restored island is dry.
+3. Chop the 8 m solver cannot hold (`floodChop`): gradient noise with its analytic gradient on fixed wavelengths,
+   dragged along the flow in two phases and drifting against each other, scaled by the turbulence. Octaves finer
+   than a pixel become slope variance: roughness for the sun's glint, the mean Fresnel reflectance, and a
+   reflection that goes from a mirror to the sky's mean radiance (`MATTE`).
+4. The body takes its light through its own facets, and its shade varies in plumes and drifts of flotsam.
+5. Foam off the face is the history's cover gathered into rafts along the flow (`raft`), drawn as its own cover
+   and lit as a plain scatterer, tan over loaded water. In a thin sheet the fine streaks carry the pattern
+   (`RAFT_SCALES_THIN`), so the water is seen to run.
+6. Deep water is dark between its streaks, whichever term made the foam (`FACE_TALL`, `FACE_TALL_COVER`), and a
+   tall face is white at its crest and its foot (`tallFront`: where a pixel stands on the face, from the surface
+   two cells up and down the flow). The far wall keeps every white term to its crest band.
+7. Sediment where the flow can raise it: over the land, in water shallow for its speed (`STIR_MIX`), and wherever
+   the history has carried the load. The open sea under a surge's current keeps its own colour.
+8. The edge. The drawn sheet thins to nothing toward dry corners below its level (`sheetCap`) and ends inside
+   the cell on a contour bent by the ground's small relief. A fast front holds its foam in the cell it is about to
+   enter, and the sheet's last centimetres carry it as a line of froth (`edgeLine`); a draining edge has none.
+9. Wet ground (`soakedGround`, Terrain.js): soaked to a ragged edge that follows the same small relief, a film in
+   the hollows and damp matte ground on the rises (`SHEEN`), pools in the deepest hollows of flat ground while it
+   is fresh (`POOL`), silt thin on the rises and thick in the hollows and in drifts (`SILT_PATCH`).
+10. The flood's own motion for the temporal pass (`motionWeight`, WaterMaterial): where the flood is drawn the
+    pixel's velocity is the flow's, projected to the screen, so the patterns the flow drags stay sharp.
+
+**Budget.** No new pass, draw, dispatch or texture. Per flooded water pixel: one more packed sample (the drawn
+sheet), one history sample, up to six chop octaves in two phases, three streak scales in two phases, two more
+packed samples under water deeper than 6 m (the tall face), and one projection for the motion. Per wet terrain
+pixel: three noise values. CPU: the history steps a band of rows a frame and uploads that band. Off (no event,
+ground dry): every path returns at its domain check or takes a weight of exactly 0; the history does not step.
+
+**Detail by distance.** Chop octaves fade into roughness below 1 to 3 pixels per wavelength. Foam detail fades
+into cover with the pixel footprint (the sea's own rule). The history is 8 m everywhere in the inner grid; the
+outer ring has none (the far wall's white is its crest band).
+
+**Transitions.** Every term is a ramp. Foam and turbulence decay behind the front. Wet ground dries after the
+water has left and after the grids have gone, the rises first. The film fades in over its first 3 cm.
+
+**Edges.** Still water has no speed, so no turbulence, no foam source, no sediment pick-up and no motion written.
+Dry cells keep stranded foam for `FOAM_STRAND`. The sea's bed takes no wet history. Advection is clamped to the
+grid; steps are capped at 0.5 s. A point that was behind the eye a frame ago keeps the camera's motion.
+
+**Evidence.** Node: `test/tsunami-flood-look.mjs` (in `test:simulation`), 25 tests (five for the foam source above). Shown to fail without the
+build: a 2 m/s current through a metre of street water had turbulence 0.32; a boiling surface near grazing
+reflected 0.77 of the sky; a 5 cm sheet over the land had turbidity 0.10; a 30 % foam cover left 0.30 on the
+pattern's low ground; the history stepped in bands differed from one whole step at 9981 values; the sea returning
+over silted shallows carried a load of 0.00; a 2 m/s current over 10 m of open water had turbidity 0.63; the middle
+of a 200 m face between its streaks was 1.00 white; the dry cell a 3 m/s front was about to enter held foam 0.00;
+4 s behind the face the foam it left still covered 0.84 between the streaks.
+Scenarios in `test/browser/tsunami-render.spec.js`: the seeded review scenarios, "Ground the flood covered stays
+wet after the water has gone", and the fixed-view look runs at 2, 10, 25 and 320 m that the frames are judged in.
+
+**Perf.** `test/browser/tsunami-bench.spec.js`: reference shots and GPU ms with no event, and GPU ms 15 s into a
+10 m and a 320 m flood, at the tsunami review views. The table is not filled in yet: the bench has not been
+run before and after on this build.
+
+**Open.** The foam source follows the front's own jump now ("Design: foam where the water breaks" above). Still
+open: foam at standing jumps, at drops and behind obstacles (a standing-jump term as first measured put half of the
+25 m flood's land in dense foam); the ground round houses the solver keeps dry draws as dry pads; the rest sea's
+swash over a silted bed is still clear.
 
 ## Common force laws
 
@@ -55,7 +357,7 @@ Applied debris acceleration is capped at 45 m/s², force at 2 MN and torque at 2
 
 The earthquake has a spatial wavefront, configurable propagation speed and frequency, a smooth envelope and radial attenuation. PGA is specified in g. Dynamic bodies receive the simplified inertial load only through solved upward support contacts, propagated through stacks. A hovering or freely floating body receives no ground acceleration. Terrain geometry itself does not move; this is an equivalent contact-supported load model, not elastic seismic-wave propagation or moving-ground contact mechanics.
 
-The tornado has a translating Rankine-like core/edge tangential velocity, radial inflow and vertical updraft. Wind is sampled at each object's location and added to the ambient wind. The prescribed vortex is not atmospheric CFD. Tree failure compares wind/flood/ground overturning moment with an assumed root capacity. For authored village geometry, a whole-assembly seismic/air/water utilization estimate activates a connected material model; it does not itself detach the panels. Once active, solved connector force and moment determine individual failures. Imported unstructured geometry retains the legacy utilization-based coarse release. The activation integral is a dimensionless heuristic, not fracture energy or a code-compliant stress analysis.
+The tornado's wind is one prescribed Burgers-Rott vortex with a surface inflow layer and an updraft that peaks aloft, and it follows one seeded life cycle shared with the drawn funnel ("Tornado: one vortex and one life" below). Wind is sampled at each object's location and added to the ambient wind. The prescribed vortex is not atmospheric CFD. Tree failure compares wind/flood/ground overturning moment with an assumed root capacity. For authored village geometry, a whole-assembly seismic/air/water utilization estimate activates a connected material model; it does not itself detach the panels. Once active, solved connector force and moment determine individual failures. Imported unstructured geometry retains the legacy utilization-based coarse release. The activation integral is a dimensionless heuristic, not fracture energy or a code-compliant stress analysis.
 
 Uniform flood elevation gives equal opposing-wall hydrostatic forces and cancels. Spatially different levels create a net pressure resultant; interiors are treated as freely flooded, with no trapped-air pressure model. Imported unstructured geometry can release up to four coarse rigid assemblies per 10 m cell with box collision proxies. Authored village panels, supports and local deck modules instead use the connected material model described below. Authored posts and foundations can extend into the soil; the native proxy excludes the buried envelope, sampled at 1 m spacing with a 2 cm clearance skin. Its origin changes while the authored world vertices stay fixed. Proxy volume determines its assumed envelope mass. This is an exposed assembly approximation, not excavated soil or a detailed member collision model. A proxy with no exposed volume defers failure rather than spawning underground. Ground slabs, dynamic ferry gates/platforms, terrain, rocks and infrastructure below the selected structural layer remain intact.
 
@@ -82,6 +384,39 @@ Tree mass remains the assumed `max(120,35H)` kg. `TreeMass.js` divides it into a
 
 Loose cosmetic car panels and wheels retain the existing 36-piece terrain-contact, bob/sink and rolling approximation. They now sample the shared water elevation/current, receive common mass/area air drag and terrain-supported ground acceleration, and damp water-relative velocity. No second buoyancy or water drag is added. Assumed panel mass is 6 kg/m² of the largest projected face (minimum 0.25 kg); detached wheels are 22 kg; an unspecified scrap defaults to 5 kg. Settled scraps use an assumed static-friction threshold of 0.4g. Their 1.2/s water damping, prescribed flotation lifetime and simplified contacts are not hydrodynamic or contact-calibrated. Grounded wheels retain the wind impulse as rolling and lateral slip. Their longitudinal effective mass assumes a solid disc (`I = 0.5*m*r²`); lateral friction uses assumed coefficient 0.6. The no-environment legacy path is unchanged.
 
+## Tornado: one vortex and one life
+
+The wind that loads houses, trees, people and water, and the condensation funnel that is drawn, are one vortex with one core radius and one intensity over time. Model: `src/disasters/TornadoVortex.js` (the flow), `src/disasters/TornadoFunnel.js` (`tornadoLifecycle`, the seeded life), wired by the tornado block of `DisasterField` (`tornadoVortex`, `tornadoEnd`, `sampleRaw`, `applySurfaceWind`) and drawn by `TornadoVisuals.updateStorm`.
+
+**Reference.**
+- Swirl: Burgers-Rott, `v = VG (1 - exp(-x^2)) / x`, `x = r / rc`, peak `0.6382 VG` at `x = 1.1209` (Rott 1958; Davies-Jones 2015, Atmos. Res. 158). The radius of maximum wind is the panel radius x 0.18, as before, so the default 100 m tornado has its strongest wind 18 m from the axis and `rc = 16.06 m`. Outside the core the swirl falls as `1/r` (the angular momentum the inflow carries in); a super-Gaussian taper `exp(-(r/R)^4)` across the panel radius `R` hands the tornado's own circulation over to the ambient wind with no edge (declared). Real outer profiles fall more slowly than `1/r` (mobile-radar decay exponents of about 0.5 to 0.7: Wurman and Alexander 2005, Mon. Wea. Rev. 133; Kosiba and Wurman 2010), so the taper sits outside the damaging wind, not inside it.
+- Vertical structure: a shallow surface inflow layer feeds a corner flow where the near-surface winds are strongest and the inflow turns upward into the core (Lewellen 1993, in The Tornado, AGU Geophys. Monogr. 79; Lewellen, Lewellen and Xia 2000, J. Atmos. Sci. 57; Davies-Jones, Trapp and Bluestein 2001, Meteor. Monogr. 28(50); Kosiba and Wurman 2013, Wea. Forecasting 28). Modelled as an axisymmetric incompressible streamfunction `psi = Q(r) F(z)`: `Q` is a Gaussian updraft of radius `rw = 2 rc` (declared game choice, not sourced: with `rw = rc` the rising air was confined so close to the axis that no sheet debris was lofted from roof height), `F(z) = B(z/delta) exp(-z/H)` with `B(s) = 1 - (1 + s) exp(-s)`. That gives no flow through the ground and no slip at it, an inflow jet about `delta` up, an updraft that peaks a few `delta` up and decays over `H`, and outflow above the peak. Declared values, at the violent end of their bands: `delta = 0.5 rc`, at least 8 m (8.0 m for the default); peak updraft = vmax (LES corner flows reach updrafts of the order of the swirl); `H` = the seeded debris-cloud height (40 to 150 m, Bodine et al. 2014, J. Appl. Meteor. Climatol. 53), at least 6 `delta`. The drawn debris cloud uses the same `H`.
+- Life (Golden and Purcell 1978, Mon. Wea. Rev. 106: dust-whirl, organising, mature, shrinking and decay stages): the ground strength `S(t)` rises over the seeded genesis (20 to 40 s, at most half the duration) as `smoothstep(t / genesis)`, holds 1 in the mature stage, and falls smoothly to 0 at the configured duration over the shrinking stage (seeded 10 to 20 % of the duration, at most half the mature time) and the rope-out (seeded 15 to 25 %, as before). Many tornadoes spin up from the ground upward while the condensation funnel is still aloft (Trapp et al. 1999, Wea. Forecasting 14; French et al. 2013, Mon. Wea. Rev. 141), so the dust whirl leads the funnel.
+- Funnel: air near the ground saturates when its pressure falls by `rho g (H_b - h)` below the wall-cloud base `H_b`; the Burgers-Rott core deficit is `1.70 rho vmax^2`, so the tip is at `H_b - 1.70 vmax(t)^2 / g` with the live vmax (`funnelTip`). There is no separate descent timer: the funnel comes down because the vortex strengthens, and lifts off as it weakens.
+
+**Real outcome.** At the default 65 m/s: no wind worth the name at Start; a dust whirl on the ground (wind above the 6 m/s dust threshold) within about a fifth of the genesis while the funnel is still under the base; touchdown when the ground vmax passes `sqrt(g H_b / 1.70)` (37 to 50 m/s for a 450 to 850 m base); the strongest wind of the event in the inflow jet a few metres above the ground at the radius of maximum wind; updraft under 1 m/s at 1 m height and a peak updraft of the order of vmax tens of metres up; the vortex decays over the shrinking and rope-out stages; and the event is over only after lofted debris has had time to land.
+
+**Source of truth.** Centre, pulses and gusts: `DisasterField.center` and `tornadoIntensity` (TornadoMotion.js). Life: `tornadoLifecycle` (seed stream `track`, indices 32 and up; the new shrinking draw is index 39). Vortex state: `DisasterField.tornadoVortex(e)` (vmax, rc, delta, H, W0, strength, end), read by the funnel, the particles and the plume. Ground height: `field.terrain`. No second vortex anywhere: `TornadoVisuals` takes `rc` and `vmax` from the vortex.
+
+**Budget.** CPU only. Per sample: three `exp`, one `expm1`, one `hypot`, no allocation; samples beyond twice the panel radius return after one compare. `tornadoVortex` solves the life once per event time (cached on the event). `applySurfaceWind` loops over the cells within twice the radius (was: within the radius). Frame time measured before and after in Perf below.
+
+**Detail by distance.** The vortex is evaluated everywhere within twice the panel radius; beyond, the taper is below 1e-7 and nothing is added.
+
+**Controls.** Unchanged: the Disaster laboratory's Start and Stop, keyboard reachable.
+
+**Transitions.** Start: the storm darkens with its 8 s time constant (the parent storm is overhead before the tornado forms), the wall cloud lowers over half the genesis, the ground wind rises from zero, the dust whirl appears, the funnel builds down and touches down. End: the ground wind falls to zero over the shrinking and rope-out stages and the funnel lifts and thins with it; the event stays until the slowest-falling sheet debris could have landed from where the updraft fades to its fall speed (8.9 m/s, a 6 kg/m^2 panel), plus the plume's 2 s export, and only then is it removed; the storm then clears over 15 s. Stop: as before, everything clears at once and the funnel lifts away over 1.5 s.
+
+**Edges.** The funnel threshold is the vortex's own deficit against a hydrostatic requirement it does not make. The updraft threshold for people (`Disasters.people`, 18 m/s) is now met only aloft, not at 1 m. Samples below the ground use z = 0. Over the sea the height is taken above the sea surface. The panel radius keeps its meaning for the core (0.18 R) and becomes the hand-over radius of the outer flow.
+
+**Evidence.** Each red was seen on the code before this change:
+- `test/tornado-field.mjs`, "One vortex": failed with "r 2 m: tangential 0.121 of peak, Burgers-Rott with the funnel's core gives 0.194"; passes now (Burgers-Rott within 2 % out to 0.6 R, no step over 0.5 m beyond, gone into the ambient by 2 R).
+- `test/tornado-field.mjs`, "The updraft is zero at the ground": failed with "65 m/s, radius 100 m: updraft 24.64 m/s at 1 m on the axis"; passes now for 65 m/s at 100 m, 120 m/s at 400 m and 30 m/s at 40 m (1 m updraft 0.13 to 0.73 m/s, peak 33 to 100 m up, flux balance and divergence within 1 %).
+- `test/tornado-field.mjs`, "One life": failed with "seed 1: ground wind 57.4 m/s at 1.2 s, 81 % of its peak"; passes now over 8 seeds.
+- `test/browser/tornado-cinematic.spec.js`, "Tornado: the ground wind rises as the funnel comes down, and the event ends after the vortex has decayed": on the old code the event ended 0.0 s after the ground wind fell, and its recorded frames show 58.9 m/s (91 % of the 65 m/s vortex) at 0.95 s under a funnel tip 699 m up.
+- `test/tornado-lofting.mjs`, real WASM bodies: sheets caught in the core rise 27 to 60 m, are thrown 70 to 105 m out and land; roof sheets torn off at 43.5 m/s are thrown 23 to 140 m and rise at most 7 m (the bodies have drag but no plate lift); a 858 kg broadleaf is uprooted at 65 and 120 m/s with its centre of mass never above 4.0 m; at 120 m/s a 400 kg tank and a 1.5 t box are thrown and land; nothing is airborne when an event ends.
+
+**Evidence plan.** `test/tornado-field.mjs` (profile against Burgers-Rott with the funnel's core, monotone and step-free outer decay into the ambient; updraft under 1 m/s at 1 m, peak aloft, inflow in the surface layer, outflow aloft, flux through cylinders and discs within 1 %, divergence residual under 1 %; 8 seeds of ground wind against funnel tip through the whole life). `test/browser/tornado-cinematic.spec.js`, "Tornado: the ground wind rises as the funnel comes down, and the event ends after the vortex has decayed". Lofting in the real WASM physics (`test/tornado-lofting.mjs`).
+
 ## Connected village materials
 
 The village builder preserves authored primitive identity and introduces intermediate cross-section vertices on long members. Wall and roof sheets and ground-reaching posts become material members. Each flexible member is represented by two real rigid contact bodies with a compliant internal connection; its visible surface continuously interpolates the two solved section frames. Relative section rotation therefore bends the surface before failure. A broken internal material connection assigns each tessellated triangle to its section, permitting separation. This is a reduced flexible member, **not a volumetric soft body**. Decks, piers and stairs use local approximately 3 m modules connected to adjacent modules. Each minor door, fitting or decorative primitive stays rigidly attached to one section of its nearest selected member, preserving its actual indexed triangles during bending and fracture. Its separate mass, material strain and collisions are not resolved. A record selects at most ten primary panels and six supports, with a bounded fallback for other authored parts.
@@ -107,6 +442,10 @@ Restore removes all these native connections, foundation frames, bodies and walk
 
 ## People and debris contact
 
+### People caught in a tsunami (2026-10-05)
+
+### Tsunami panel
+
 Beach and ferry people receive shared wind, flood level/current and contact-supported ground loads. Adults use an assumed 72 kg, children 35 kg; projected standing area is 0.7 m² for a 1.7 m adult and scales with height squared. The assumed lateral stance threshold is 3.2 m/s² while supported. It is tested on the push the same body feels at rest, so a person's own wading drag never counts: calm sea does not tip a wader at any pace, and a 2 m/s current over 0.8 m does (see [player-water.md](player-water.md), Wading and the trip test). Static sea buoyancy alone does not knock down a wader or swimmer. Strong updraft and deep moving/rising flood can remove control. Warning, route choice and voluntary evacuation are described in [people-evacuation.md](people-evacuation.md); route status does not grant immunity from physical loads.
 
 Up to 64 articulated people use the existing solver (14 bodies and 13 joints each); the loaded beach/ferry population is 58. Missing/unloaded rigs or future overflow use a separately reported physical capsule with animated limbs, not an articulated ragdoll. Capsule dimensions come from the actual neutral pelvis height after composing its ancestor transforms in metres. A local animation translation alone is not body height: that old measurement collapsed some shipped crowd capsules while retaining their mass. Segment masses still sum to the declared total, and each receives air drag from its own projected area and mass. Solved upward contacts support the connected rig for the equivalent base-excitation load; an entirely airborne rig receives no earthquake acceleration.
@@ -119,7 +458,7 @@ The existing capsule water-entry/buoyancy law remains the only water law on a ri
 
 In the retained real-terrain 120 m/s vortex model test, the field stops at 6 s. At 60 Hz, the body enters supported repose at 8.483 s with zero interventions; a short-lived physical segment spin reaches 152.61 rad/s while resolved rotation remains below 0.1 rad per piece. Terrain penetration stays below 0.012 m, maximum joint-coordinate error is 0.143°, and the complete fixed-pose velocity solver adds no kinetic energy. With 0.1 s frames, one emergency budget intervention removes 6.548 kJ and materially changes the trajectory; repose begins at 6.8 s. Both consume the full accepted interval and complete get-up. These are model results. The ordinary-input browser replay remains physical through 13.1 simulated seconds and returns to supported walking after Stop. In that full scene the observed peak segment spin is 93.27 rad/s and nine emergency interventions remove 129.95 kJ. The inspected motion remains articulated, but the extreme scene is visibly slow and choppy. The CPU model result above therefore must not be read as a claim of smooth full-scene performance.
 
-`test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with real skeleton pose work and upload-copy transport. In the Node benchmark, the final candidate's three-second 120 m/s vortex workload costs 13.28 ms mean and 18.52 ms p95 per 1/60 s frame after 30 warm-up frames, with zero interventions or nonfinite states. Separate unforced falls complete all 58 supported get-ups within 4.367 s; the inactive contact manager then averages 0.000231 ms. The active population fixture has no inter-person contacts, covered separately above. These CPU measurements exclude rendering, scene walls and normal animation/AI outside physical rigs; they are not an FPS claim. Maintained gates are `test/articulated-contact.mjs`, `test/articulated-solver.mjs`, `test/articulated-mass.mjs`, `test/articulated-neighbors.mjs` and the existing human integration tests. Actual keyboard/contact/gangway journeys remain in `test/browser/gameplay-people.spec.js`, with browser outcomes recorded separately in the gameplay handoff.
+`test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with real skeleton pose work and upload-copy transport. On Apple M5 Max/Node 22.14.0, the final candidate's three-second 120 m/s vortex workload costs 13.28 ms mean and 18.52 ms p95 per 1/60 s frame after 30 warm-up frames, with zero interventions or nonfinite states. Separate unforced falls complete all 58 supported get-ups within 4.367 s; the inactive contact manager then averages 0.000231 ms. The active population fixture has no inter-person contacts, covered separately above. These CPU measurements exclude rendering, scene walls and normal animation/AI outside physical rigs; they are not an FPS claim. Maintained gates are `test/articulated-contact.mjs`, `test/articulated-solver.mjs`, `test/articulated-mass.mjs`, `test/articulated-neighbors.mjs` and the existing human integration tests. Actual keyboard/contact/gangway journeys remain in `test/browser/gameplay-people.spec.js`, with browser outcomes recorded separately in the gameplay handoff.
 
 Structural, fallen-tree, parked-vehicle and registered external box debris can hit people. The adapter sweeps contact spheres against the actual native box translation, queries native point velocity and effective inverse mass, and applies equal and opposite linear impulses with assumed restitution 0.05. The human and native solvers each use their own local contact attachment; a separate world point records the time of impact. It handles at most 3 impacts per person per frame and samples the box's final orientation. It is a post-step coupling, not continuous rotating-body collision or exact global angular-momentum conservation between the two separated final attachment points. Ordinary loose prop cylinders and cosmetic car scraps are not included in this human contact adapter. Native impulses above 20 kN s or with invalid values are rejected atomically on both sides. There is no injury or gore model.
 
@@ -151,6 +490,58 @@ The corrected complete native suite, including the tree mass and centre-of-mass 
 
 The final ordinary-UI 3,000 m run advances 13.033 simulated seconds, then pauses, stops and restores the island. All sampled native bodies, boats, jet skis and articulated people remain finite; Restore returns craft to their original neighbourhoods. The run loads 45 people, with at most 26 simultaneously physical. Every observed physical integration piece respects its 0.1 rad rotation and 0.15-radius near-support travel bounds, with no accepted time omitted. These are numerical and lifecycle checks.
 
-This setting is not practically playable in the measured scenario. While recording at 1,440×900, 185 rendered frames take 172.38 wall seconds, about 1.07 FPS. Articulated rigs invoke 1,285 emergency budget interventions and remove about 306.91 MJ; the observed peak segment spin is 275.55 rad/s. Median sampled scene CPU moving average is about 1.60 s, including about 1.21 s for people. Those energy losses materially alter the extreme trajectory. Neither the shallow-water model nor this reduced human solver represents validated physics for a three-kilometre wave. Ordinary-scene timings and unrecorded disaster timings are recorded separately in the recovery evidence.
+This setting is not practically playable on the tested Mac. While recording at 1,440×900, 185 rendered frames take 172.38 wall seconds, about 1.07 FPS. Articulated rigs invoke 1,285 emergency budget interventions and remove about 306.91 MJ; the observed peak segment spin is 275.55 rad/s. Median sampled scene CPU moving average is about 1.60 s, including about 1.21 s for people. Those energy losses materially alter the extreme trajectory. Neither the shallow-water model nor this reduced human solver represents validated physics for a three-kilometre wave. Ordinary-scene timings and unrecorded disaster timings are recorded separately in the recovery evidence.
 
 An unrecorded Standard 1,440×900 village tornado at 100 m/s and 180 m radius measures 5.34/4.75/4.82 FPS across three 18-second samples, with p95 frame intervals of 249.6–269.1 ms. Each reaches 224 structural bodies with roughly 9–17 active human rigs. Stop and Restore succeed without page errors. This confirms a substantial full-scene CPU cost beyond recording overhead; the current high-force destruction setting is not smooth real-time play.
+
+## Sound and camera
+
+### Design: disasters heard and felt at the camera
+
+Reference. Survivors describe the sound first. Tohoku 2011 accounts liken the incoming tsunami to a jet or a freight train heard before the water is seen; the Moore and El Reno tornadoes of 2013 to a freight train, with trees cracking like gunshots. The numbers used:
+
+- Speed of sound 343 m/s (dry air, 20 °C). A collapse 700 m away is heard 2.04 s after it is seen.
+- Spreading: a point source loses 6 dB per doubling of distance.
+- Air absorption (ISO 9613-1, 20 °C, 70 % relative humidity): 1.3 dB/km at 250 Hz, 2.8 at 500 Hz, 4.7 at 1 kHz, 9.9 at 2 kHz, 29.7 at 4 kHz, 105 at 8 kHz. Each sound is low-passed where the loss over its path reaches 3 dB (4 kHz at 100 m, 1 kHz at 640 m, under 300 Hz at 2 km), and its level loses the 1 kHz figure.
+- Calibration (declared): the mixer's own reference, a wave breaking 10 m away at -15 LUFS (`MIX.crash`), is taken as 85 dB SPL, so mixer loudness is SPL minus 100. At the default of the Disaster sound volume row a disaster sound plays at that calibration, a gain of 1 on the disaster bus like every other sound in the game (`busGain`); the row runs from silence at 0 to 4/3 (+2.5 dB) at its top. A disaster bed never exceeds -9 LUFS and a one-shot never -6 LUFS (91 and 94 dB) at the listener: the real thing is louder. Both ceilings are applied where every disaster sound enters the bus (`SoundScape.disasterBed`, `disasterShot`). The bus's last stage, after the row's gain, bounds all disaster sound together: a sound under -6 dBFS passes it unchanged and anything louder is held under -3 dBFS, y = K + (C - K) tanh((x - K) / (C - K)) above the knee K (`DisasterSound.stageCurve`, a wave shaper with no oversampling, so its output is never more than its curve: the 4x oversampler's filters overshoot on a held peak). So the bus puts at most -3 dBFS into the master limiter at every position of the row. While the disaster is loud the rest of the island's sound above the water gives way (declared, as a broadcast mixer ducks music under a voice): nothing while the disaster as played is under -24 LUFS (9 dB under the reference wave), 9 dB at the bed ceiling (-9 LUFS) and above, smooth between (`duckGain`), turned down over 0.25 s and back over 1.5 s (`SoundScape.setDisasterDuck` on the above-water mix's input gain). The underwater bed, the surfacing and coin sounds and the whale song keep their level. An earlier bus held to 0.35 of the row for headroom played the arrival of a flood at the listener at about -16.6 LUFS at the default, quieter than the reference wave.
+- Flood noise (declared within the physics): the flood's turbulent dissipation per square metre is rho C_D |u|^3 (seawater 1025 kg/m^3, bottom drag C_D 0.003), weighted by how hard the water breaks (Froude number |u| / sqrt(g h) from 0.35 to 0.8: a long wave at sea is silent, a bore roars), radiated with an acoustic efficiency of 2e-6. Water that is draining (its depth falling faster than 8 cm/s between two looks at the same place: the sea drawing back before the wave, the backwash) has no breaking face to entrain air and counts at 10 % (declared, -10 dB); only rising water is a front. The first browser run without this heard the drawdown at launch at -12.6 LUFS 50 m off the boardwalk, as loud as the bore. That puts a 2 m flood running at 6 m/s over a hectare 30 m away at about 90 dB, a freight train at close range.
+- Tornado (declared): the vortex roar is 85 dB at 100 m for a 65 m/s vortex (EF3, about a freight train at 30 m), growing as the fifth power of the wind (50 log10, between the fourth power of monopole flow noise and the sixth of dipole), a point source beyond the core. Measured from the code: -15.5 LUFS (84.5 dB) below 4 kHz at 100 m, -31.3 LUFS below 1.3 kHz at 500 m, -50.4 LUFS (49.6 dB) below 285 Hz at 2 km: a low rumble, not a roar.
+- Wind at the camera (declared): the event's own wind (the field's wind minus the ambient wind) on the recorded coastal wind, -36 LUFS at 7 m/s as `MIX.wind`, rising 40 log10 of the speed, with gusts of 25 % turbulence intensity on a 1.5 s time scale drawn from the event's seed.
+- Earthquake (declared): ground rumble 70 dB at 1 m/s^2 (about 0.1 g, MMI VI on the Wald et al. 1999 scale), 20 log10 of the acceleration, silent below 0.1 m/s^2 (the threshold of feeling).
+- Breaking things (declared levels at 10 m): a trunk snapping 92 dB for a 500 kg tree, +10 log10 of its mass; a building part 84 dB for 200 kg, +10 log10 of its mass; a whole timber building 100 dB; a tree landing and a body striking 78 dB for 10 kJ, +10 log10 of the energy (m g H/2 for a falling tree, 1/2 m dv^2 for a strike).
+- The warning siren is a motor siren (after the dual-tone outdoor sirens that pair a 10-port and a 12-port rotor, a 6:5 interval): fundamentals 480 and 576 Hz at full speed, a harmonic series from the ports chopping the air, run-up time constant 4 s, run-down 7 s when the power is cut, wailed by cycling the power 7 s on and 4 s off, and a horn turning once every 16 s, about 10 dB quieter off its axis (declared within the 400 to 600 Hz band of outdoor sirens). It sounds in soundings of 3 minutes, the length of the civil-defence signals (FEMA CPG 1-17, Outdoor Warning Systems Guide: the Attack signal is a 3 to 5 minute wavering tone; Hawaii sounds its tsunami sirens for 3 minutes), 2 minutes apart (declared). The first begins at Start; another begins only while a warning is still warranted, read from the event: the wave not yet launched, the crest not yet at the coast (`arrival` plus 30 s), or land still flooded (the solver's inundated area over 2,000 m^2). A tsunami lives until the land has drained, ten minutes or more, so the siren is never keyed to the event's length; after each sounding the rotor runs down and falls silent.
+- Camera shake (declared mappings, each with a ceiling that keeps the horizon readable): the ground acceleration at the camera tilts it 0.04 rad per g along the push (2.3° at 1 g: 0.25° to 0.4° at MMI VI, 0.8° to 1.5° at MMI VIII) and moves it with the ground displacement (a damped mount at 0.5 Hz on the field's own acceleration, so at 2 Hz a 0.7 g quake moves it 4 cm); wind buffets it above gale force (17.2 m/s, Beaufort 8) by 0.012 rad times (v^2 - 17.2^2) / 17.2^2; the flood shakes it continuously through whoever holds it (the table below): its momentum flux rho h u^2 over the height h of the holder it wets, through the same mount and tilt as the ground, the turbulent part of its drag on the legs, 0.5 C_d D (1.2, 0.3 m) times twice a turbulence intensity of 0.2 over 75 kg, a tenth of it through a braced stance (1e-4 m/s^2 per N/m, declared; the legs held fully by a 5 m/s flow, 21.5 kN/m, tilt it about half a degree). A kick only for an event: the front arriving within 15 m (0.02 rad at 51 kN/m, a 2 m surge at 5 m/s), a surge on the holder (the flux on them rising faster than 15 kN/m per s over 0.25 s, longer than the water readback's one or two frames of lag; 0.02 rad when it holds the legs fully at 5 m/s), and a heavy impact kicks it by 0.004 rad times sqrt(E / 10 kJ) times 10 m / r (the sqrt(energy) over distance scaling of ground vibration from dropped weights, Mayne et al. 1984), ignored beyond 80 m. The front's arrival and the impacts reach the camera through the ground or water it is held over, as the ground shake does: fully within 4 m of it, not at all beyond 10 m. The total is soft-clipped to 1.5° per axis and 12 cm.
+
+The water's hold. The flood touches the camera only through whoever or whatever holds it, never through the depth of the whole column under the lens (a camera on a deck over 8 m of harbour at 2 m/s read 32.8 kN/m, as much as a 2 m surge at 4 m/s, and a surface wavering across the lens's old 1.5 m reach stepped the flux between 0 and several kN/m, read as ten surges in 20 s). The flood is sampled where the holder is (`DisasterSound.holder`, `hold`):
+
+| The camera's owner | Wetted height h in rho h u^2 | Why |
+|---|---|---|
+| On foot (walking, or down and lying where they fell) | the water from the feet up, 0 to 0.84 m | the legs the flood takes hold of: an adult's crotch height (ANSUR II, 2012, men's mean 0.84 m); deeper water floats the person, who swims |
+| Swimming, or thrown from a jetski | 0.84 m at any depth | the whole body is in the flow and carried with it, so only its turbulence buffets it; held at the most of a person the flood can take hold of standing (declared) |
+| In a car | 0.61 times the water above the ground under its wheels, 0 to 1.4 m | its flank (4.4 m, C_d 1.0) over its 1,500 kg against a person's legs over 75 kg; the car's own motion in the flood already moves the camera (declared) |
+| Aboard a boat, its deck, the ferry or a jetski; on a pier above the water | none | the hull or the deck holds them out of it |
+| Flying, the glider, the chairlift, the free camera, no player | none | nothing of them is in the water |
+
+The hold rises from zero as the water climbs the holder, so the flux and its rate are the water's own. A change of holder (on foot into a boat, out of a car into the water) or a holder placed more than 10 m in one frame restarts the surge window, so neither reads as a surge.
+
+Real outcome. The roar of a tsunami rises as its breaking front nears and is loudest as the flood reaches and passes the listener, then the backwash drags back out. A tornado is a rumble kilometres away and a roar close in. Each tree, wall, window and heavy piece is heard where and when it breaks, late by its distance over 343 m/s. The siren winds up, wails and swells as its horn turns. The camera shakes with the ground in an earthquake, is buffeted in a tornado's wind, jolts when the flood strikes or a heavy piece lands close by, and holds still when nothing is near.
+
+Source of truth. Everything is read from the simulation, never written to it: `DisasterField.sample` (wind, flood surface and current, ground acceleration) and `events` (centre, `tornadoIntensity`, `envelope`), the trees' `mode` and `phase` and the structures' components' `failed` and `failedAt` and records' `broken` (`Bodies.js`, `Structures.js`), each body's own velocity from the rigid-body solver (`physics.disaster_motion()`, one call a frame while bodies are tracked; the synced pose differenced over the frame is not a velocity, because the solver moves in whole 1/120 s steps), the shared terrain height (`TerrainData.heightAt`), the run's seed (`Disasters.runSeed`), and the game's mixer (`SoundScape`): the disaster bus feeds the mixer's above-water chain, so the underwater muffling, the master volume, the global mute and the limiter hold for every disaster sound. The panel's audio row (`Mute disaster sound`, `Disaster sound volume`) sets the siren and the disaster bus together: the bus gain is the row over its default (`busGain`: 1 at the default, three quarters of the row) and the siren's level 0.06 times the row (0.045 at the default, as before), so every step moves both by the same factor. The holder of the camera is read from what the app exposes: `freeCam`, `aviation.active`, `glider.active`, `chairlift.active`, `rally.active` with `rally.model.root.position` (the car's base), and `player.mode` with `player.position` (the feet when walking, the floor under the body when down).
+
+Budget. CPU only, nothing on the GPU: at most 18 field samples a frame for the flood (two bearings of a ring of 24 bearings by 9 distances, 6 m to 1.6 km, a full sweep every 12 frames), one at the camera for the wind and the ground, one where the camera's holder stands when that is more than 0.5 m from the lens, a scan of the failed trees and the structures' components while an event runs, and one solver velocity per live body. The scan looks at no more than 1,024 trees and 3,072 building parts a frame, each from a cursor. At most 12 live one-shot voices (4 nodes each), 6 beds (3 nodes each) and the bus (5 nodes: the row's gain, two low-passes and the level of the underwater muffling, the bounding stage): 71 nodes at most. The bus is opened at an event's launch and released 3 s after the last disaster sound once no event runs and nothing is still to be heard, so with no event no node of it is left; the rest of the mix's gain is the above-water mix's own input gain, at 1 when no disaster sounds. The bounding stage's curve (4,097 points) is computed once as audio is unlocked. Measured numbers are in Perf below.
+
+Detail by distance. The flood is heard to 1.6 km (the ring's last distance: beyond it the air has taken everything above 250 Hz and the island's sea is open). Break events quieter than -62 LUFS at the listener are not played. Shake from impacts beyond 80 m and from the flood's front beyond 15 m is ignored; the ground shake fades out between 4 m and 10 m of camera height above the ground or water (a camera in a jet or on the glider is not held by someone standing on the ground).
+
+Controls. No new key. M still mutes all sound; the panel's audio row mutes and sets the disaster sound and the siren together. The system's reduced-motion setting turns the shake off (`prefers-reduced-motion: reduce`); no product setting is added.
+
+Transitions. The flood is listened to while the tsunami event runs and, after it, while its water is still on the island, until Restore: the beds follow the water at the listener through every surge and backwash and fall silent where it is calm. Beds fade in over 0.8 s and are ramped every update, so a level that jumps between two sweeps is heard as a swell; a bed below -66 LUFS fades out and is stopped and disconnected after 2 s, so nothing is left sounding after Stop or Restore. Pause fades every bed out with the frozen world. The arrival crash fires once as the breaking front comes within 30 m of the listener and not again until it has been beyond 60 m for 10 s, or a new tsunami starts (a new event object is a launch, Restore or not: its arrival latch is armed again; sounds already on their way still arrive). A launch's one-off work is spread over its first frames, inside the warning's lead: the bus is opened on the launch frame, then one recording the event can play is asked for a frame, the breaks' one-shots first (the warning lead covers the fetch and the decode); a one-shot whose recording is still missing is counted as dropped. The rest of the mix gives way over 0.25 s as the disaster grows loud and comes back over 1.5 s as it fades, pauses, is muted or the row is moved to 0. The running water keeps the lens wet with the drops already on it; new drops only when the front arrives or spray starts on a lens that had dried. The backwash is heard once as the flow at the listener turns back against the wave (below -1 m/s along the heading) and again only after water still there stops running back (above -0.5 m/s): a thin backwash whose depth wavers across 5 cm is one backwash (a dry place reads no flow, which re-armed it ten times in 20 s). Nothing is triggered by elapsed time. A one-shot plays when its sound reaches the listener, on the game clock, so slow motion stretches the delay with the picture. The shake is an offset added after every camera owner has set its pose and taken away after the frame is drawn, so no pose stores it. The siren starts from rest on every start, as a motor siren does.
+
+Edges. The thresholds read outside quantities only: the flood's current against the ground, the event's own wind (the ambient wind is subtracted), the ground acceleration, a body's change of velocity. A strike is a change of a body's own solver velocity by more than 2.5 m/s plus 50 m/s^2 times the frame's interval (the flood's drag on a car broadside, the strongest continuous load, declared; it keeps a 0.1 s catch-up frame of twelve solver steps from hearing a carried car as a strike). With no solver there is no strike. The allowance has a cost: in a 0.1 s frame a real stop under 7.5 m/s (2.5 plus 50 times 0.1) is not heard as a strike, for example a 400 kg body stopping from 6 m/s (7.2 kJ). The right signal is the solver's own contact impulses, which `rally-physics` does not expose for disaster bodies. A body's first frame and changes over 60 m/s in one frame (a placement, not a collision) are not impacts. A break's sound delay is fixed from where the listener stood when it was queued: a listener moving at 30 m/s hears a sound from 700 m about 0.18 s off (left as is). A break is noticed within four frames of the scan (67 ms at 60 Hz) when every tree and building on the island is changing at once; that lag is added to the sound's travel time, is under the 125 ms by which sound must lag the picture before it is noticed (ITU-R BT.1359), and beyond 23 m the travel time alone is longer. Non-finite samples are skipped. The parts scan starts a building's parts again from its first when its failed count changes while the cursor is inside it, so no part that failed behind the cursor is missed; the island's largest building has 48 parts (measured in the browser run), far under the 3,072 looked at in a frame, so this costs at most a 48-part rescan and cannot hold any building's later parts back. A building of more than 3,072 parts losing one every frame would need the cursor to keep its progress instead. What the velocity test misses: contacts spread over several frames (sliding, rolling, drag in water), a hit while the body sleeps, and the place of contact (the sound is at the body's centre).
+
+Evidence plan. `test/disaster-sound.mjs`: level against distance and against each driving quantity (monotonic, inside the stated bands, silent at zero), the speed-of-sound delay, the voice bound, the siren's motor and contract, the shake's amplitude against its inputs, zero with no event, within its ceiling, off for reduced motion, and the camera's pose restored exactly; the water's hold by owner, a wavering surface and a change of holder kicking nothing; the volume row at unity at its default with the siren in ratio; the bounding stage; the rest of the mix giving way; the bus opened at launch and released when idle. Browser: `test/browser/disasters.spec.js`, "A tsunami is heard coming: the roar at the listener rises as the front nears, mutes with the panel and stops after Restore". Frame cost from the same run (the module's own milliseconds and its live nodes).
+
+### Evidence
+
+### Perf
+
+CPU only; nothing added on the GPU. Measured in the browser run at 1440 x 900 on a machine at a load average near 100 (the solver at a fraction of real time), so the slow frames below are upper bounds, not the module's own cost.

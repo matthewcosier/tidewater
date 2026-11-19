@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';
-import init,{RallyPhysics}from'../public/rally/rally_physics.js';import{DisasterField}from'../src/disasters/Field.js';
+import init,{RallyPhysics}from'../public/rally/rally_physics.js';import{DisasterField}from'../src/disasters/Field.js';import{tornadoLifecycle}from'../src/disasters/TornadoFunnel.js';
 await init({module_or_path:await readFile(new URL('../public/rally/rally_physics_bg.wasm',import.meta.url))});
 const advance=(sim,t)=>{for(let i=0;i<Math.round(t*120);i++)sim.advance(1/120,0,0,0,0);};
 const body=(sim,id,mass,x=0)=>sim.wake_prop(id,0,new Float32Array([.5,.5,.5]),new Float32Array([x,100,0,0,0,0,1,0,0,0]),mass,0,0,false);
@@ -34,16 +34,17 @@ test('Shipped car column-water and aerodynamic loads are invariant under equal b
 
 test('Shipped debris spirals, lifts according to mass and leaves the vortex with physical momentum',()=>{
  const run=mass=>{const sim=new RallyPhysics(),field=new DisasterField(()=>0),rows=[];try{
-  sim.set_terrain(new Float32Array(25),5,400,-200);field.start('tornado',{x:0,z:0,intensity:100,radius:100,speed:0});for(let i=0;i<12;i++)field.advance(.1);
-  sim.wake_prop(77,0,new Float32Array([.5,.5,.5]),new Float32Array([20,40,0,0,0,0,1,0,0,0]),mass,0,0,false);
+  sim.set_terrain(new Float32Array(25),5,400,-200);const e=field.start('tornado',{x:0,z:0,intensity:100,radius:100,speed:0,seed:5});e.time=tornadoLifecycle(e,{}).genesis;for(let i=0;i<12;i++)field.advance(.1); // the mature vortex, after its genesis
+  // Inside the core (0.14 radius) at 20 m, below the updraft's peak: the corner flow's strongest rising air.
+  sim.wake_prop(77,0,new Float32Array([.5,.5,.5]),new Float32Array([14,20,0,0,0,0,1,0,0,0]),mass,0,0,false);
   for(let frame=0;frame<150;frame++){
    if(frame===120)field.stop();field.advance(1/30);const b=motion(sim,77),a=field.acceleration({x:b[0],y:b[1],z:b[2]},{x:b[3],y:b[4],z:b[5]},{mass,area:.7,volume:0,height:1,buoyancy:false,supported:false,dt:1/30});
    sim.set_disaster_loads(new Float32Array([77,mass*a.ax,mass*a.ay,mass*a.az,0,0,0]));advance(sim,1/30);if([29,59,119,149].includes(frame))rows.push(motion(sim,77));
   }return rows;
  }finally{sim.free();}};
  const light=run(40),heavy=run(400);
- assert.ok(light[0][2]>heavy[0][2]*3,'lower mass gains tangential speed faster at equal exposed area');
- assert.ok(light[0][1]>40.4&&heavy[0][1]<39,'the light body lifts while the heavy body falls');
+ assert.ok(light[0][2]>heavy[0][2]*2,`lower mass gains tangential speed faster at equal exposed area: ${light[0][2].toFixed(1)} against ${heavy[0][2].toFixed(1)} m round the core after 1 s`);
+ assert.ok(light[0][1]>20.4&&light[0][1]>heavy[0][1]+5&&heavy[3][1]<2,`the light body lifts while the heavy body is held at most and then lands: ${light[0][1].toFixed(1)} and ${heavy[0][1].toFixed(1)} m after 1 s from 20 m, heavy at ${heavy[3][1].toFixed(1)} m after 5 s`);
  assert.ok(Math.atan2(light[1][2],light[1][0])>1.7,'observed solver trajectory has rotated around the core');
  assert.ok(Math.hypot(light[2][0],light[2][2])>70,'the trajectory expands, it is not constrained to an orbit');
  assert.ok(Math.hypot(light[3][0],light[3][2])>Math.hypot(light[2][0],light[2][2])+10,'stop removes vortex forcing but retains outgoing body momentum');

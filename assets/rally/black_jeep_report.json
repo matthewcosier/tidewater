@@ -1,8 +1,8 @@
 {
   "generator": "tools/rally/build_black_jeep.py",
   "blender": "5.0.1",
-  "triangles": 90844,
-  "glb_bytes": 3379028,
+  "triangles": 98226,
+  "glb_bytes": 3657812,
   "wheel_radius_m": 0.47,
   "wheelbase_m": 2.76,
   "track_width_m": 2.04,

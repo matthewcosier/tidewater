@@ -60,8 +60,9 @@ export function plumeEnvironment(position,air,event,centre,base,options={},out={
  out.humidity=options.humidity??(PLUME.ambientHumidity+(1-PLUME.ambientHumidity)*moist);
  const alpha=PLUME.entrainmentLow+(PLUME.entrainmentHigh-PLUME.entrainmentLow)*smooth((h-.2)/.9);
  out.entrainmentSpeed=options.entrainmentSpeed??alpha*Math.hypot(air.wx,air.wy,air.wz);out.evaporationK=options.evaporationK??PLUME.evaporationK;
- // Shutdown is only the decreasing duration tail, never the rising start ramp.
- out.shutdown=smooth((event.duration-event.time)/2);return out;
+ // Shutdown is only the decreasing tail before the event is over (event.end: the vortex has decayed and what
+ // it lofted has landed, TornadoVortex.js), never the rising start ramp.
+ out.shutdown=smooth(((event.end??event.duration)-event.time)/2);return out;
 }
 // Two smooth, spatially shared curl modes. Nearby parcels see the same eddy,
 // regardless of their id/birth cohort. Amplitude is event-wide; each constant-

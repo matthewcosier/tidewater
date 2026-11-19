@@ -9,13 +9,12 @@ import { randomUUID } from 'node:crypto';
 const root = fileURLToPath( new URL( '../', import.meta.url ) );
 const assets = {
 	physics: 'rally/rally_physics_bg.wasm',
-	gt3: 'rally/cosier_gt3rs.glb',
 	carrier: 'aviation/carrier.glb',
 };
 const compress = promisify( brotliCompress ), decompress = promisify( brotliDecompress );
 const [ action, name ] = process.argv.slice( 2 );
 if ( ! [ 'pack', 'unpack' ].includes( action ) || ( name && ! Object.hasOwn( assets, name ) ) ) {
-	throw new Error( 'Usage: node tools/distribution-assets.mjs pack|unpack [physics|gt3|carrier]' );
+	throw new Error( 'Usage: node tools/distribution-assets.mjs pack|unpack [physics|carrier]' );
 }
 
 for ( const [ key, rel ] of Object.entries( assets ) ) {

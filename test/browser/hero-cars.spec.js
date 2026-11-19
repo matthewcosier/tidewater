@@ -6,15 +6,15 @@ import { test, expect } from '@playwright/test';
 // (whole turns x circumference within 10 % of the distance coasted with W up). Real island, real WASM physics,
 // nothing intercepted in the driving path. Add a row here with every new car in Vehicles.js.
 const CARS = [
-	{ key: 'gt3rs', name: 'COSIER GT3 RS', tag: 'Rear-engine flat-six', mass: 1450, radius: 0.359 },
 	{ key: 'gt', name: 'Petrel GT', tag: 'Rear-drive GT', mass: 1450, radius: 0.384 },
 	{ key: 'supercar', name: 'Fulmine V10', tag: 'Mid-engine supercar', mass: 1550, radius: 0.336 },
 	{ key: 'hypercar', name: 'Corsaire W16', tag: 'Mid-engine hypercar', mass: 1995, radius: 0.348 },
 	{ key: 'buggy', name: 'Sandpiper 1600', tag: 'Open-tub beach buggy', mass: 620, radius: 0.345 },
 ];
-const COAST_FROM = 35; // km/h: W is let go here. 45 km/h plus the coast ran past the 40 m straight onto sand
-const SPIN_DOWN = 250; // ms after W up before the start is read: launch wheelspin settles to road speed
-const COAST_MS = 600; // ms of free rolling measured, about 5.8 m at 35 km/h
+const COAST_FROM = 35;
+const SPIN_DOWN_M = 2.4; // m rolled after W up before the start is read (250 ms at 35 km/h): launch wheelspin settles to road speed
+const COAST_M = 6; // m of free rolling measured, about 600 ms at 35 km/h; one late read can add ~3 m, still inside the 40 m straight
+const WALL_CAP = 20_000; // ms: a car that stops short fails the distance checks instead of looping
 const SAMPLE_MS = 100; // ms between coast samples: each sample is one read of the telemetry element
 const telemetry = page => page.getByRole( 'status', { name: 'Rally telemetry' } );
 const value = async ( page, name ) => Number( await telemetry( page ).getAttribute( `data-${ name }` ) );
@@ -76,23 +76,19 @@ for ( const car of CARS ) {
 			await expect.poll( async () => {
 				await sample();
 				return value( page, 'signed-speed' );
-			// signed-speed is km/h. Read every 50 ms: at the default back-off (up to 1 s between reads) a
-			// loaded run drove 70 m, past the left bend at the end of the straight, and the GT left the
-			// road for the beach sand (rolled 53.1 m against 69.6 m driven, grounded 4,4,4,1:
-			// in a loaded run).
 			}, { timeout: 20_000, intervals: [ 50 ] } ).toBeGreaterThan( COAST_FROM );
 			await page.keyboard.up( 'w' );
-			await page.waitForTimeout( SPIN_DOWN );
-			const first = await frame( page );
+			const released = await frame( page );
+			let first = released;
+			for ( const t1 = Date.now(); Math.hypot( first.x - released.x, first.z - released.z ) < SPIN_DOWN_M && Date.now() - t1 < WALL_CAP; ) first = await frame( page );
 			start = first;
 			turns0 = first.turns;
-			// The roll check holds only on the road (on sand the wheels slip and dig), so every sample must
-			// be on asphalt before it counts: a 45 km/h window ended on the beach.
 			const t0 = Date.now();
-			while ( Date.now() - t0 < COAST_MS ) {
+			for ( let rolledSoFar = 0; rolledSoFar < COAST_M && Date.now() - t0 < WALL_CAP; ) {
 				await page.waitForTimeout( SAMPLE_MS );
 				const now = await frame( page );
-				expect( now.surface, `surface ${ Date.now() - t0 } ms into the coast` ).toBe( 'asphalt' );
+				rolledSoFar = Math.hypot( now.x - first.x, now.z - first.z );
+				expect( now.surface, `surface ${ rolledSoFar.toFixed( 1 ) } m (${ Date.now() - t0 } ms) into the coast` ).toBe( 'asphalt' );
 				grounded.push( now.grounded );
 				surfaces.push( now.surface );
 				end = now;

@@ -9,10 +9,14 @@ const terrain=(x,z)=>Math.sin(x*.013)*7+Math.cos(z*.021)*3-4;
 
 test('Optimized wet/dry interpolation and combined disaster samples exactly match the frozen original',()=>{
  const current=new DisasterField(terrain),reference=new ReferenceField(terrain);
+ // The tornado's wind is a different model by design (one Burgers-Rott vortex with a vertical structure and a
+ // life cycle, TornadoVortex.js; test/tornado-field.mjs holds it), so it is not compared with the frozen
+ // Rankine field here. Its straight track (motion scale 0) still is, below.
+ const track=[new DisasterField(terrain),new ReferenceField(terrain)].map(f=>f.start('tornado',{x:10,z:18}));
+ track[0].seed=0;track[0].motion=tornadoMotionParams(0,0);
+ for(const age of [0,.1,1,3,15,24.9,61]){for(const e of track)e.time=age;assert.deepEqual(new DisasterField(terrain).center(track[0]),new ReferenceField(terrain).center(track[1]),`straight track at ${age} s`);}
  for(const field of [current,reference]){
-  field.start('earthquake',{x:4,z:12});field.start('tornado',{x:10,z:18});
-  // The frozen original has a straight track and steady wind: compare with a steady motion (scale 0).
-  if(field===current){const e=field.events.get('tornado');e.seed=0;e.motion=tornadoMotionParams(0,0);}
+  field.start('earthquake',{x:4,z:12});
   field.water=new (field===current?WaterGrid:ReferenceWater)(terrain,{n:33,dx:8});
   for(let i=0;i<field.water.h.length;i++)if(field.water.h[i]>0){field.water.h[i]+=.7*Math.sin(i*.7);field.water.qx[i]=Math.sin(i);field.water.qz[i]=Math.cos(i);}
   field.water.pack();field.ambient=()=>({x:2,z:-1});field.registerAirModifier((x,y,z,a)=>{a.wx+=Math.sin(x);a.wy+=y*.001;a.wz*=.7;},{minX:-20,maxX:30,minZ:-10,maxZ:50});
