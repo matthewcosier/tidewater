@@ -13,28 +13,28 @@ const AO_DIRS = 8;
 export function bakeTerrainMaps( terrain ) {
 
 	const t0 = performance.now();
-	const { res, heights: H, rock, texel, origin } = terrain;
+	const { resX, resZ, heights: H, rock, texel, originX, originZ } = terrain;
 
 	// ---- horizon AO on a coarse grid
 	const F = 4; // texels per AO cell
-	const N = res / F;
+	const NX = resX / F, NZ = resZ / F; // AO cells per axis (row stride NX)
 	const cell = texel * F;
-	const hc = new Float32Array( N * N );
-	for ( let j = 0; j < N; j ++ ) for ( let i = 0; i < N; i ++ ) {
+	const hc = new Float32Array( NX * NZ );
+	for ( let j = 0; j < NZ; j ++ ) for ( let i = 0; i < NX; i ++ ) {
 
 		let s = 0;
 		for ( let b = 0; b < F; b ++ ) {
 
-			const row = ( j * F + b ) * res + i * F;
+			const row = ( j * F + b ) * resX + i * F;
 			for ( let a = 0; a < F; a ++ ) s += H[ row + a ];
 
 		}
 
-		hc[ j * N + i ] = s / ( F * F );
+		hc[ j * NX + i ] = s / ( F * F );
 
 	}
 
-	const ao = new Float32Array( N * N ).fill( 1 );
+	const ao = new Float32Array( NX * NZ ).fill( 1 );
 	const dirs = [];
 	for ( let d = 0; d < AO_DIRS; d ++ ) {
 
@@ -43,9 +43,9 @@ export function bakeTerrainMaps( terrain ) {
 
 	}
 
-	for ( let j = 1; j < N - 1; j ++ ) for ( let i = 1; i < N - 1; i ++ ) {
+	for ( let j = 1; j < NZ - 1; j ++ ) for ( let i = 1; i < NX - 1; i ++ ) {
 
-		const h0 = hc[ j * N + i ];
+		const h0 = hc[ j * NX + i ];
 		if ( h0 < - 25 ) continue;
 		let vis = 0;
 		for ( let d = 0; d < AO_DIRS; d ++ ) {
@@ -56,8 +56,8 @@ export function bakeTerrainMaps( terrain ) {
 
 				const dist = AO_STEPS[ s ];
 				const x = Math.round( i + dx * dist / cell ), z = Math.round( j + dz * dist / cell );
-				if ( x < 0 || z < 0 || x >= N || z >= N ) break;
-				const t = ( hc[ z * N + x ] - h0 - 0.3 ) / dist;
+				if ( x < 0 || z < 0 || x >= NX || z >= NZ ) break;
+				const t = ( hc[ z * NX + x ] - h0 - 0.3 ) / dist;
 				if ( t > maxT ) maxT = t;
 
 			}
@@ -66,47 +66,47 @@ export function bakeTerrainMaps( terrain ) {
 
 		}
 
-		ao[ j * N + i ] = vis / AO_DIRS;
+		ao[ j * NX + i ] = vis / AO_DIRS;
 
 	}
 
 	const t1 = performance.now();
 
 	// ---- per texel maps
-	const normal = new Uint8Array( res * res * 4 );
-	const splat = new Uint8Array( res * res * 4 );
+	const normal = new Uint8Array( resX * resZ * 4 );
+	const splat = new Uint8Array( resX * resZ * 4 );
 	const sand = terrain.sand, path = terrain.path, gully = terrain.gully;
 	const seagrass = terrain.seagrass, rubble = terrain.rubble, scarp = terrain.scarp;
 	const inv2t = 1 / ( 2 * texel );
-	for ( let j = 0; j < res; j ++ ) {
+	for ( let j = 0; j < resZ; j ++ ) {
 
-		const jm = j > 0 ? j - 1 : 0, jp = j < res - 1 ? j + 1 : res - 1;
-		const j2m = j > 1 ? j - 2 : 0, j2p = j < res - 2 ? j + 2 : res - 1;
+		const jm = j > 0 ? j - 1 : 0, jp = j < resZ - 1 ? j + 1 : resZ - 1;
+		const j2m = j > 1 ? j - 2 : 0, j2p = j < resZ - 2 ? j + 2 : resZ - 1;
 		// AO grid coordinate (cell centres at (i + 0.5) * F texels)
 		let fz = ( j + 0.5 ) / F - 0.5;
-		fz = fz < 0 ? 0 : fz > N - 1.001 ? N - 1.001 : fz;
+		fz = fz < 0 ? 0 : fz > NZ - 1.001 ? NZ - 1.001 : fz;
 		const az = fz | 0, tz = fz - az;
-		for ( let i = 0; i < res; i ++ ) {
+		for ( let i = 0; i < resX; i ++ ) {
 
-			const k = j * res + i;
-			const im = i > 0 ? i - 1 : 0, ip = i < res - 1 ? i + 1 : res - 1;
-			const hx = ( H[ j * res + ip ] - H[ j * res + im ] ) * inv2t;
-			const hz = ( H[ jp * res + i ] - H[ jm * res + i ] ) * inv2t;
+			const k = j * resX + i;
+			const im = i > 0 ? i - 1 : 0, ip = i < resX - 1 ? i + 1 : resX - 1;
+			const hx = ( H[ j * resX + ip ] - H[ j * resX + im ] ) * inv2t;
+			const hz = ( H[ jp * resX + i ] - H[ jm * resX + i ] ) * inv2t;
 			const il = 1 / Math.sqrt( hx * hx + 1 + hz * hz );
 			const nx = - hx * il, nz = - hz * il;
 
 			// cavity from the Laplacian over a 2 m baseline (negative = convex)
-			const i2m = i > 1 ? i - 2 : 0, i2p = i < res - 2 ? i + 2 : res - 1;
+			const i2m = i > 1 ? i - 2 : 0, i2p = i < resX - 2 ? i + 2 : resX - 1;
 			const h = H[ k ];
-			const lap = ( H[ j * res + i2m ] + H[ j * res + i2p ] + H[ j2m * res + i ] + H[ j2p * res + i ] - 4 * h ) * 0.25;
+			const lap = ( H[ j * resX + i2m ] + H[ j * resX + i2p ] + H[ j2m * resX + i ] + H[ j2p * resX + i ] - 4 * h ) * 0.25;
 			let cav = 0.5 + lap * 0.9;
 			cav = cav < 0 ? 0 : cav > 1 ? 1 : cav;
 
 			let fx = ( i + 0.5 ) / F - 0.5;
-			fx = fx < 0 ? 0 : fx > N - 1.001 ? N - 1.001 : fx;
+			fx = fx < 0 ? 0 : fx > NX - 1.001 ? NX - 1.001 : fx;
 			const ax = fx | 0, tx = fx - ax;
-			const q = az * N + ax;
-			const aoL = ( ao[ q ] * ( 1 - tx ) + ao[ q + 1 ] * tx ) * ( 1 - tz ) + ( ao[ q + N ] * ( 1 - tx ) + ao[ q + N + 1 ] * tx ) * tz;
+			const q = az * NX + ax;
+			const aoL = ( ao[ q ] * ( 1 - tx ) + ao[ q + 1 ] * tx ) * ( 1 - tz ) + ( ao[ q + NX ] * ( 1 - tx ) + ao[ q + NX + 1 ] * tx ) * tz;
 			let aoT = aoL * ( 1 - Math.max( 0, cav - 0.5 ) * 0.7 );
 			aoT = aoT < 0 ? 0 : aoT;
 
@@ -131,17 +131,17 @@ export function bakeTerrainMaps( terrain ) {
 		for ( const p of terrain.pads ) {
 
 			const R = p.radius + 3.5;
-			const i0 = Math.max( 0, Math.floor( ( p.x - R - origin ) / texel ) ), i1 = Math.min( res - 1, Math.ceil( ( p.x + R - origin ) / texel ) );
-			const j0 = Math.max( 0, Math.floor( ( p.z - R - origin ) / texel ) ), j1 = Math.min( res - 1, Math.ceil( ( p.z + R - origin ) / texel ) );
+			const i0 = Math.max( 0, Math.floor( ( p.x - R - originX ) / texel ) ), i1 = Math.min( resX - 1, Math.ceil( ( p.x + R - originX ) / texel ) );
+			const j0 = Math.max( 0, Math.floor( ( p.z - R - originZ ) / texel ) ), j1 = Math.min( resZ - 1, Math.ceil( ( p.z + R - originZ ) / texel ) );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const x = origin + ( i + 0.5 ) * texel, z = origin + ( j + 0.5 ) * texel;
+				const x = originX + ( i + 0.5 ) * texel, z = originZ + ( j + 0.5 ) * texel;
 				const d = Math.hypot( x - p.x, z - p.z );
 				const a = Math.atan2( z - p.z, x - p.x );
 				// ragged edge: worn patches reach out unevenly around each building
 				const reach = 1.2 + 1.8 * ( 0.5 + 0.5 * Math.sin( a * 3 + p.x ) * Math.sin( a * 5 - p.z ) );
 				const t = d < p.radius ? 1 : Math.max( 0, 1 - ( d - p.radius ) / reach );
-				const o = ( j * res + i ) * 4 + 1;
+				const o = ( j * resX + i ) * 4 + 1;
 				const v = Math.round( t * t * 150 );
 				if ( v > splat[ o ] ) splat[ o ] = v;
 
@@ -160,23 +160,23 @@ export function bakeTerrainMaps( terrain ) {
 // Returns half-float mip levels for a DataTexture.
 export function buildShadowHeights( terrain, factor = 4 ) {
 
-	const { res, heights: H } = terrain;
-	const n = res / factor;
-	let cur = new Float32Array( n * n );
+	const { resX, resZ, heights: H } = terrain;
+	const nx = resX / factor, nz = resZ / factor;
+	let cur = new Float32Array( nx * nz );
 	let maxHeight = - Infinity;
 	const inv = 1 / ( factor * factor );
-	for ( let j = 0; j < n; j ++ ) for ( let i = 0; i < n; i ++ ) {
+	for ( let j = 0; j < nz; j ++ ) for ( let i = 0; i < nx; i ++ ) {
 
 		let s = 0;
 		for ( let b = 0; b < factor; b ++ ) {
 
-			const row = ( j * factor + b ) * res + i * factor;
+			const row = ( j * factor + b ) * resX + i * factor;
 			for ( let a = 0; a < factor; a ++ ) s += H[ row + a ];
 
 		}
 
 		const v = s * inv;
-		cur[ j * n + i ] = v;
+		cur[ j * nx + i ] = v;
 		if ( v > maxHeight ) maxHeight = v;
 
 	}
@@ -189,22 +189,38 @@ export function buildShadowHeights( terrain, factor = 4 ) {
 
 	};
 
-	const levels = [ { data: toHalf( cur ), width: n, height: n } ];
-	let w = n;
-	while ( w > 1 ) {
+	// The domain is a rectangle, so each axis halves on its own the way GPU mips do (round down,
+	// never below 1): 512 x 832 -> 256 x 416 ... 8 x 13 -> 4 x 6 -> 2 x 3 -> 1 x 1. When an axis count
+	// is odd its last parent also takes the dropped child, so a ridge is never lost from the max.
+	const levels = [ { data: toHalf( cur ), width: nx, height: nz } ];
+	let w = nx, h = nz;
+	while ( w > 1 || h > 1 ) {
 
-		const m = w >> 1;
-		const next = new Float32Array( m * m );
-		for ( let j = 0; j < m; j ++ ) for ( let i = 0; i < m; i ++ ) {
+		const mw = Math.max( 1, w >> 1 ), mh = Math.max( 1, h >> 1 );
+		const next = new Float32Array( mw * mh );
+		for ( let j = 0; j < mh; j ++ ) {
 
-			const a = 2 * j * w + 2 * i;
-			next[ j * m + i ] = Math.max( cur[ a ], cur[ a + 1 ], cur[ a + w ], cur[ a + w + 1 ] );
+			const jEnd = j === mh - 1 ? h - 1 : 2 * j + 1;
+			for ( let i = 0; i < mw; i ++ ) {
+
+				const iEnd = i === mw - 1 ? w - 1 : 2 * i + 1;
+				let top = - Infinity;
+				for ( let b = 2 * j; b <= jEnd; b ++ ) for ( let a = 2 * i; a <= iEnd; a ++ ) {
+
+					if ( cur[ b * w + a ] > top ) top = cur[ b * w + a ];
+
+				}
+
+				next[ j * mw + i ] = top;
+
+			}
 
 		}
 
-		levels.push( { data: toHalf( next ), width: m, height: m } );
+		levels.push( { data: toHalf( next ), width: mw, height: mh } );
 		cur = next;
-		w = m;
+		w = mw;
+		h = mh;
 
 	}
 

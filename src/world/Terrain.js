@@ -34,12 +34,12 @@ export class Terrain {
 
 		this.data = terrainData;
 		this.gpu = terrainGPU;
-		const half = terrainData.size / 2;
 
 		this.lod = new CDLOD( {
 			gridSize, leafSize: 8, levels: 9,
 			heightBounds: ( x0, z0, x1, z1 ) => terrainData.boundsFor( x0, z0, x1, z1 ),
-			center: { x: - half, z: - half, size: terrainData.size },
+			// roots tile the WORLD.terrain rectangle from its north-west corner
+			center: { x: terrainData.originX, z: terrainData.originZ, sizeX: terrainData.sizeX, sizeZ: terrainData.sizeZ },
 			rangeFactor,
 			prefix: 'terrainLod',
 		} );
@@ -130,8 +130,9 @@ export class Terrain {
 
 const S = srgb;
 
-// module part: meadow weight shared between the surface and the key-light modulation, the gust
-// field and the wetness fallback
+const SEABED_DEBUG = typeof location !== 'undefined' && /[?&]seabedDebug\b/.test( location.search );
+export const SEABED_WET_ALBEDO = '0.1'; // linear luminance of wet sand / mud (dry sand 0.3-0.4)
+export const SEABED_FLAT = '0.67'; // share of the ground's slope the water film evens out (0 dry, 1 a level film)
 const TERRAIN_MATERIAL_WGSL = /* wgsl */`
 // meadow weight of the current fragment (written by the surface, read by the sun modulation)
 var<private> terMeadowW: f32 = 0.0;
@@ -639,12 +640,56 @@ const TERRAIN_SURFACE = /* wgsl */`
 
 	}
 
+	var seabedFlat = 0.0;
+#if HAS_WETNESS
+	let bare = terrainSeabedWet( xz, h );
+	// Ground a flood has covered stays wet behind it and dries over minutes (FloodLook.FloodHistory's wet value through
+	// Water.js disasterHistory; 0 with no history, and it outlives the solver's grids). It was dry the instant the water
+	// left. Above the bared-seabed band, which keeps its own rule; drawn as that band is (dark, glossy, puddles in the
+	// hollows), tinted toward the silt a tsunami leaves, and keeping most of the ground's own relief.
+	// (The wet value blends between the solver's 8 m grid points: drawn as it is the wet ground ended on a smooth lobe,
+	// the outline of spilt paint, and inside it was one flat dark tone. The ground's small relief, the one the film's
+	// edge follows (FloodLook floodRelief, soakedGround), decides where it is still wet, where a film or a pool stands
+	// and where the silt lies thick. Read only where there is a history.)
+	let wetHist = disasterHistory( xz ).y;
+	var relief = 0.5;
+	if ( wetHist > 0.0 ) { relief = floodRelief( xz ); }
+	let soaked = floodSoaked( wetHist, relief ) * smoothstep( -0.3, 0.1, h );
+	let wetGround = max( bare, soaked );
+	if ( wetGround > 0.0 ) {
+		let hE = terrainHeightAt( xz + vec2f( 4.0, 0.0 ) );
+		let hW = terrainHeightAt( xz - vec2f( 4.0, 0.0 ) );
+		let hN = terrainHeightAt( xz + vec2f( 0.0, 4.0 ) );
+		let hS = terrainHeightAt( xz - vec2f( 0.0, 4.0 ) );
+		let around = ( hE + hW + hN + hS ) * 0.25;
+		let sheet = smoothstep( 0.002, 0.03, disasterSample( xz ).w );
+		// (pools the flood left in the small hollows of flat ground, while the ground is fresh: FloodLook POOL)
+		let pool = soaked * smoothstep( FLOOD_POOL.x, FLOOD_POOL.y, relief ) * smoothstep( FLOOD_POOL_FRESH.x, FLOOD_POOL_FRESH.y, wetHist )
+			* ( 1.0 - smoothstep( FLOOD_POOL_GRADE.x, FLOOD_POOL_GRADE.y, length( vec2f( hE - hW, hN - hS ) ) * 0.125 ) );
+		let puddle = max( max( smoothstep( 0.03, 0.14, around - h + ( dM.w - 0.5 ) * 0.08 ), sheet ) * wetGround, pool );
+		let wetA = terrainSaturation( albedoOut * mat.wetDarken, 1.15 ) * vec3f( 0.97, 0.98, 1.0 );
+		let wetL = dot( wetA, vec3f( 0.2126, 0.7152, 0.0722 ) );
+		albedoOut = mix( albedoOut, wetA * min( 1.0, ${ SEABED_WET_ALBEDO } / max( wetL, 1e-3 ) ), wetGround );
+		// (the silt: thin on the rises, thick in the hollows and in drifts, FloodLook SILT_PATCH; it was one even tint)
+		let siltPatch = mix( FLOOD_SILT_PATCH.x, FLOOD_SILT_PATCH.y, smoothstep( 0.25, 0.75, 0.5 * ( 1.0 - relief ) + 0.5 * floodNoise( xz * FLOOD_SILT_GRAIN + vec2f( 13.0, 5.0 ) ) ) );
+		albedoOut = mix( albedoOut, FLOOD_SILT, sat( soaked * FLOOD_SILT_COVER * siltPatch ) );
+		albedoOut *= 1.0 - puddle * 0.5;
+		// (a film in the hollows, damp matte ground on the rises, FloodLook SHEEN; the bared seabed keeps its film)
+		outRough = mix( outRough, mix( FLOOD_SHEEN.x, FLOOD_SHEEN.y, max( bare, smoothstep( FLOOD_SHEEN_LOW.x, FLOOD_SHEEN_LOW.y, relief ) ) ), wetGround );
+		outRough = mix( outRough, 0.03, puddle );
+		hdOut *= 1.0 - max( puddle, max( bare * 0.7, soaked * 0.3 ) );
+		seabedFlat = max( max( bare * ${ SEABED_FLAT }, soaked * 0.15 ), puddle );
+	}
+${ SEABED_DEBUG ? `	{ let dd = disasterSample( xz ); albedoOut = vec3f( bare, smoothstep( 0.002, 0.3, dd.w ), select( 0.0, 0.5, h > 0.1 ) + select( 0.0, 0.5, seabedPath ) ); outRough = 0.95; hdOut = 0.0; }` : '' }
+#endif
+
 	// fine derivatives: per pixel, not per 2x2 quad (the forest's metre-scale relief shaded in
 	// quad blocks, a dotted dark rim along its edge). The canopy term takes the derivative of the
 	// crowns only, weighted by the mask, so the mask's edge adds no step.
 	let dCx = dpdxFine( hdOut ) + dpdxFine( canopyRelOut ) * canopyWOut;
 	let dCy = dpdyFine( hdOut ) + dpdyFine( canopyRelOut ) * canopyWOut;
 	outN = terrainPerturbNormalD( p, N0, dCx, dCy );
+	outN = normalize( mix( outN, vec3f( 0.0, 1.0, 0.0 ), seabedFlat ) );
 
 	s.albedo = albedoOut;
 	s.roughness = outRough;

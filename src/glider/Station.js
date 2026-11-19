@@ -73,6 +73,13 @@ export function buildStation(app){
  // Benches, equipment locker and a small wind mast give useful scale cues.
  for(const side of [-1,1]){const p=launchPoint(side*5.9,-4,.5);box('wood',p,[.7,.12,2.5],wood,LAUNCH.yaw);for(const along of [-5,-3])box('hard',launchPoint(side*5.9,along,.21),[.1,.42,.1],metal,LAUNCH.yaw);}
  box('hard',launchPoint(5.6,-7,.65),[1.6,1.3,.7],[.11,.23,.26],LAUNCH.yaw);
+ box('hard',launchPoint(5.6,-7,.04),[1.68,.08,.78],dark,LAUNCH.yaw);
+ box('hard',launchPoint(5.6,-7,1.33),[1.72,.06,.82],metal,LAUNCH.yaw);
+ for(const side of [-1,1]){
+  box('hard',launchPoint(5.6+side*.4,-7.36,.68),[.74,1.08,.02],[.17,.34,.37],LAUNCH.yaw);
+  box('hard',launchPoint(5.6+side*.07,-7.38,.72),[.03,.24,.03],metal,LAUNCH.yaw);
+ }
+ box('hard',launchPoint(5.6,-7.38,1.17),[1.5,.07,.02],orange,LAUNCH.yaw);
  const mast=launchPoint(-5.7,-5);beam(mast,addY(mast,5),.065,metal);
  const socket=launchPoint(-5.7,-5,4.8);windsock=new Group();windsock.name='Wind direction streamer';windsock.position.fromArray(socket);// The animated fabric is local to its pivot; exclude it from world-space structural load bounds.
  tagSpans(null,()=>{const S=new Builder();for(let i=0;i<8;i++)S.cyl('hard',0,0,-i*.16,.20-i*.016,.20-(i+1)*.016,.16,{rx:Math.PI/2,segs:12,tint:i%2?orange:[.95,.89,.75]});for(const[k,batch]of Object.entries(S.batches))windsock.add(new Mesh(batch.build(),app.village.materials[k]));group.add(windsock);});

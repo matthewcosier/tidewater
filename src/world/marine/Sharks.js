@@ -7,7 +7,7 @@ import { SharkBrain } from './SharkBrain.js';
 import { JAW } from './SharkBite.js';
 import { CARRIER } from '../../aviation/Constants.js';
 
-// obstacles() scratch: the ferry's five hull stations (m along its keel), its local and world points, the carrier's local point
+// obstacles() scratch: a ferry's five hull stations (m along her keel, her hull 50.4 m), her local and world points, the carrier's local point
 const FERRY_STATIONS = [ - 19, - 10, 0, 10, 19 ];
 const _shipLocal = new Vector3(), _shipWorld = new Vector3(), _carrierLocal = [ 0, 0, 0 ];
 
@@ -127,9 +127,6 @@ export class Sharks {
 		return this.loading;
 	}
 
-	// Everything a shark steers round this frame. The list and its records are reused every frame (SharkBrain only
-	// reads them inside update): a fresh list, an object per obstacle and a Vector3 per ferry station left 3.9-9.1 KB
-	// of heap a frame (test/frame-garbage.mjs). The carrier's world() / velocityAt() still allocate their own arrays.
 	obstacles() {
 		const list = this._obstacles ??= [], pool = this._obstaclePool ??= [];
 		let n = 0;
@@ -147,11 +144,15 @@ export class Sharks {
 			add( app.boatCtl, 2.8, - 1.1 );
 			add( app.jetskis?.riding ? app.jetskis.ctl : null, 1.8, - 0.7 );
 			// A short chain follows a long vessel's actual footprint instead of a huge circle.
-			const ship = app.ferry?.ship;
-			if ( ship ) for ( const z of FERRY_STATIONS ) {
-				const p = ship.toWorld( _shipLocal.set( 0, 0, z ), _shipWorld );
-				put( p.x, p.z, 10, - 3, 2, ship.velocity?.x || 0, ship.velocity?.z || 0 );
-			}
+			// Every hull on the service (App.fleet): the second ferry is avoided like the first.
+			const hull = ( ship ) => {
+				for ( const z of FERRY_STATIONS ) {
+					const p = ship.toWorld( _shipLocal.set( 0, 0, z ), _shipWorld );
+					put( p.x, p.z, 10, - 3, 2, ship.velocity?.x || 0, ship.velocity?.z || 0 );
+				}
+			};
+			const ships = app.fleet?.ships;
+			if ( ships ) for ( const ship of ships ) hull( ship ); else if ( app.ferry?.ship ) hull( app.ferry.ship );
 			const carrier = app.aviation?.carrier || app.carrier;
 			if ( carrier?.world && carrier?.velocityAt ) {
 				// CarrierPhysics uses numeric arrays and a full rigid-body pose. Protect the

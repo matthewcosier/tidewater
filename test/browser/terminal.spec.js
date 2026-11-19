@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { carInHerFrame, pilot, ONTO_HER_DECK, OFF_HER_STERN } from './support/deck-pilot.js';
 
 // Given/When/Then on the real island with the Tidewater Spirit moored at the ferry terminal's
 // berth. Only the free camera is posed from the test (the F-key camera a player flies by hand);
@@ -165,64 +166,13 @@ async function takeHerHelm( page ) {
 
 }
 
-// The car in her frame (x to port, z to her bow, y up from her waterline), its speed and heading.
-const carInHerFrame = page => page.evaluate( () => {
+const driveDownTheLanes = ( page, { until, kmh = 12, budget = 60, recover = true } ) =>
+	pilot( page, { path: ONTO_HER_DECK, until, kmh, budget, recover, label: 'down the lanes' } );
 
-	const app = window.__app, s = app.rally.state, ship = app.ferry.ship, V = app.camera.position.constructor;
-	const at = new V( s[ 0 ], s[ 1 ], s[ 2 ] ), p = ship.toLocal( at, new V() );
-	const nose = ship.toLocal( at.clone().add( new V( 0, 0, 1 ).applyQuaternion( new ship.quaternion.constructor( s[ 3 ], s[ 4 ], s[ 5 ], s[ 6 ] ) ) ), new V() ).sub( p );
-	return { x: p.x, y: p.y, z: p.z, kmh: Math.abs( s[ 7 ] ), heading: Math.atan2( nose.x, nose.z ) };
-
-} );
-
-// The player's hands: W held (or not), A/D tapped to hold her centreline, until `done`.
-async function driveDownTheLanes( page, { until, throttle = true, timeout = 40_000 } ) {
-
-	const started = Date.now();
-	let steer = null, car = await carInHerFrame( page );
-	if ( throttle ) await page.keyboard.down( 'w' );
-	const track = [];
-	while ( ! until( car ) && Date.now() - started < timeout ) {
-
-		const err = Math.atan2( - car.x, 18 ) - car.heading;
-		const want = err > 0.03 ? 'a' : err < - 0.03 ? 'd' : null;
-		if ( want !== steer ) { if ( steer ) await page.keyboard.up( steer ); if ( want ) await page.keyboard.down( want ); steer = want; }
-		await page.waitForTimeout( 50 );
-		car = await carInHerFrame( page );
-		track.push( car );
-
-	}
-	if ( steer ) await page.keyboard.up( steer );
-	if ( throttle ) await page.keyboard.up( 'w' );
-	return { car, track };
-
-}
-
-// The player's hands going astern, the careful way: S feathered to keep her under about 10 km/h,
-// A/D tapped so the car backs straight down her centreline. Going astern the car swings the other
-// way for the same key, so the nose is steered toward the small heading whose reverse closes on x = 0.
-async function backOff( page, { until, timeout = 60_000 } ) {
-
-	const started = Date.now();
-	let steer = null, reverse = false, car = await carInHerFrame( page );
-	const track = [];
-	while ( ! until( car ) && Date.now() - started < timeout ) {
-
-		const want = car.kmh > 10 ? false : true;
-		if ( want !== reverse ) { if ( want ) await page.keyboard.down( 's' ); else await page.keyboard.up( 's' ); reverse = want; }
-		const err = Math.max( - 0.45, Math.min( 0.45, Math.atan2( car.x, 6 ) ) ) - car.heading;
-		const turn = err > 0.02 ? 'd' : err < - 0.02 ? 'a' : null;
-		if ( turn !== steer ) { if ( steer ) await page.keyboard.up( steer ); if ( turn ) await page.keyboard.down( turn ); steer = turn; }
-		await page.waitForTimeout( 50 );
-		car = await carInHerFrame( page );
-		track.push( car );
-
-	}
-	if ( steer ) await page.keyboard.up( steer );
-	if ( reverse ) await page.keyboard.up( 's' );
-	return { car, track };
-
-}
+// The player's hands going astern, the careful way: S feathered to about 10 km/h, A/D pulsed so the
+// car backs straight down her centreline, off her stern and up the linkspan.
+const backOff = ( page, { until, budget = 90 } ) =>
+	pilot( page, { path: OFF_HER_STERN, until, astern: true, kmh: 10, budget, label: 'astern' } );
 
 // Off the start screen and away from the car the dock is hidden on foot: the player summons
 // it with the "get me a car" key (Backquote), as a player on her deck would.
@@ -288,10 +238,10 @@ test( 'Driving aboard: with her ramp lowered from the helm, the player drives fr
 		await startAtTheTerminal( page );
 
 	} );
-	await test.step( 'When the player holds W down the lanes to the linkspan, coasts down it and over her ramp, and brakes aboard', async () => {
+	await test.step( 'When the player drives down the lanes, then at a walking pace over the linkspan and her ramp, and brakes aboard', async () => {
 
 		await driveDownTheLanes( page, { until: car => car.z > - 58 } );
-		await driveDownTheLanes( page, { until: car => car.z > - 22, throttle: false } );
+		await driveDownTheLanes( page, { until: car => car.z > - 22, kmh: 8 } );
 		await page.keyboard.down( 's' );
 		await expect.poll( async () => ( await carInHerFrame( page ) ).kmh, { timeout: 15_000, intervals: [ 100 ] } ).toBeLessThan( 1 );
 		await page.keyboard.up( 's' );
@@ -348,7 +298,7 @@ test( 'With her ramp up, a car driven down the linkspan stops at the linkspan ba
 	let run;
 	await test.step( 'When the player holds W down the lanes and on down the linkspan toward her stern', async () => {
 
-		run = await driveDownTheLanes( page, { until: car => car.z > - 24 || ( car.z > - 40 && car.kmh < 2 ), timeout: 30_000 } );
+		run = await driveDownTheLanes( page, { until: car => car.z > - 24 || ( car.z > - 40 && car.kmh < 2 ), budget: 30, recover: false } );
 		await page.waitForTimeout( 3_000 );
 		run.track.push( await carInHerFrame( page ) );
 
@@ -505,8 +455,36 @@ test( 'Driving off: with her ramp down, a car parked on her deck backs off her s
 		await page.keyboard.press( 'e' );
 		await expect( helm( page ) ).toBeHidden();
 		await startAtTheTerminal( page );
+		await page.evaluate( () => {
+
+			const physics = window.__app.rally.physics, take = physics.take_impacts.bind( physics );
+			window.__impactLog = [];
+			physics.take_impacts = () => { const h = take(); if ( h.length ) window.__impactLog.push( [ Math.round( performance.now() ), ...Array.from( h, v => Math.round( v * 100 ) / 100 ) ] ); return h; };
+			const kin = window.__kinLog = { sim: 0, game: 0, last: new Map(), top: [], frame: [ 0, 0 ], slow: 0 };
+			const advance = physics.advance.bind( physics );
+			physics.advance = ( dt, ...rest ) => { const n = advance( dt, ...rest ); kin.sim += n / 120; kin.game += dt; kin.frame = [ Math.round( dt * 1000 ), n ]; if ( dt > 0.1 ) kin.slow ++; return n; };
+			const note = ( key, s, given ) => {
+
+				const l = kin.last.get( key );
+				if ( l && kin.sim > l.sim && kin.sim - l.sim <= 0.25 ) {
+
+					const d = Math.hypot( s[ 0 ] - l.x, s[ 1 ] - l.y, s[ 2 ] - l.z ), dot = Math.min( 1, Math.abs( s[ 3 ] * l.q[ 0 ] + s[ 4 ] * l.q[ 1 ] + s[ 5 ] * l.q[ 2 ] + s[ 6 ] * l.q[ 3 ] ) );
+					const v = d / ( kin.sim - l.sim ), g = d / Math.max( 1e-6, kin.game - l.game ), w = 2 * Math.acos( dot ) / ( kin.sim - l.sim );
+					if ( Math.abs( v - given ) > 2 || w > 0.2 ) kin.top.push( [ Math.round( performance.now() ), key, + v.toFixed( 2 ), + g.toFixed( 2 ), + w.toFixed( 3 ), + given.toFixed( 2 ), ...kin.frame ] );
+					if ( kin.top.length > 4000 ) kin.top = kin.top.sort( ( a, b ) => b[ 2 ] - a[ 2 ] ).slice( 0, 1000 );
+
+				}
+				if ( ! l || kin.sim > l.sim ) kin.last.set( key, { x: s[ 0 ], y: s[ 1 ], z: s[ 2 ], q: [ s[ 3 ], s[ 4 ], s[ 5 ], s[ 6 ] ], sim: kin.sim, game: kin.game } );
+				else Object.assign( l, { x: s[ 0 ], y: s[ 1 ], z: s[ 2 ], q: [ s[ 3 ], s[ 4 ], s[ 5 ], s[ 6 ] ] } );
+
+			};
+			const remote = physics.update_remote.bind( physics ), platform = physics.set_platform.bind( physics );
+			physics.update_remote = ( id, kind, s ) => { note( `r${ id }`, s, s[ 7 ] / 3.6 ); return remote( id, kind, s ); };
+			physics.set_platform = ( id, s ) => { note( `p${ id }`, s, Math.hypot( s[ 7 ], s[ 8 ], s[ 9 ] ) ); return platform( id, s ); };
+
+		} );
 		await driveDownTheLanes( page, { until: car => car.z > - 58 } );
-		await driveDownTheLanes( page, { until: car => car.z > - 22, throttle: false } );
+		await driveDownTheLanes( page, { until: car => car.z > - 10, kmh: 8 } );
 		// parked a little askew, the way a driver leaves it
 		// (the wheel straightened before S stops the car and turns into reverse, or it backs round on full lock)
 		await page.keyboard.down( process.env.PARK_SIDE || 'd' ); await page.keyboard.down( 's' );
@@ -515,7 +493,10 @@ test( 'Driving off: with her ramp down, a car parked on her deck backs off her s
 		await expect.poll( async () => Math.abs( ( await carInHerFrame( page ) ).kmh ), { timeout: 15_000, intervals: [ 100 ] } ).toBeLessThan( 1 );
 		await page.keyboard.up( 's' );
 		await page.waitForTimeout( 1_500 );
-		console.log( `parked at her x ${ ( await carInHerFrame( page ) ).x.toFixed( 2 ) }, heading ${ ( await carInHerFrame( page ) ).heading.toFixed( 3 ) }` );
+		const parked = await carInHerFrame( page );
+		console.log( `parked at her x ${ parked.x.toFixed( 2 ) }, z ${ parked.z.toFixed( 2 ) }, heading ${ parked.heading.toFixed( 3 ) }` );
+		// on her deck, clear of her stern: a car that never got aboard would pass the backing-off check trivially
+		expect( parked.z ).toBeGreaterThan( - 18 );
 
 	} );
 	let track;
@@ -530,6 +511,15 @@ test( 'Driving off: with her ramp down, a car parked on her deck backs off her s
 		const stuck = track.filter( c => c.z > - 27 && c.z < - 21 && c.kmh < 0.5 ).length;
 		console.log( `backing off: car at her x ${ car.x.toFixed( 2 ) }, z ${ car.z.toFixed( 2 ) }, y ${ car.y.toFixed( 2 ) }, max |x| ${ Math.max( ...track.map( c => Math.abs( c.x ) ) ).toFixed( 2 ) }; ${ stuck } samples stopped at her stern; min z ${ Math.min( ...track.map( c => c.z ) ).toFixed( 2 ) }` );
 		await page.screenshot( { path: `${ OUT }/terminal-car-backing-off.png` } );
+		// Walking-pace contacts on her deck (parking, backing, the traffic beside her) are bumper
+		// knocks: ECE R42 / 49 CFR 581 leave lights, cooling and suspension intact at 4 km/h, and
+		// RCAR's 15 km/h test dents only the bumper. So no wheel off, no steam (docs/cars.md, Low-speed contacts).
+		const wreck = await page.evaluate( () => { const st = window.__app.rally.damage.state; return { wheels: st.wheelsLost, steam: st.steam, corners: st.corners.map( v => + v.toFixed( 2 ) ), zones: st.zones.map( v => + v.toFixed( 2 ) ), log: window.__impactLog }; } );
+		console.log( `damage after backing off: wheels lost mask ${ wreck.wheels }, steam ${ wreck.steam }, corners ${ wreck.corners }, zones ${ wreck.zones }; impulses ${ JSON.stringify( wreck.log ) }` );
+		const kin = await page.evaluate( () => { const k = window.__kinLog; return { slow: k.slow, rows: k.top.length, top: [ ...k.top ].sort( ( a, b ) => b[ 2 ] - a[ 2 ] ).slice( 0, 12 ) }; } );
+		console.log( `kinematic poses (t ms, body, v over sim s, v over game s, rad/s over sim s, given m/s, frame ms, steps): ${ kin.rows } rows 2 m/s off the given speed or over 0.2 rad/s, ${ kin.slow } frames over 0.1 s; top ${ JSON.stringify( kin.top ) }` );
+		expect( wreck.wheels, 'a wheel came off at walking pace' ).toBe( 0 );
+		expect( wreck.steam, 'the radiator holed at walking pace' ).toBe( 0 );
 		expect( car.z ).toBeLessThan( - 55 );
 		expect( car.y ).toBeGreaterThan( 2.9 );
 

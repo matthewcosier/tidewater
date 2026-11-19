@@ -36,9 +36,11 @@ function intersects(prop,box){const p=center(prop),q=new Quaternion();prop.m.dec
  const x=new Vector3(1,0,0).applyQuaternion(q),z=new Vector3(0,0,1).applyQuaternion(q),X=new Vector3(box.cos,0,-box.sin),Z=new Vector3(box.sin,0,box.cos),d=p.clone().sub(box.center);
  return [x,z,X,Z].every(axis=>Math.abs(d.dot(axis))<Math.abs(x.dot(axis))*h.x+Math.abs(z.dot(axis))*h.z+Math.abs(X.dot(axis))*box.half.x+Math.abs(Z.dot(axis))*box.half.z);
 }
-// Crop existing one-metre texels without resampling or changing their alignment.
+// Crop existing one-metre texels without resampling or changing their alignment: the same world
+// window (x and z from -256 m) whatever the domain's origin per axis; the source stride is resX.
 const res=512,size=512,origin=-256,heights=new Float32Array(res*res);
-for(let z=0;z<res;z++)for(let x=0;x<res;x++)heights[z*res+x]=terrain.heights[(z+768)*terrain.res+x+768];
+const cropX=Math.round((origin-terrain.originX)/terrain.texel),cropZ=Math.round((origin-terrain.originZ)/terrain.texel);
+for(let z=0;z<res;z++)for(let x=0;x<res;x++)heights[z*res+x]=terrain.heights[(z+cropZ)*terrain.resX+x+cropX];
 function clearances(state,half){const p=new Vector3().fromArray(state,1),q=new Quaternion().fromArray(state,4);let lo=Infinity,hi=-Infinity;
  for(const x of [-1,1])for(const y of [-1,1])for(const z of [-1,1]){const c=new Vector3(x*half.x,y*half.y,z*half.z).applyQuaternion(q).add(p),d=c.y-terrain.heightAt(c.x,c.z);lo=Math.min(lo,d);hi=Math.max(hi,d);}return {lo,hi,p};
 }

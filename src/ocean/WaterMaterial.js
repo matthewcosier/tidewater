@@ -1,3 +1,4 @@
+import { SED_WGSL, FOAM_TURBID, FLOOD_ALBEDO, WALL_ALBEDO, WALL_ETA, MEAN_FRESNEL_WGSL, MEAN_FRESNEL_FULL, FLOOD_LIGHT_WGSL, FLOOD_GLINT_WGSL } from '../disasters/FloodLook.js';
 import { Material, ShaderModule, G } from '../engine/webgpu.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
 import { whaleWaterModule } from './WhaleWater.js';
@@ -51,6 +52,8 @@ export const viewPositionFromViewZ = ( uv, viewZ ) => `viewPositionFromViewZ( ${
 // material is created (the wake, surf foam) are part of it, like the lazily built NodeMaterial.
 // Outputs: r.color (radiance), camera-only velocity (the grid vertices are placed in the vertex
 // shader: previous world position = current, staticVelocity), r.mask = ( seenFromBelow, 1, 0, 1 ).
+// (Where a flood is drawn the velocity also carries the flood's flow, which drags everything on its surface: see the
+// end of the output snippet. Nothing changes without one.)
 export class WaterMaterial extends Material {
 
 	constructor( { surface, sky, sceneCopy, sceneDepthHalf = null, refraction = null, reflection = null, hullMask = null, hullMaskActive = null } ) {
@@ -317,15 +320,21 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 	let kpx = PI / footprint;
 	let unresolved = sat( log2( 110.0 / kpx ) / 9.0 );
 	let roughVar = surf.rough * surf.rough;
-	let alpha2 = ( mat.waterRoughness * mat.waterRoughness + mss * 2.0 * unresolved * roughVar + foam * 0.2 + surf.aeration * 0.03 ) * ( 1.0 - whaleW.y * 0.6 );
+	let alpha2 = ( mat.waterRoughness * mat.waterRoughness + mss * 2.0 * unresolved * roughVar + foam * 0.2 + surf.aeration * 0.03 + surf.floodSurf.x * 2.0 ) * ( 1.0 - whaleW.y * 0.6 );
+	// (the flood's chop's share of that roughness, whose glint is the Gaussian of its slopes: FloodLook.floodGlint; 0 without a flood)
+	let floodShare = surf.floodSurf.x * 2.0 * ( 1.0 - whaleW.y * 0.6 ) / max( alpha2, 1e-6 );
 	// slope spread the mesh / normal maps can't show at this distance (for the reflection)
-	let sigmaUnres = sqrt( mss * unresolved * roughVar );
+	// (+ the flood's own chop below a pixel, FloodLook floodChop: 0 without a flood)
+	let sigmaUnres = sqrt( mss * unresolved * roughVar + surf.floodSurf.x );
 
 	var outCol = vec3f( 0.0 );
 	var ssrW = 0.0;
 	var dbgPath = 0.0;
 	var dbgScene = vec3f( 0.0 );
+	// (debug views 16-18: the body, the sky's reflection and the sun's glint of the water above the surface, each alone)
+	var dbgTerm = mat3x3f( vec3f( 0.0 ), vec3f( 0.0 ), vec3f( 0.0 ) );
 	var dbgSrc = vec3f( 0.0 ); // which image the seabed came from (debug view 12)
+	var dbgMed = 0.0; // the surf medium's strength (debug view 14)
 	var dbgRefr = vec3f( 0.0 ); // refraction image at the end point: coverage, depth > 0, behind (13)
 
 	if ( ! viewFromBelow ) {
@@ -338,7 +347,13 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 		let uphill = normalize( - vec2f( nr.x, nr.y ) + vec2f( 1e-5, 0.0 ) );
 		let N = normalize( Nview + vec3f( uphill.x, 0.0, uphill.y ) * ( edgeW * edgeW * 0.7 ) );
 		let NdV = max( dot( N, V ), 1e-4 );
-		let F = fresnelDielectric( NdV, ${ IOR } );
+		// A flood's chop below a pixel: the mean Fresnel reflectance over those facets (FloodLook.meanFresnel). At a grazing
+		// angle a flat sheet reflects nearly all of the sky, and the running flood was a mirror of the clouds from the beach
+		// and the street; slopes deviating by 0.25 reflect a quarter and the water's own body shows. Exactly the flat term
+		// without a flood (floodSurf.x 0).
+		let Fflat = fresnelDielectric( NdV, ${ IOR } );
+		let floodSigma = sqrt( surf.floodSurf.x );
+		let F = mix( Fflat, ${ MEAN_FRESNEL_WGSL( 'NdV', 'floodSigma' ) }, sat( surf.floodSurf.x * ${ MEAN_FRESNEL_FULL.toFixed( 1 ) } ) );
 
 		// ---- reflection
 		let Rraw = reflect( - V, N );
@@ -352,6 +367,9 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 		var skyRefl = vec3f( 0.0 );
 		if ( horizonOcc > 0.0 || frontD < 0.1 ) { skyRefl = skyReflectionRadiance( R ); }
 		var reflCol = mix( frame.horizonColor * 0.35, skyRefl, horizonOcc );
+		// A flood's chop below a pixel spreads the reflection over the sky: toward the sky's mean radiance, not one
+		// direction of it (the flat sheet mirrored the clouds; boiling water is matte). 0 without a flood.
+		reflCol = mix( reflCol, frame.skyIrradiance, surf.floodSurf.y );
 
 		// objects (pier, boat, hills, village) reflected from the screen; only rays close to the
 		// horizon can hit anything, so steep reflections skip the march entirely
@@ -361,7 +379,8 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 			// (rays toward the camera get no weight: see facing in _waterSSR)
 			if ( Rv.z < 0.5 ) {
 				let r = _waterSSR( posV, Rv, pos.y, Rraw.y );
-				reflCol = mix( reflCol, r.rgb, r.a );
+				// (less the share a flood's chop spreads over the sky: houses and trees stood mirrored in running water)
+				reflCol = mix( reflCol, r.rgb, r.a * ( 1.0 - surf.floodSurf.y ) );
 				ssrW = r.a;
 			}
 		}
@@ -379,7 +398,12 @@ ${ REFL ? `
 		let NdH = max( dot( N, H ), 0.0 );
 		let VdH = max( dot( V, H ), 0.0 );
 		let Fs = fresnelDielectric( VdH, ${ IOR } );
-		let spec = _waterDGGX( NdH, alpha2 ) * _waterVSmithGGX( NdL, NdV, alpha2 ) * Fs * NdL;
+		let ggxDV = _waterDGGX( NdH, alpha2 ) * _waterVSmithGGX( NdL, NdV, alpha2 );
+		var spec = ggxDV * Fs * NdL;
+		// (the flood's share of the lobe is the Gaussian of its chop's slopes, FloodLook.floodGlint: GGX's power-law tail
+		// sent the sun to the eye from facets tilted far beyond the water's own, and the far flood drew a silver sheet
+		// toward the sun. The sea's lobe as it was without a flood.)
+		if ( floodShare > 0.0 ) { spec = floodGlint( ggxDV, NdH, NdL, NdV, alpha2, floodShare ) * Fs * NdL; }
 		// physically the glint is ~1e5x brighter than the sky; clamp to stay inside fp16 range
 		let sunSpec = sunLight * min( spec, 400.0 );
 
@@ -521,10 +545,13 @@ ${ T ? `		let L0 = max( pos.y - groundH, 0.0 ) / tDown;
 		let sandK = ${ SIM ? 'sat( simState.x * 2.5 ) * 1.8 + 0.45' : '1.0' };
 ${ hasMedium ? `		// surf zone: sand and bubbles stirred up by the breakers (see ShoreWaves.surfMedium)
 		let surfMed = shoreSurfMedium( pos.xz, vDepth );
-		let sigA = frame.waterAbsorption + surfMed.absorb * sandK;
+		let medKeep = 1.0 - surf.flood.z;
+		dbgMed = surfMed.scatter.y * medKeep;
+		// (+ the flood's sediment: brown-grey and opaque within centimetres over the land, FloodLook.js turbidity)
+		let sigA = frame.waterAbsorption + surfMed.absorb * sandK * medKeep + surf.turbid * ${ SED_WGSL.absorb };
 		// (bubble plumes are shallow and patchy: a moderate scatterer, milky turquoise rather than a glow)
-		let sigS = frame.waterScattering + surfMed.scatter * sandK + aer * 1.6;` : `		let sigA = frame.waterAbsorption;
-		let sigS = frame.waterScattering + aer * 1.6;` }
+		let sigS = frame.waterScattering + surfMed.scatter * sandK * medKeep + aer * 1.6 + surf.turbid * ${ SED_WGSL.scatter };` : `		let sigA = frame.waterAbsorption + surf.turbid * ${ SED_WGSL.absorb };
+		let sigS = frame.waterScattering + aer * 1.6 + surf.turbid * ${ SED_WGSL.scatter };` }
 		let sigT = sigA + sigS;
 
 		// refracted sun direction
@@ -555,19 +582,32 @@ ${ hasMedium ? `		// surf zone: sand and bubbles stirred up by the breakers (see
 		let back = pow( sat( dot( vH, - lH ) * 0.6 + 0.4 ), 2.5 );
 		let crest = sat( vHeight * 0.9 + 0.1 ) * ( sat( ( 1.0 - N.y ) * 4.0 ) + 0.25 );
 		let sssCol = vec3f( 0.12, 0.55, 0.45 ) * 0.06;
-		let sss = sunLight * sssCol * back * crest * mat.sss * smoothstep( 0.0, 0.25, L.y );
+		// (none under a flood, by the cover that ends the rest sea's surf: the crest term rides on the wave height, which
+		// carries the flood's own level, and a wall hundreds of metres thick glowed turquoise like a curtain of ice.
+		// Exactly the sea's own term with no flood, cover 0.)
+		let sss = sunLight * sssCol * back * crest * mat.sss * smoothstep( 0.0, 0.25, L.y ) * ( 1.0 - sat( surf.flood.z ) );
 
 		// the bead of the meniscus shades the sand right under it
-		let transmitted = sceneCol * Tview * ( 1.0 - 0.3 * lipW ) + inSun + inAmb + sss;
+		let transmitted0 = sceneCol * Tview * ( 1.0 - 0.3 * lipW ) + inSun + inAmb + sss;
+		let bodyEf = ${ FLOOD_LIGHT_WGSL( 'sunIn', 'dot( N, L )', 'frame.skyIrradiance', 'N.y' ) };
+		let bodyK = sat( surf.turbid ) * ( 1.0 - exp( - max( min( thickness, surf.floodSurf.w ), 0.0 ) * dot( ${ SED_WGSL.absorb } + ${ SED_WGSL.scatter }, vec3f( 1.0 / 3.0 ) ) ) );
+		let wallK = smoothstep( ${ WALL_ETA[ 0 ].toFixed( 1 ) }, ${ WALL_ETA[ 1 ].toFixed( 1 ) }, surf.flood.y ) * ( 1.0 - sat( surf.turbid ) );
+		let transmitted = mix( mix( transmitted0, vec3f( ${ WALL_ALBEDO.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ) * bodyEf + sss, wallK ), vec3f( ${ FLOOD_ALBEDO.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ) * ( 1.0 - surf.floodSurf.z ) * bodyEf, bodyK );
 
 		// ---- foam
 		// foam: bright diffuse scatterer (albedo ~0.85), wrapped sun + sky irradiance (skyIrradiance = E/PI)
-${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );' : '		let foamLit = ( sunLight * ( max( dot( N, L ), 0.0 ) * 0.75 + 0.25 ) * INV_PI + frame.skyIrradiance * 0.95 ) * 0.85;' }
-		let foamCol = foamLit * mat.foamIntensity;
+${ SF ? `		let foamLitSea = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
+		// (a flood's own foam, surf.flood.w, is a plain bright scatterer: the surf foam's relief and thickness describe the
+		// sea's foam mat, and there is none under a flood's rafts. The sea's alone without a flood.)
+		// (lit as the water round it, FloodLook.floodLight: with the sea foam's wrapped sun, the foam on the lee of the
+		// 320 m wall and of a building drew lit while the water round it was in shadow)
+		let foamLit = mix( foamLitSea, ${ FLOOD_LIGHT_WGSL( 'sunLight', 'dot( N, L )', 'frame.skyIrradiance', 'N.y' ) } * 0.85, sat( surf.flood.w ) );` : `		let foamLit = mix( ( sunLight * ( max( dot( N, L ), 0.0 ) * 0.75 + 0.25 ) * INV_PI + frame.skyIrradiance * 0.95 ) * 0.85, ${ FLOOD_LIGHT_WGSL( 'sunLight', 'dot( N, L )', 'frame.skyIrradiance', 'N.y' ) } * 0.85, sat( surf.flood.w ) );` }
+		let foamCol = foamLit * mat.foamIntensity * mix( vec3f( 1.0 ), vec3f( ${ FOAM_TURBID.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ), surf.turbid );
 
 		// a thin bright rim just behind the edge: the rounded bead catches the sky
 		let rim = smoothstep( 0.0, 0.025, frontD ) * smoothstep( 0.1, 0.035, frontD ) * uprush;
 		let water = mix( transmitted, reflCol, F ) + sunSpec + skyRefl * ( 0.22 * rim );
+		dbgTerm = mat3x3f( transmitted * ( 1.0 - F ), reflCol * F, sunSpec );
 		// ---- the ridden jetski's headlamp (a spot, same falloff as the scene's local lights): a pool on the
 		// foam and the water body ahead of the bow, and a GGX glint on each wave facing back along the beam
 		var lampCol = vec3f( 0.0 );
@@ -581,14 +621,18 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 			let Eh = mat.headCol.rgb * ( mat.headPos.w * cone * win * win / ld2 );
 			let NdLh = max( dot( N, Lh ), 0.0 );
 			let Hh = normalize( Lh + V );
-			let specH = _waterDGGX( max( dot( N, Hh ), 0.0 ), alpha2 ) * _waterVSmithGGX( NdLh, NdV, alpha2 ) * fresnelDielectric( max( dot( V, Hh ), 0.0 ), ${ IOR } ) * NdLh;
+			let NdHh = max( dot( N, Hh ), 0.0 );
+			let ggxH = _waterDGGX( NdHh, alpha2 ) * _waterVSmithGGX( NdLh, NdV, alpha2 );
+			// (on a flood, the same lobe as the sun's glint: FloodLook.floodGlint)
+			let specH = select( ggxH, floodGlint( ggxH, NdHh, NdLh, NdV, alpha2, floodShare ), floodShare > 0.0 ) * fresnelDielectric( max( dot( V, Hh ), 0.0 ), ${ IOR } ) * NdLh;
 			// the water column's backscatter (dim blue-green), foam a bright diffuse scatterer (albedo ~0.85)
 			let bodyR = vec3f( 0.008, 0.021, 0.025 ) * ( 1.0 - F );
 			lampCol = Eh * ( mix( bodyR, vec3f( 0.85 * INV_PI ) * mat.foamIntensity, sat( foam ) ) * NdLh + min( specH, 200.0 ) * ( 1.0 - sat( foam ) ) );
 		}
 		let shaded = mix( water, foamCol + sunSpec * 0.05, sat( foam ) ) + lampCol;
 		// fade into the sand right at the leading edge (anti-aliased by the film thickness)
-		let edgeAA = smoothstep( 0.0, max( fwidth( thickness ) * 1.5, 0.004 ), thickness );
+		// (x the film at a flood's own edge, fading in over its first centimetres: WaterSurface floodEdge, 1 without one)
+		let edgeAA = smoothstep( 0.0, max( fwidth( thickness ) * 1.5, 0.004 ), thickness ) * surf.floodEdge;
 		// contact shadow: the sand just ahead of the advancing edge is darkened (the bead's
 		// shadow and the wetting front), fading within ~15 cm
 		outCol = shaded;
@@ -639,7 +683,8 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 
 	}
 
-	// debug views: 1 = back faces red, 2 = normals, 3 = foam, 7 = the seabed seen through, 12 = its source
+	// debug views: 1 = back faces red, 2 = normals, 3 = foam, 7 = the seabed seen through, 12 = its source, 14/15 the flood readback,
+	// 16 the body, 17 the sky's reflection, 18 the sun's glint (above the surface, unfoamed), 19 the flood face's white
 	let dbg = mat.debugMode;
 	var res = min( outCol, vec3f( 16000.0 ) );
 	if ( dbg == 1 ) {
@@ -673,6 +718,15 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 	} else if ( dbg == 11 ) {
 		// surf foam sources: whitewater of the breaking wave (r), foam carried by the shore sim (g), clear plunging face (b)
 		res = vec3f( in.vs.vShoreFoam, simState.x, in.vs.vSurfMask.x );
+	} else if ( dbg == 14 ) {
+		res = vec3f( sat( foam ), sat( ( pos.y - groundH ) * 0.5 ), sat( dbgMed * 2.0 ) );
+	} else if ( dbg == 15 ) {
+		res = vec3f( sat( surf.flood.x * 0.5 ), sat( ( pos.y - surf.flood.y ) * 0.5 ), sat( surf.flood.z ) );
+	} else if ( dbg >= 16 && dbg <= 18 ) {
+		res = dbgTerm[ dbg - 16 ];
+	} else if ( dbg == 19 ) {
+		// the face's white: r the roller, g the place on a tall face (its crest and foot), b the far wall's crest band
+		res = surf.floodWhite;
 	} else if ( dbg == 5 ) {
 		res = vec3f( fract( lagXZ.x * 0.1 ), fract( vHeight ), fract( lagXZ.y * 0.1 ) );
 	}
@@ -680,6 +734,18 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 	// camera velocity for TAA (default: static), plus the water mask (SceneRenderer) for the
 	// underwater pass: whether the visible surface is seen from below
 	r.mask = vec4f( seenFromBelow, 1.0, 0.0, 1.0 );
+${ S.disaster ? /* wgsl */`
+	// The flood's own motion (FloodLook.motionWeight). Its chop, rafts, plumes and carried foam are dragged along the
+	// flow, about 2 px a frame in fast water seen from the roofs, and with the camera's motion alone the temporal pass
+	// read its history from where the pattern was not: fast water smeared along the flow. Where the flood is drawn the
+	// pixel's previous place is this point moved back along the flow by one frame. With no flood on the pixel the
+	// weight is exactly 0, the branch is not taken and the camera's motion stands as before.
+	if ( surf.floodFlow.z > 0.0 ) {
+		let fPrev = frame.prevViewProjNoJitter * vec4f( pos - vec3f( surf.floodFlow.x, 0.0, surf.floodFlow.y ) * ( surf.floodFlow.z * frame.dt ), 1.0 );
+		let fCur = frame.viewProjNoJitter * vec4f( pos, 1.0 );
+		// (a point that was behind the eye a frame ago has no place on the screen: the camera's motion stands)
+		if ( fPrev.w > 1e-3 && fCur.w > 1e-3 ) { r.velocity = vec4f( ( fCur.xy / fCur.w - fPrev.xy / fPrev.w ) * vec2f( 0.5, -0.5 ), 0.0, 1.0 ); }
+	}` : '' }
 `;
 
 	}
@@ -698,7 +764,7 @@ fn _waterRefrUV( ndc: vec2f ) -> vec2f {
 	let n = ( ndc - vec2f( ${ _g6( RG.cx ) }, ${ _g6( RG.cy ) } ) ) / vec2f( ${ _g6( RG.sx ) }, ${ _g6( RG.sy ) } );
 	return clamp( vec2f( n.x * 0.5 + 0.5, 0.5 - n.y * 0.5 ), vec2f( 0.0005 ), vec2f( 0.9995 ) );
 }
-fn _waterDGGX( NdH: f32, a2: f32 ) -> f32 {
+${ FLOOD_GLINT_WGSL }fn _waterDGGX( NdH: f32, a2: f32 ) -> f32 {
 	let d = NdH * NdH * ( a2 - 1.0 ) + 1.0;
 	return a2 / ( d * d * PI );
 }

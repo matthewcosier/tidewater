@@ -141,3 +141,42 @@ test('the attendant stool is supported outside the actual solid hire envelope an
  assert.ok(Math.abs(slot.at.y-f.ai.walker.ground(slot.at.x,slot.at.z,slot.at.y+.2))<.03,'stool must be on real support');
  assert.ok(f.ai.walker.segment(slot.at,{x:slot.at.x,y:slot.at.y,z:slot.at.z-2}),'attendant must have a physical exit toward refuge');
 });
+const SEEDS=[11,23,37,41,59,61,73,89,97,101];
+function beachRun(seed,{warning,arrival,seconds,dt=.05}){
+ const f=fixture(),people=[];for(let i=0;i<25;i++)people.push(f.add(-24+2*i,(i%2)*3)); // spread along 48 m of beach
+ const start=people.map(p=>p.world.clone()),left=new Map();
+ const event={kind:'tsunami',warning,time:0,arrival,direction:-90,x:0,z:0,seed};f.field.events.set('tsunami',event);
+ for(let n=Math.round(seconds/dt);n>0;n--){f.hub.t+=dt;event.time+=dt;f.ai.update(dt);for(const p of people)f.ai.step(p,dt);
+  people.forEach((p,i)=>{if(!left.has(p)&&start[i].z-p.world.z>.3)left.set(p,event.time);});}
+ return {f,event,people,start,left,moved:people.map((p,i)=>p.world.z-start[i].z)}; // the refuge is at -z, the sea at +z
+}
+test('With a long warning a share of beach people stays in the hazard zone, and who it is differs from event to event',()=>{
+ let exposed=0,seaward=0,stayed=0,someone=0,filmers=0,facing=0;const sets=new Set();
+ for(const seed of SEEDS){
+  const {people,moved}=beachRun(seed,{warning:90,arrival:130,seconds:85,dt:.1});
+  const out=moved.filter(d=>d>2).length,still=moved.filter(d=>Math.abs(d)<.5).length;
+  exposed+=out+still;seaward+=out;stayed+=still;if(out+still)someone++;
+  sets.add(people.filter(p=>p.evacuation.ignore).map(p=>p.id+p.evacuation.ignore).join());
+  for(const p of people)if(p.evacuation.ignore==='film'){filmers++;if(Math.cos(p.face)>.95)facing++;} // the sea is at +z: face 0
+ }
+ const share=exposed/(25*SEEDS.length);
+ assert.ok(share>=.1&&share<=.3,`${(share*100).toFixed(0)} % of beach people are still exposed after 85 s of a 90 s warning (want 10 to 30 %)`);
+ assert.ok(someone>=8,`in only ${someone} of ${SEEDS.length} events was anyone still exposed`);
+ assert.ok(seaward>=2&&stayed>=4,`across ${SEEDS.length} events ${seaward} walked out onto the seabed and ${stayed} stayed on the sand`);
+ assert.ok(filmers>=3&&facing===filmers,`${facing} of ${filmers} filmers face the sea (the beach body turns to p.face when standing)`);
+ assert.ok(sets.size>=8,`only ${sets.size} different sets of ignorers in ${SEEDS.length} events: the same people ignore every warning`);
+});
+test('A 2 m surge with a 20 s warning: dawdlers notice late, each after their own delay, and some are still on the sand at the crest',()=>{
+ const leads=[];let dawdlers=0,late=0;
+ for(const seed of SEEDS){
+  const {people,start,left}=beachRun(seed,{warning:20,arrival:20,seconds:20});
+  people.forEach((p,i)=>{if(p.evacuation.ignore!=='dawdle')return;dawdlers++;
+   const lead=20-(left.get(p)??Infinity);if(Number.isFinite(lead))leads.push(lead);
+   if(start[i].z-p.world.z<10)late++;}); // under 10 m up the beach when the crest lands
+ }
+ const spread=leads.length?Math.max(...leads)-Math.min(...leads):0;
+ assert.ok(dawdlers>=6,`only ${dawdlers} dawdlers in ${SEEDS.length} events`);
+ assert.ok(late>=2,`${late} of ${dawdlers} dawdlers were still within 10 m of their spot when the crest landed`);
+ assert.ok(late<dawdlers,`all ${dawdlers} dawdlers were caught: noticing late must be a draw, not a rule`);
+ assert.ok(spread>=3,`dawdlers set off between ${Math.min(...leads).toFixed(1)} and ${Math.max(...leads).toFixed(1)} s before the crest: the delay is not drawn per person`);
+});
