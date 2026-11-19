@@ -31,6 +31,7 @@ export const rallyphysics_restore_disaster_car: (a: number, b: number, c: number
 export const rallyphysics_select_vehicle: (a: number, b: number) => number;
 export const rallyphysics_set_assists: (a: number, b: number) => void;
 export const rallyphysics_set_damage: (a: number, b: number, c: number, d: number, e: number) => number;
+export const rallyphysics_set_disaster_drag: (a: number, b: number, c: number) => number;
 export const rallyphysics_set_disaster_loads: (a: number, b: number, c: number) => number;
 export const rallyphysics_set_fluid_velocity: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const rallyphysics_set_max_steps: (a: number, b: number) => void;
@@ -41,15 +42,16 @@ export const rallyphysics_set_prop_mass_properties: (a: number, b: number, c: nu
 export const rallyphysics_set_prop_motion_limits: (a: number, b: number, c: number, d: number) => number;
 export const rallyphysics_set_prop_solid: (a: number, b: number, c: number) => number;
 export const rallyphysics_set_pusher: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
-export const rallyphysics_set_rear_wing: (a: number, b: number) => void;
 export const rallyphysics_set_roads: (a: number, b: number, c: number) => number;
 export const rallyphysics_set_surface_map: (a: number, b: number, c: number) => number;
 export const rallyphysics_set_terrain: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const rallyphysics_set_terrain_grid: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const rallyphysics_set_water: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const rallyphysics_sleep_prop: (a: number, b: number) => number;
 export const rallyphysics_snapshot: (a: number) => [number, number];
 export const rallyphysics_structure_joint_states: (a: number) => [number, number];
 export const rallyphysics_take_impacts: (a: number) => [number, number];
+export const rallyphysics_terrain_height: (a: number, b: number, c: number) => number;
 export const rallyphysics_update_remote: (a: number, b: number, c: number, d: number, e: number) => void;
 export const rallyphysics_wake_prop: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
 export const wasm_bindgen__closure__destroy__h44f5a62f65970bcf: (a: number, b: number) => void;

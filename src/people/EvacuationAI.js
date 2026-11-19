@@ -1,8 +1,31 @@
 import { Vector3 } from '../engine/index.js';
 import { EvacuationWalker } from './EvacuationWalker.js';
 import { EvacuationPaths } from './EvacuationPaths.js';
+import { draw, rayleigh, STREAM } from '../disasters/EventSeed.js';
 const copyPath=p=>p?.map(v=>v.clone?.()??v.slice?.()??v)??null;
 const unable=p=>!!(p.dead||p.health===0||p.knock);
+const IGNORE_SHARE=.2; // of beach people, declared
+const IGNORE_KINDS=[['dawdle',.4],['film',.75],['seabed',1]]; // cumulative shares, declared
+// Dawdlers ignore the siren and notice the wave only when it shows (the white line, the sea drawn
+// back), NOTICE_LEAD s before the crest; then each takes a Rayleigh-drawn reaction delay (scale
+// NOTICE_SIGMA) before running. The old fixed 8 s lead let every dawdler outrun a 2 m surge; with a
+// drawn delay about a third are still on the sand when it lands (test/people-evacuation.mjs
+// "dawdlers notice late"). Real decision times run to minutes (Mas et al. 2012); these seconds
+// are a game choice scaled to the island's 20 to 90 s warnings.
+const NOTICE_LEAD=8; // s before the crest
+const NOTICE_SIGMA=4; // s, Rayleigh scale: median 4.7 s, one in five over 7.2 s
+const REACT_MIN=.3,REACT_SPREAD=.54; // s: everyone else reacts to the siren in 0.3 to 0.84 s (the old per-id band, now drawn)
+const PACE_SPREAD=.4; // m/s above the base run: 4.4 adults, 3.0 elderly (the old 4.4 to 4.8 and 3.2 bands)
+const FILM_LOOK=30; // m: where a filmer's eyes and phone point, out to sea
+const SEABED_PACE=1.1; // m/s, a stroll
+
+// Who ignores a planned crest in this event, and why: null, or { ignore, lead } (lead: s before the
+// crest a dawdler sets off; it can be negative). Exported so a browser test can stage a seed.
+export function ignorerOf(seed,id){
+ if(draw(seed,id,STREAM.ignore)>=IGNORE_SHARE)return null;
+ const u=draw(seed,id,STREAM.kind),ignore=IGNORE_KINDS.find(k=>u<k[1])[0];
+ return {ignore,lead:ignore==='dawdle'?NOTICE_LEAD-rayleigh(draw(seed,id,STREAM.notice),NOTICE_SIGMA):null};
+}
 
 // Behaviour only. The shared disaster model owns wind, current, buoyancy loads,
 // falls and ragdolls; this controller supplies voluntary movement, never immunity.
@@ -22,9 +45,17 @@ export class EvacuationAI {
   // Ordinary treading stores sea level in world.y but draws feet underwater.
   // Start physics at those visible feet before changing to the standing mode.
   if(p.mode==='tread'){p.world.y=p.group?.position.y??this.water(p.world.x,p.world.z)-1.38;p.base.copy(p.world);}
-  const old=p.evacuation,slot=this.app.beach?.people.indexOf(p)??0;
-  p.evacuation={phase:'warning',reason:null,kind:event.kind,velocity:old?.velocity??new Vector3(),grounded:true,routeContacts:old?.routeContacts??0,collisions:0,moving:false,swimming:p.role==='swim',readyAt:this.hub.t+.3+(p.id%7)*.09,lane:((slot%4)-1.5)*.75,slot,plan:null,index:0,nextSense:0,stuck:0,last:p.world.clone(),wasKnocked:!!p.knock};
+  const old=p.evacuation,slot=this.app.beach?.people.indexOf(p)??0,seed=event.seed??0;
+  p.evacuation={phase:'warning',reason:null,kind:event.kind,velocity:old?.velocity??new Vector3(),grounded:true,routeContacts:old?.routeContacts??0,collisions:0,moving:false,swimming:p.role==='swim',readyAt:this.hub.t+REACT_MIN+REACT_SPREAD*draw(seed,p.id,STREAM.react),pace:(p.brain.type==='elderly'?3:4.4)+PACE_SPREAD*draw(seed,p.id,STREAM.speed),lane:((slot%4)-1.5)*.75,slot,plan:null,index:0,nextSense:0,stuck:0,last:p.world.clone(),wasKnocked:!!p.knock};
   p.path=null;p.then=null;p.beat=null;p.gesture=null;p.brain.activity=null;p.mode='stand';
+  // Only a planned crest (field.start sets e.arrival) has a wave to watch, film or wait for.
+  if(event.kind==='tsunami'&&Number.isFinite(event.arrival)&&ignorerOf(seed,p.id)){
+   const {ignore,lead}=ignorerOf(seed,p.id);
+   p.evacuation.ignore=ignore;
+   if(ignore==='dawdle')p.evacuation.lead=lead;
+   else p.evacuation.phase='ignore';
+   if(ignore==='film'){p.evacuation.look=new Vector3();if(p.item?.kind!=='phone')this.hub.contact?.give(p,'phone');}
+  }
   if(p.bat)p.bat.visible=false;
   this.hub.say(p,event.kind==='tsunami'?'Tsunami warning! Follow the green signs uphill.':event.kind==='tornado'?'Strong wind! Move away from the funnel.':'Earthquake! Keep clear of falling debris.','disaster-warning',true);
  }
@@ -57,13 +88,16 @@ export class EvacuationAI {
   for(const p of this.hub.list)delete p.warningEvent;
   this.saved.clear();this.event=null;this.paths=null;this.queue.length=0;this.job=null;this.routeHazards=[];this.warned=0;
  }
+ // A dawdler holds the warning phase until the crest is their own drawn lead out (read live, so
+ // pause holds). The lead can be negative: they notice so late the crest lands first.
+ dawdling(e){return e.ignore==='dawdle'&&!!this.event&&this.event.arrival-this.event.time>e.lead;}
  step(p,dt){
   const e=p.evacuation;if(!e)return false;
   if(unable(p)){e.phase='incapacitated';e.wasKnocked=true;e.moving=false;e.velocity.set(0,0,0);return true;}
   if(e.wasKnocked){e.wasKnocked=false;if(p.off){p.world.add(p.off);p.base.copy(p.world);p.off.set(0,0,0);}if(!this.event)e.phase='all-clear';else if(e.kind==='tsunami')this.request(p);else e.phase=e.kind==='earthquake'?'brace':'flee';}
   const r=this.app.evacuation?.route;
-  let target=null,speed=p.brain.type==='elderly'?3.2:4.4+(p.id%5)*.1;
-  if(e.phase==='warning'&&this.hub.t>=e.readyAt){
+  let target=null,speed=e.pace??4.4;
+  if(e.phase==='warning'&&this.hub.t>=e.readyAt&&!this.dawdling(e)){
    if(e.kind==='tsunami'){if(this.water(p.world.x,p.world.z)-this.app.terrainData.heightAt(p.world.x,p.world.z)>1.1&&p.role==='swim')e.phase='shore';else this.request(p);}
    else e.phase=e.kind==='earthquake'?'brace':'flee';
   }
@@ -74,6 +108,12 @@ export class EvacuationAI {
    // Leave the shore phase only after both the actual feet and support are
    // shallow enough for the planner's 0.45 m walking limit, with margin.
    const w=this.water(p.world.x,p.world.z);if(w-Math.min(p.world.y,this.walker.ground(p.world.x,p.world.z,p.world.y+.4))<.35)this.request(p);
+  }
+  if(e.phase==='ignore'&&e.ignore==='seabed'){
+   // seaward is against the wave's travel direction
+   const a=(this.event?.direction??0)*Math.PI/180;
+   target={x:p.world.x-Math.cos(a)*4,z:p.world.z-Math.sin(a)*4};
+   speed=SEABED_PACE;
   }
   if(e.phase==='flee'){
    const event=this.field?.events.get('tornado'),c=event&&this.field.center(event);if(c){let dx=p.world.x-c.x,dz=p.world.z-c.z,l=Math.hypot(dx,dz)||1;const q=this.walker.navigationPoint(p.world.x+dx/l*4,p.world.z+dz/l*4);if(q&&this.walker.segment(p.world,q,{water:this.water}))target=q;else{e.phase='blocked';e.reason='no-clear-ground';}}
@@ -106,7 +146,12 @@ export class EvacuationAI {
   if(target&&speed>.1&&Math.hypot(target.x-p.world.x,target.z-p.world.z)>.35){const moved=p.world.distanceTo(e.last);e.stuck=moved<.004?e.stuck+dt:0;if(e.stuck>2.5){e.phase='blocked';e.reason='obstructed';e.retryAt=this.hub.t+3;e.stuck=0;}}
   e.last.copy(p.world);
   p.mode='stand';p.gesture=null;p.beat=null;p.brain.gesture=null;p.brain.target=null;
-  const clip=p.clipOf?.(e.swimming?'idle':e.moving?'walk':e.phase==='brace'?'crouch':'idle');
+  // Filmers turn to face the sea (into the wave's travel) and hold the phone up at it.
+  const filming=e.phase==='ignore'&&e.ignore==='film'&&!!e.look;
+  if(filming){const a=(this.event?.direction??0)*Math.PI/180,sx=-Math.cos(a),sz=-Math.sin(a);p.heading=p.face=Math.atan2(sx,sz);e.look.set(p.world.x+sx*FILM_LOOK,p.world.y+1.5,p.world.z+sz*FILM_LOOK);p.brain.target=e.look;p.brain.lookUntil=this.hub.t+1;}
+  let key=e.swimming?'idle':e.moving?'walk':e.phase==='brace'?'crouch':'idle';
+  if(filming&&p.model.clipSet.has(p.clipOf?.('phone')))key='phone';
+  const clip=p.clipOf?.(key);
   if(clip&&p.model.clipSet.has(clip)){const pace=e.moving&&!e.swimming?Math.max(.4,Math.min(2.5,Math.hypot(e.velocity.x,e.velocity.z)/(p.walk||1.3))):1;const layer=p.model.play(clip,{fade:.25,speed:pace});if(layer)layer.speed=pace;}
   return true;
  }

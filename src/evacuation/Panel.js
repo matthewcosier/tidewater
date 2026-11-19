@@ -1,8 +1,6 @@
 import { addWorldTool } from '../ui/WorldTools.js';
 const STYLE=`
-.evac-guidance{position:fixed;z-index:105;left:50%;bottom:calc(max(72px,13vh) + 64px);transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));box-sizing:border-box;padding:10px 18px;border:1px solid #85ba97;border-radius:9px;background:#103528eb;color:#edffef;font:600 13px/1.45 system-ui;text-align:center;pointer-events:none;box-shadow:0 5px 22px #0004}.evac-guidance[hidden]{display:none}.evac-guidance small{display:block;font-weight:400;color:#c6dfcc}body:has(.tw-root.is-starting) .evac-guidance,body:has(.tw-root.is-photo) .evac-guidance{display:none}/* Third person: the character stands at the bottom centre, so the hint takes the prompt's column
-   to its right (.tw-prompt.is-third in ui.css), stacked above the prompt (the card
-   sat on the player's shorts). AppUI stamps .tw-root.is-third. */
+.evac-guidance{position:fixed;z-index:105;left:50%;bottom:calc(max(72px,13vh) + 64px);transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));box-sizing:border-box;padding:10px 18px;border:1px solid #85ba97;border-radius:9px;background:#103528eb;color:#edffef;font:600 13px/1.45 system-ui;text-align:center;pointer-events:none;box-shadow:0 5px 22px #0004}.evac-guidance[hidden]{display:none}.evac-guidance small{display:block;font-weight:400;color:#c6dfcc}body:has(.tw-root.is-starting) .evac-guidance,body:has(.tw-root.is-photo) .evac-guidance{display:none}
 body:has(.tw-root.is-third) .evac-guidance{left:calc(50% + 14vw);transform:none;text-align:left;max-width:calc(36vw - 24px)}
 @media(max-width:700px){.evac-guidance{font-size:11px;padding:8px 11px}}
 `;
@@ -24,7 +22,7 @@ export class EvacuationPanel {
   const key=[Math.round(s.playerElevation),Math.round(s.remainingDistance),s.atRefuge,s.brokenSections,s.refugeWaterDepth>0].join(':');
   if(key!==this.last){this.last=key;this.output.innerHTML=`<strong>High-ground refuge · +${Math.round(s.refugeElevation)} m</strong><br>${Math.round(s.length)} m boardwalk · ${s.width} m wide<br>${s.atRefuge?'At the refuge':Math.round(s.remainingDistance)+' m to the refuge'} · current elevation +${Math.round(s.playerElevation)} m<br>${s.brokenSections?s.brokenSections+' damaged sections': 'Route intact'} · ${s.refugeWaterDepth>.02?'Water above refuge deck':'Refuge deck above the current water'}`;}
   const near=Math.abs(this.owner.app.player.position.x-this.owner.route.x)<8&&this.owner.app.player.position.z<this.owner.route.startZ+8;
-  this.guidance.hidden=!s.warning&&!s.atRefuge&&!near;
+  this.guidance.hidden=(!s.warning&&!s.atRefuge&&!near)||!!this.owner.app.reviewPose;
   const text=s.refugeWaterDepth>.05?'Refuge flooded. Keep moving to higher ground.':s.atRefuge?'High-ground refuge reached':s.brokenSections?'Damaged boardwalk. Avoid broken sections and keep climbing.':'Follow green lights uphill to the refuge';
   const detail=s.atRefuge?`Elevation +${Math.round(s.refugeElevation)} m · stay above the flood`: `${Math.round(s.remainingDistance)} m remaining · Shift + W to run`;
   const copy=text+'|'+detail;if(copy!==this.lastGuidance){this.lastGuidance=copy;this.guidance.replaceChildren(document.createTextNode(text));const small=document.createElement('small');small.textContent=detail;this.guidance.append(small);}

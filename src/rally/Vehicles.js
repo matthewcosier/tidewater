@@ -1,20 +1,3 @@
-// The drivable cars: the one table the game reads for each car. The picker, the rev
-// gauge, the engine sound, the walking proxy, the nameplate and the wheel placement all read it, so a
-// car is added here once. The physics twin is rally-physics/src/vehicle.rs: `id` is its kind, and
-// mass, radius, mount, width, idle and redline must equal that config (test/vehicle-parity.mjs holds
-// them equal; a stale copy drew wheels off the ground the physics drives on, or a redline the engine
-// never reaches).
-//   name       the display name. The key and file identify the car in rooms and saves.
-//   tag        the one-line kind shown under the picker
-//   file       public/rally/<file>.glb
-//   mass       kg; radius, mount, width m (tyre radius, suspension mount height, tyre width)
-//   tread      m tread depth; pressure Pa (contact patch for tyre marks); sinkage m in sand
-//   idle, redline   rpm, scale the rev gauge and the engine recording's pitch
-//   sound      public/rally/audio recording played for the engine
-//   hull       m [ width, length ] footprint the sea is sampled under (CarWater), = vehicle.rs body
-//   proxy      m half extents [ x, y, z ] of the box the player walks against while the car stands
-//   plate      m above the car's origin where a shared-driving nameplate floats
-//   camera, cameraHeight   m chase boom length and height
 export const VEHICLES = {
 	aster: {
 		id: 0, name: 'Aster RS', tag: 'RWD coupe', file: 'aster_rs',
@@ -35,13 +18,6 @@ export const VEHICLES = {
 		mass: 1450, radius: 0.384, mount: 0.612, width: 0.284, tread: 0.09, pressure: 220000, treadPattern: 'rib', sinkage: 0.02,
 		idle: 900, redline: 9000, sound: 'aster-inline-six.wav',
 		hull: [ 2.20, 4.30 ], proxy: [ 1.12, 0.62, 2.2 ], plate: 1.55, camera: 7.6, cameraHeight: 3.0,
-	},
-	// The approved COSIER studio model, with its own hard points and seven-speed RS gearing.
-	gt3rs: {
-		id: 6, name: 'COSIER GT3 RS', tag: 'Rear-engine flat-six', file: 'cosier_gt3rs',
-		mass: 1450, radius: 0.359, mount: 0.584, width: 0.305, tread: 0.09, pressure: 220000, treadPattern: 'rib', sinkage: 0.02,
-		idle: 900, redline: 9000, sound: 'aster-inline-six.wav',
-		hull: [ 1.90, 4.55 ], proxy: [ 1.014, 0.661, 2.286 ], plate: 1.6, camera: 7.4, cameraHeight: 2.8,
 	},
 	// The Lamborghini-style wedge: built in Blender by tools/rally/build_fulmine_v10.py at the Huracan
 	// EVO's proportions (4.50 x 1.93 x 1.165 m), on vehicle.rs supercar(). No V10 recording yet: it

@@ -3,18 +3,28 @@ import { freshSeed } from './EventRandom.js';
 import { TornadoVisuals } from './TornadoVisuals.js';
 import { HumanDebrisContacts } from './HumanContacts.js';
 import { G } from '../core/Globals.js';
+import { GPU } from '../engine/gpu/GPU.js';
 import { DisasterField,DEFAULTS,validate } from './Field.js';
 import { StructuralDamage,snapshotCollider,restoreCollider,saveSpan,restoreSpans } from './Structures.js';
 import { DisasterBodies } from './Bodies.js';
-import { PROPS,MAX_AWAKE } from '../physics/Props.js';
+import { PROPS,MAX_AWAKE,propBody } from '../physics/Props.js';
+import { rigidEnvironmentalLoad,dragList } from './RigidLoads.js';
 import { DisasterControls } from './Controls.js';
 import { TsunamiSiren } from './Siren.js';
 import { dynamicPressure } from '../physics/Loads.js';
+import { floodHazard, huLimit } from '../people/FloodHazard.js';
+import { cling } from '../people/Cling.js';
+import { ignorerOf } from '../people/EvacuationAI.js';
 const p=new Vector3(),v=new Vector3(),f=new Vector3(),q=new Quaternion();
+const propAt=new Vector3(),propScale=new Vector3(); // bodyOptions scratch: a prop's drawn pose, decomposed for its orientation
 // People tipping (people()): the same body sampled at rest, so the test reads the fluid's push and
 // not the person's own wading drag. atRest stays (0, 0, 0) m/s; tipBody and push are reused scratch, filled per person.
 const atRest=new Vector3(),push={},tipBody={mass:72,area:.7,volume:.072,height:1.7,supported:false,dt:1/60};
+const rigFlow={}; // flow sample under a knocked rig (people()), reused
+const clingFlow={depth:0,ux:0,uz:0}; // depth and flow handed to Cling.js, reused
 const TIP_PUSH=3.2; // m/s²: lateral outside push that tips a standing person (declared stance)
+// declared game choice: a downed rig may rise only below 80% of its h*u line (see people(), the band)
+const RISE_BAND=.8;
 // A motor that returns nothing adds no load (shared, never written).
 const NO_LOAD=Object.freeze({});
 // Load options for one body: the fields Field.acceleration reads (an absent field stays undefined so its
@@ -22,9 +32,14 @@ const NO_LOAD=Object.freeze({});
 function loadOptions(){return {mass:0,area:0,volume:undefined,height:undefined,buoyancy:undefined,waterDrag:undefined,supported:false,dt:0,environmentLoad:undefined,controlLoad:undefined,fixed:undefined};}
 function copyLoadOptions(o,r,supported){o.mass=r.mass;o.area=r.area;o.volume=r.volume;o.height=r.height;o.buoyancy=r.buoyancy;o.waterDrag=r.waterDrag;o.environmentLoad=r.environmentLoad;o.controlLoad=r.controlLoad;o.supported=supported;return o;}
 const fixed=x=>Number.isFinite(x)?x.toFixed(2):'0.00';
+function propBase(r,o){
+ if(r.panel)return o.y-r.half.y;
+ return r.local?o.y+r.local.c.y-r.local.half.y:o.y;
+}
 export class Disasters {
  constructor(app,water){
-  this.app=app;this.water=water;this.field=new DisasterField((x,z)=>app.terrainData.heightAt(x,z));this.field.ambient=()=>({x:G.windDir.value.x*G.windSpeed.value,z:G.windDir.value.y*G.windSpeed.value});
+  this.app=app;this.water=water;this.field=new DisasterField((x,z)=>app.terrainData.heightAt(x,z));this.field.device=GPU.device; // the solver steps on the game's device (Field.attachGPU)
+  this.field.ambient=()=>({x:G.windDir.value.x*G.windSpeed.value,z:G.windDir.value.y*G.windSpeed.value});
   this.paused=false;this.restored=true;this.peakForce=this.rawPeakForce=0;this.limited=0;this.waterMs=0;this.touched=new Set();this.vesselSnapshots=null;this.changedPeople=new Map();this.external=new Set();
   this.humanContacts=new HumanDebrisContacts(this);this.frameDt=0;this.structures=new StructuralDamage(app,this);this.bodies=new DisasterBodies(app,this);this.siren=new TsunamiSiren(app);
   this.propSnapshots=new Map(PROPS.all.map(r=>[r.id,{r,m:r.m?.clone(),walker:r.walker?.slice(),box:r.box,broken:r.broken,spans:r.spans?.map(saveSpan),colliders:[...(r.walker??[]),...(r.box?[r.box]:[])].map(snapshotCollider)}]));
@@ -77,19 +92,14 @@ export class Disasters {
   const demand=.5*1.225*area*((s.wx-body.velocity.x)**2+(s.wz-body.velocity.z)**2)+.5*1025*area*((s.ux-body.velocity.x)**2+(s.uz-body.velocity.z)**2);
   if(!this.restored)this.rawPeakForce=Math.max(this.rawPeakForce,demand);if(body.moored&&demand>18000)body.moored=false;
  }
- before(dt){if(this.paused)return;this.frameDt=dt;const t=performance.now();this.field.advance(dt);this.waterMs=this.waterMs*.9+(performance.now()-t)*.1;this.water.update(this.field);this.app.ferry.ship.environment=this.field;
+ before(dt){if(this.paused||!(Number.isFinite(dt)&&dt>0))return;this.frameDt=dt;const t=performance.now();this.field.advance(dt);this.waterMs=this.waterMs*.9+(performance.now()-t)*.1;this.water.update(this.field);for(const ship of this.app.fleet?.ships||[this.app.ferry.ship])ship.environment=this.field;
+
   this.siren.update(this.field.events.get('tsunami'),false);if(!this.field.events.size){this.loads(dt);this.people(dt);this.parkedSkis(dt);this.updateVisuals(dt);return;}
   for(const adapter of this.external)adapter.before?.(dt,this.field);this.structures.update(dt);this.bodies.update(dt);this.wakeProps();this.loads(dt);this.people(dt);this.parkedSkis(dt);this.updateVisuals(dt);
  }
- wakeProps(){const props=this.app.props;for(const r of PROPS.all){if(r.group&&!r.group.broken)continue;const o=r.position;if(!o)continue;const s=this.field.sample(o.x,o.y,o.z),ground=this.field.terrain(o.x,o.z),wet=s.height>ground+.05,wind=Math.hypot(s.wx,s.wy,s.wz);if(s.shake<.45&&wind<14&&!wet)continue;
+ wakeProps(){const props=this.app.props;for(const r of PROPS.all){if(r.group&&!r.group.broken)continue;const o=r.position;if(!o)continue;const s=this.field.sample(o.x,o.y,o.z),ground=this.field.terrain(o.x,o.z),wet=s.height>Math.max(ground,propBase(r,o))+.05,wind=Math.hypot(s.wx,s.wy,s.wz);if(s.shake<.45&&wind<14&&!wet)continue;
    if(r.panel){if(!r.broken&&s.shake+wind*.15+(wet?8:0)>3)props.breakPanel(r);continue;}if(props.awake.size>=MAX_AWAKE&&!props.awake.has(r.id))continue;r.disasterActive=true;if(!props.awake.has(r.id))props.wake(r);
   }}
- // One options object per body, reused every frame. The old path spread each body record twice a frame
- // ({...record,supported} then {...opts,dt}); with 305 bodies awake at t 4 s of the default tornado that
- // and the literals in loads cost 79 scavenges per 1500 frames (test/disaster-bookkeeping-alloc.mjs).
- // Every options object has the one shape loadOptions makes, so the stores below stay monomorphic and
- // write numbers in place (prototype-linked wrappers, one map per body, boxed every dt: 15 scavenges).
- // They copy the live record each frame: the fields Field.acceleration reads plus the two load hooks.
  bodyOptions(id){
   const supported=this.supported?.has(id)??false;
   if(id===-1){const o=this.carOptions??=loadOptions();o.mass=this.app.rally.profile.mass;o.area=0;o.volume=2;o.height=1.6;o.buoyancy=false;o.supported=this.app.rally.state?.[10]>0;return o;}
@@ -97,13 +107,22 @@ export class Disasters {
   if(r){const map=this.recordOptions??=new WeakMap();let o=map.get(r);if(!o){o=loadOptions();map.set(r,o);}return copyLoadOptions(o,r,supported);}
   const prop=PROPS.all[id];if(!prop||prop.panel)return null;
   const cache=this.propOptions??=[];let o=cache[id];
-  if(!o){o=cache[id]=loadOptions();if(!prop.physical){const h=prop.local.half,volume=8*h.x*h.y*h.z,density=prop.type==='barrel'?590:prop.type==='trap'?70:prop.type==='fence'?90:170;o.fixed={mass:Math.max(.5,volume*density),area:4*h.y*Math.max(h.x,h.z),volume,height:2*h.y};}}
-  return copyLoadOptions(o,prop.physical??o.fixed,supported);
+  if(!o)o=cache[id]=loadOptions();
+  // A prop is loaded like every other disaster body (rigidEnvironmentalLoad): drag in every direction at its load points
+  // and buoyancy from the water it displaces (Props.js propBody: its material, flooded or sealed), never its bounding box.
+  // On the point path the water dragged it sideways only, with 2 per second of vertical damping, so a crate given six
+  // times its weight in lift rose through the flood at up to the 45 m/s² bound and left the surface fast.
+  const body=prop.physical??(o.fixed??=propBody(prop.type,prop.local.half));
+  if(!body.environmentLoad){body.id=id;body.quaternion=new Quaternion();body.environmentLoad=context=>rigidEnvironmentalLoad(this.field,this.app.rally.physics,body,context);}
+  prop.m.decompose(propAt,body.quaternion,propScale);
+  return copyLoadOptions(o,body,supported);
  }
  loads(dt){
   const physics=this.app.rally.physics,ids=physics.disaster_supported(),supported=this.supported??=new Set();
   supported.clear();for(let i=0;i<ids.length;i++)supported.add(ids[i]);
-  const motion=physics.disaster_motion(),sample=this.loadSample??={},context=this.loadContext??={position:p,velocity:v,dt:0,supported:false};
+  const motion=physics.disaster_motion(),sample=this.loadSample??={},context=this.loadContext??={position:p,velocity:v,dt:0,supported:false,drag:dragList(),out:{fx:0,fy:0,fz:0,tx:0,ty:0,tz:0,rawDragForce:0,rawAcceleration:0,limited:false,wet:0,drag:null,dragFirst:0}};
+  // Drag leaves here as load points, not as force: every body's load writes its points into context.drag (RigidLoads.js).
+  context.drag.n=0;
   // Seven floats per body, like the motion list, so its length bounds the loads. Grow with headroom, never per frame.
   if(!this.loadBuffer||this.loadBuffer.length<motion.length)this.loadBuffer=new Float32Array(Math.max(7*64,motion.length*2));
   const loads=this.loadBuffer;let n=0;
@@ -128,13 +147,29 @@ export class Disasters {
    loads[n]=id;loads[n+1]=fx;loads[n+2]=fy;loads[n+3]=fz;loads[n+4]=tx;loads[n+5]=ty;loads[n+6]=tz;n+=7;
    if(!this.restored){this.peakForce=Math.max(this.peakForce,Math.hypot(fx,fy,fz));this.rawPeakForce=Math.max(this.rawPeakForce,s.rawDragForce,s.rawAcceleration*opts.mass,requested);if(s.limited||cap<1||torqueCap<1)this.limited++;if(v.length()>.25)this.touched.add(id);}
   }physics.set_disaster_loads(loads.subarray(0,n));
+  // The whole list each frame, like the loads, so a stopped event or a body that left leaves no fluid behind in the solver.
+  if(physics.set_disaster_drag)physics.set_disaster_drag(context.drag.data.subarray(0,context.drag.n));
+  else if(context.drag.n)throw new Error('This physics build cannot take drag (set_disaster_drag is missing): rebuild public/rally with npm run build:rally');
  }
 
+ // Test and repro hook: who ignores the warning, and why, under a given seed. Specs search seeds
+ // through window.__app.disasters, so the search works in a production build too (a /src import does not).
+ ignorerOf(seed,id){return ignorerOf(seed,id);}
  personSnapshot(person){return {off:person.off?.clone(),world:person.world?.clone(),base:person.base?.clone(),path:person.path?.map(p=>p.clone?.()??(Array.isArray(p)?p.slice():p)),s:person.s,mode:person.mode,posture:person.posture,pace:person.pace,then:person.then,beat:person.beat,gesture:person.gesture};}
  rememberPerson(person){if(!this.changedPeople.has(person))this.changedPeople.set(person,this.peopleBaseline?.get(person)??this.personSnapshot(person));}
  people(dt){const A=this.app;
   for(const person of A.people.list){const at=person.world;if(!at||!person.model)continue;
-   const rd=person.knock?.rag?.rd;if(rd && rd.phase !== 'idle'){rd.waterY=this.field.waterAt(rd.focus.x,rd.focus.z);rd.disasterField=this.field;person.environmentAcceleration={x:0,y:0,z:0};continue;}
+   const rd=person.knock?.rag?.rd;if(rd && rd.phase !== 'idle'){rd.waterY=this.field.waterAt(rd.focus.x,rd.focus.z);rd.disasterField=this.field;person.environmentAcceleration={x:0,y:0,z:0};
+    const flow=this.field.sample(rd.focus.x,rd.focus.y,rd.focus.z,rigFlow);
+    const hu=floodHazard(flow.height,this.field.terrain(rd.focus.x,rd.focus.z),flow.ux,flow.uz),line=huLimit(person);
+    rd.pinned=hu>line||(rd.pinned===true&&hu>RISE_BAND*line);
+    // Clinging (Cling.js): a swept body grabs a pole, post or trunk within arm's reach (the shared
+    // collision cylinders) and holds while its grip lasts. Once the flow drops below the line it lets go
+    // and the rig settles and stands as before.
+    if(rd.pinned){clingFlow.depth=flow.height-this.field.terrain(rd.focus.x,rd.focus.z);clingFlow.ux=flow.ux;clingFlow.uz=flow.uz;cling(rd,person,clingFlow,A.colliders?.cylinders,this.field.events.get('tsunami')?.seed??0,dt,rd.trunks?.());}
+    else rd.cling=null;
+    if(rd.pinned&&rd.phase==='getup')A.people.contact.environment(person,person._bv??atRest);
+    continue;}
    const mass=person.brain?.type==='kid'?35:72,height=person.brain?.type==='kid'?1.25:1.7,area=.7*(height/1.7)**2;
    const velocity=person.knock?.sw?.velocity??person.evacuation?.velocity??person._bv??{x:0,y:0,z:0};
    const floor=A.player.groundAt(at.x,at.z,at.y+.2),supported=person.evacuation?.grounded??(Math.abs(at.y-floor)<.1);
@@ -153,7 +188,7 @@ export class Disasters {
    tipBody.supported=supported&&!person.local;
    tipBody.dt=dt;
    const still=this.field.acceleration(p,atRest,tipBody,push);
-   const tipping=supported&&Math.hypot(still.ax,still.az)>TIP_PUSH,updraft=s.wy>18,flood=s.height-at.y>.9&&(Math.hypot(s.ux,s.uz)>.6||s.height>.25);
+   const tipping=supported&&Math.hypot(still.ax,still.az)>TIP_PUSH,updraft=s.wy>18,flood=!person.knock?.sw&&(floodHazard(s.height,at.y,s.ux,s.uz)>huLimit(person)||(s.height-at.y>.9&&s.height>.25));
    if((!person.knock || person.knock.sw)&&(tipping||updraft||flood)&&A.people.t>(person.bumpUntil||0)){this.rememberPerson(person);A.people.contact.environment(person,velocity);}
   }
   const pl=A.player;pl.environment=this.field;if(pl.mode==='ragdoll'){pl.rag.disasterField=this.field;pl.rag.waterY=this.field.waterAt(pl.rag.focus.x,pl.rag.focus.z);}

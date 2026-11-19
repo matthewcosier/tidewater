@@ -6,7 +6,6 @@
 //   node tools/frame-bench.mjs time  --port 5206 --out DIR --tag before [--views beach,pier] [--scale 1] [--runs 3]
 //   node tools/frame-bench.mjs shots --port 5206 --out DIR --tag before [--views ...]
 //   node tools/frame-bench.mjs diff  --out DIR --a before --b after [--views ...]
-// Add --vehicle gt3rs --views rallyFront,rallyRear to review a car at the coastal road start.
 // Output: DIR/bench-TAG.json (per view: best-of-runs wall / gpu / cpu ms, passes, top CPU self time),
 // DIR/TAG-VIEW.png and .bgra (shots), one summary line per view on stdout.
 import fs from 'node:fs';
@@ -126,20 +125,6 @@ await page.route( 'http://127.0.0.1:5190/**', async ( route ) => {
 page.on( 'pageerror', ( e ) => console.log( 'pageerror', String( e ).slice( 0, 200 ) ) );
 await page.goto( `http://127.0.0.1:${ port }/${ query }` );
 await page.waitForFunction( () => window.__bench, null, { timeout: 240_000 } );
-
-const vehicle = opt( 'vehicle' );
-if ( vehicle ) {
-	await page.evaluate( key => {
-		const rally = window.__app.rally;
-		if ( ! Object.hasOwn( rally.models, key ) ) throw new Error( 'Unknown review vehicle: ' + key );
-		rally.destination = 'coast';
-		if ( rally.vehicleKey === key ) rally.reset();
-		else rally.selectVehicle( key );
-		// Both cars start the same comparison at their static ride height.
-		for ( let i = 0; i < 120; i ++ ) rally.physics.advance( 0.025, 0, 0, 0, 1 );
-		rally.syncModel( 0 );
-	}, vehicle );
-}
 
 if ( mode === 'shots' ) {
 

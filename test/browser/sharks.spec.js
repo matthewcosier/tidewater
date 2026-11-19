@@ -58,7 +58,7 @@ test( 'Sharks respond to a real tsunami current, freeze on pause and reset with 
 		await island( page ); await page.getByRole( 'button', { name: 'Watch sharks', exact: true } ).click();
 		start = await sharks( page ); const m = start.members[ 0 ];
 		await page.getByRole( 'button', { name: 'Disasters', exact: true } ).click();
-		await page.getByLabel( 'Disaster type' ).selectOption( 'tsunami' );
+		await page.getByLabel( 'Disaster type' ).selectOption( 'tsunami' ); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
 		await page.getByLabel( 'Target location' ).selectOption( 'custom' );
 		await page.getByLabel( 'Target X (m)' ).fill( m.x.toFixed( 0 ) );
 		await page.getByLabel( 'Target Z (m)' ).fill( m.z.toFixed( 0 ) );
