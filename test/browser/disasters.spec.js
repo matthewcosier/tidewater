@@ -30,13 +30,12 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
  // Budgets are game seconds on the disaster clock (test/browser/gameTime.js): the same numbers as the old wall-clock polls.
  const within=async(check,budget,what)=>{const r=await untilGameTimeCheck(page,check,budget);expect(r.value,`${what} within ${budget} game s (waited ${r.elapsed.toFixed(1)} s)`).toBeTruthy();};
  const errors=[];let original;page.on('pageerror', e=>errors.push(e.message));
- // WebGPU reports a WGSL compile or pipeline failure on the console, not as a page error: the disasterFar
- // far-field shader failing to compile would otherwise pass this scenario with no water drawn.
  page.on('console', m=>{if(/WGSL|shader|pipeline|GPUValidation/i.test(m.text())&&m.type()!=='debug')errors.push(m.text());});
  await test.step('Given a fresh island and the disaster controls',async()=>{
   await ready(page);
   await page.getByLabel('Disaster type').selectOption(kind.toLowerCase());
   await page.getByLabel('Target location').selectOption('village');
+  { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
   if(kind==='Tsunami')await page.getByLabel('Warning lead time (s)').fill('6');
   await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill(kind==='Earthquake'?'1.4':kind==='Tsunami'?'2':'100');
   await page.getByLabel('Radius (m)').fill('180');
@@ -49,21 +48,16 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
   await page.getByRole('button',{name:'Start disaster',exact:true}).click();
   // Test-side reader, not a driver: the peak water depth over each footprint base and the peak load ratio
   // the structures model saw, every frame of the run.
-  if(kind==='Tsunami')await page.evaluate(()=>{const d=window.__app.disasters,f=d.field,rs=d.structures.records,s={};const peak=window.__tsunamiPeaks=rs.map(r=>({base:r.center.y-r.half.y,depth:0,util:0}));const ts=d.bodies.trees,treePeak=window.__treePeaks=ts.map(()=>0);const tick=()=>{for(let i=0;i<rs.length;i++){const r=rs[i],p=r.center;f.sample(p.x,p.y,p.z,s);const depth=s.height>.1?s.height-peak[i].base:0;if(depth>peak[i].depth)peak[i].depth=depth;if(!r.broken&&(r.utilization??0)>peak[i].util)peak[i].util=r.utilization;}for(let i=0;i<ts.length;i++){if((ts[i].load??0)>treePeak[i])treePeak[i]=ts[i].load;}if(window.__tsunamiPeaks===peak)requestAnimationFrame(tick);};requestAnimationFrame(tick);});
+  if(kind==='Tsunami')await page.evaluate(()=>{const d=window.__app.disasters,f=d.field,rs=d.structures.records,s={};const peak=window.__tsunamiPeaks=rs.map(r=>({base:r.center.y-r.half.y,depth:0,util:0,before:0}));const ts=d.bodies.trees,treePeak=window.__treePeaks=ts.map(()=>0);const tick=()=>{for(let i=0;i<rs.length;i++){const r=rs[i],p=r.center;f.sample(p.x,p.y,p.z,s);const depth=s.height>.1?s.height-peak[i].base:0;if(depth>peak[i].depth)peak[i].depth=depth;if((r.utilization??0)>peak[i].util)peak[i].util=r.utilization;if(!r.broken&&(r.utilization??0)>peak[i].before)peak[i].before=r.utilization;}for(let i=0;i<ts.length;i++){if((ts[i].load??0)>treePeak[i])treePeak[i]=ts[i].load;}if(window.__tsunamiPeaks===peak)requestAnimationFrame(tick);};requestAnimationFrame(tick);});
  });
  if(kind==='Tsunami')await test.step('Then the surge comes ashore: furniture moves, houses above the run-up stand, damage only where the flow passes the material threshold',async()=>{
   const event=()=>page.evaluate(()=>{const e=window.__app.disasters.field.events.get('tsunami');return e&&{seed:e.seed,time:e.time,arrival:e.arrival,launched:!!e.launched,coast:!!e.coastReached};});
   const first=await event();
   expect(first.seed,'the hook fixed the event seed').toBe(TSUNAMI_SEED);
   await within(async()=>(await event()).launched,first.arrival,'the crest launched into the ring');
-  // the surge regression: the banner said "Coastal flooding detected" at launch (the source mound on Joey Island's
-  // north beach counted). Just after launch the crest is still far out: the banner gives the countdown only.
   const banner=page.getByRole('status',{name:'Tsunami warning'});
   await expect(banner).toContainText('Estimated crest arrival');
   await expect(banner).not.toContainText('Coastal flooding detected');
-  // Staged review view (not the action): over the village's shoulder, 45 m up, looking out along the approach
-  // ray past the shoreline, so the incoming crest and the beach share the frame (the approach regression: "View
-  // target" framed the village with the sea out of shot, and both frames were taken 1 s after launch).
   await page.evaluate(()=>{const A=window.__app,e=A.disasters.field.events.get('tsunami'),a=e.direction*Math.PI/180,cx=Math.cos(a),cz=Math.sin(a);const eye={x:e.x+cx*60-cz*70,z:e.z+cz*60+cx*70},look={x:e.x-cx*160,z:e.z-cz*160};const y=A.terrainData.heightAt(eye.x,eye.z)+45;A.setFreeCam(true);A.camera.position.set(eye.x,y,eye.z);const dx=look.x-eye.x,dy=2-y,dz=look.z-eye.z;A.camera.lookAt(look.x,2,look.z);A.fly.setPose(A.camera.position,Math.atan2(-dx,-dz),Math.asin(dy/Math.hypot(dx,dy,dz)));A.fly.velocity.set(0,0,0);A.cameraCut();});
   await within(async()=>{const e=await event();return e.time>=e.arrival-10;},first.arrival,'10 s before the crest estimate');
   await page.screenshot({path:test.info().outputPath('tsunami-surge-approach.png')});
@@ -75,7 +69,7 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
   await page.screenshot({path:test.info().outputPath('tsunami-surge-flooded.png')});
   const peaks=await page.evaluate(()=>window.__tsunamiPeaks),current=await geometry(page);
   const wetted=peaks.filter(p=>p.depth>WETTED),runUp=Math.max(...wetted.map(p=>p.base+p.depth));
-  console.log(`tsunami surge seed ${TSUNAMI_SEED}: run-up ${runUp.toFixed(2)} m, ${wetted.length}/${peaks.length} footprints wetted, ${current.filter(r=>r.broken).length} broken, peak load ratio ${Math.max(...peaks.map(p=>p.util)).toFixed(2)}`);
+  console.log(`tsunami surge seed ${TSUNAMI_SEED}: run-up ${runUp.toFixed(2)} m, ${wetted.length}/${peaks.length} footprints wetted, ${current.filter(r=>r.broken).length} broken, peak load ratio ${Math.max(...peaks.map(p=>p.util)).toFixed(2)}; broken at load/standing peak: ${current.map((r,i)=>r.broken?`${r.name} ${peaks[i].util.toFixed(2)}/${peaks[i].before.toFixed(2)}`:null).filter(Boolean).join(", ")}`);
   expect(wetted.length,'the surge reached some footprints').toBeGreaterThan(0);
   for(let i=0;i<peaks.length;i++){
    if(peaks[i].depth<=WETTED)expect(current[i],`${original[i].name} above the run-up stands untouched`).toEqual(original[i]);
@@ -164,9 +158,9 @@ test('Disaster controls validate parameters and support repeat runs', async({pag
 
 test('Tsunami early warning has physical lead time and gesture-created audio respects mute, volume and lifecycle',async({page})=>{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await test.step('Given a fresh island with audio enabled and no warning source before a gesture',async()=>{await ready(page,true);await expect(status(page)).toHaveAttribute('data-audio-sources','0');await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('pier');await page.getByLabel('Warning lead time (s)').fill('6');await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('8');});
+ await test.step('Given a fresh island with audio enabled and no warning source before a gesture',async()=>{await ready(page,true);await expect(status(page)).toHaveAttribute('data-audio-sources','0');await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('pier');{ const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }await page.getByLabel('Warning lead time (s)').fill('6');await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('8');});
  await test.step('When I start a tsunami then a directional warning leads the wave and actual audio starts',async()=>{await page.getByRole('button',{name:'Start disaster',exact:true}).click();const warning=page.getByRole('status',{name:'Tsunami warning'});await expect(warning).toContainText('Estimated crest arrival');const heading=await page.evaluate(()=>{const e=window.__app.disasters.field.events.get('tsunami');return {drawn:e.direction,asked:e.requestedDirection};});/* The heading is drawn per event within Field.js AZIMUTH_SPREAD (8 deg) of the requested -90; the banner prints it in whole degrees (it printed the raw float, -82.9...). */expect(heading.asked).toBe(-90);expect(Math.abs(heading.drawn-heading.asked)).toBeLessThanOrEqual(8);await expect(warning).toContainText(`direction ${Math.round(heading.drawn)}°`);expect(Number(await warning.getAttribute('data-countdown'))).toBeGreaterThan(6);await expect(status(page)).toHaveAttribute('data-audio-context','running');await expect(status(page)).toHaveAttribute('data-audio-sources','2');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.01);const wave=await page.evaluate(()=>({launched:window.__app.disasters.field.events.get('tsunami').launched,seconds:window.__app.disasters.field.events.get('tsunami').time}));expect(wave.seconds).toBeLessThan(6);expect(wave.launched).toBe(false);});
- await test.step('When I change volume and mute then the actual gain changes',async()=>{await page.getByLabel('Siren volume').fill('70');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);await page.getByLabel('Mute siren').check();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??1)).toBeLessThan(.001);await page.getByLabel('Mute siren').uncheck();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);});
+ await test.step('When I change volume and mute then the actual gain changes',async()=>{await page.getByLabel('Disaster sound volume').fill('70');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);await page.getByLabel('Mute disaster sound').check();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??1)).toBeLessThan(.001);await page.getByLabel('Mute disaster sound').uncheck();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);});
  await test.step('When I use global M then the warning also mutes',async()=>{await page.getByRole('button',{name:'Close disaster controls'}).click();await page.keyboard.press('m');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??1)).toBeLessThan(.001);await page.keyboard.press('m');await page.getByRole('button',{name:'Disasters',exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);});
  await test.step('When M is held while paused then repeated keydown does not toggle mute again',async()=>{
   await page.getByRole('button',{name:'Pause simulation',exact:true}).click();
@@ -180,6 +174,72 @@ test('Tsunami early warning has physical lead time and gesture-created audio res
   await expect(status(page)).toHaveAttribute('data-audio-sources','2');
  });
  await test.step('When I pause, resume, stop and restore then oscillator sources end and restart without accumulation',async()=>{await page.evaluate(()=>{window.__sirenEnded=0;window.__app.disasters.siren.nodes.forEach(o=>o.addEventListener('ended',()=>window.__sirenEnded++));});await page.getByRole('button',{name:'Pause simulation',exact:true}).click();await expect(status(page)).toHaveAttribute('data-audio-sources','0');await expect.poll(()=>page.evaluate(()=>window.__sirenEnded)).toBe(2);await page.getByRole('button',{name:'Resume simulation',exact:true}).click();await expect(status(page)).toHaveAttribute('data-audio-sources','2');await page.getByRole('button',{name:'Stop all disasters',exact:true}).click();await expect(status(page)).toHaveAttribute('data-audio-sources','0');await expect(page.getByRole('status',{name:'Tsunami warning'})).toBeHidden();await page.getByRole('button',{name:'Restore island',exact:true}).click();expect(errors).toEqual([]);});
+});
+
+// A tsunami heard coming (docs/disasters.md, "Sound and camera"). The levels are the game's own: the mixer's disaster bus
+// (window.__app.audio: its live sources and gain) and the level at the listener that drives it (window.__app.disasterSound),
+// read between frames on the disaster clock, never the speakers. The flood is the strongest wave from the panel, which
+// reaches the player at the boardwalk (test/browser/player-flood.spec.js).
+test('A tsunami is heard coming: the roar at the listener rises as the front nears, mutes with the panel and stops after Restore',async({page})=>{
+ test.setTimeout(SCENARIO_TIMEOUT_MS);
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));let rows;
+ await test.step('Given the player at the boardwalk with sound on and no disaster sound playing',async()=>{
+  await ready(page,true);
+  await expect.poll(()=>page.evaluate(()=>window.__app.audio?.enabled??false)).toBe(true);
+  expect(await page.evaluate(()=>window.__app.audio.disasterSources??0)).toBe(0);
+  await page.getByLabel('Disaster type').selectOption('tsunami');{ const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
+  await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('25');await page.getByLabel('Warning lead time (s)').fill('3');
+ });
+ await test.step('When I start the strongest tsunami with a three second warning',async()=>{
+  await page.getByRole('button',{name:'Start disaster',exact:true}).click();await expect(page.getByRole('alert',{name:'Disaster validation'})).toBeEmpty();
+  await expect.poll(()=>page.evaluate(()=>window.__app.disasters.field.events.size)).toBeGreaterThan(0);
+  const seed=await page.evaluate(()=>window.__app.disasters.runSeed);test.info().annotations.push({type:'disaster-seed',description:String(seed)});console.log(`[disaster-seed] tsunami heard: ${seed}`);
+ });
+ await test.step('Then the roar at the listener rises as the breaking front nears and the flood passing me has live disaster sound',async()=>{
+  // Read-only rows every 0.25 game s between frames until the flood has stood at the listener for 8 s (or the crest
+  // estimate + 40 s): the flood depth at the camera from the field, the front distance and level the sound module
+  // heard, the mixer's live disaster sources and nodes, and the module's own milliseconds a frame.
+  rows=await page.evaluate(async()=>{
+   const a=window.__app,f=a.disasters.field,out=[],until=f.events.get('tsunami').arrival+40,wall=performance.now()+600000;let next=0,wetFor=0;
+   const between=()=>new Promise(resolve=>requestAnimationFrame(()=>{const check=()=>a.simulationPending?setTimeout(check,4):resolve();check();}));
+   const num=(v,d)=>Number.isFinite(v)?v:d;
+   while(f.time<until&&f.events.has('tsunami')&&performance.now()<wall){await between();if(f.time<next)continue;next=f.time+.25;
+    const c=a.camera.position,depth=Math.max(0,f.waterAt(c.x,c.z)-a.terrainData.heightAt(c.x,c.z)),s=a.disasterSound?.state;
+    out.push({time:f.time,launched:!!f.events.get('tsunami')?.launched,depth,front:num(s?.front,99999),level:num(s?.level,-999),sources:a.audio?.disasterSources??0,nodes:a.audio?.disasterNodes??0,ms:num(s?.ms,0),msMax:num(s?.msMax,0)});
+    if(depth>.1&&(wetFor+=.25)>8)break;}
+   return out;});
+  await test.info().attach('tsunami-heard-frames',{body:JSON.stringify(rows),contentType:'application/json'});
+  const passing=rows.filter(r=>r.depth>.1);
+  expect(passing.length,'the flood reached the listener').toBeGreaterThan(0);
+  expect(Math.max(...passing.map(r=>r.sources)),'a disaster sound other than the siren has a live source while the flood passes the listener').toBeGreaterThan(0);
+  const median=v=>v.slice().sort((x,y)=>x-y)[Math.floor(v.length/2)];
+  const before=rows.filter(r=>!r.launched),far=rows.filter(r=>r.front>=400&&r.front<99999);
+  expect(Math.max(...before.map(r=>r.level)),'nothing is heard of the wave before it is launched').toBeLessThan(-60);
+  expect(far.length,'the breaking front is heard while it is still 400 m or more away').toBeGreaterThan(0);
+  // The approach: the 30 game s before the flood reaches the listener, against the run before it. Not binned by front
+  // distance over the whole event: after launch the sea near the boardwalk surges in and out 50 to 100 m off, well
+  // before the bore comes, and is heard as what it is.
+  const tA=passing[0].time,approach=rows.filter(r=>r.time>=tA-30&&r.time<tA),earlier=approach.filter(r=>r.time<tA-15).map(r=>r.level),later=approach.filter(r=>r.time>=tA-15).map(r=>r.level);
+  const prior=rows.filter(r=>r.launched&&r.time<tA-30).map(r=>r.level),arrival=Math.max(...rows.filter(r=>r.time>=tA&&r.time<tA+5).map(r=>r.level));
+  const levels=`approach ${median(earlier).toFixed(1)} then ${median(later).toFixed(1)}, before it ${prior.length?median(prior).toFixed(1):'none'}, as the flood arrives ${arrival.toFixed(1)} LUFS`;
+  expect(median(later)-median(earlier),`louder over the last 15 s of the approach than the 15 s before: ${levels}`).toBeGreaterThan(3);
+  expect(arrival-(prior.length?median(prior):median(earlier)),`at least 10 dB louder as the flood reaches the listener than before its approach: ${levels}`).toBeGreaterThan(10);
+  const peak=rows.reduce((x,y)=>y.level>x.level?y:x);
+  expect(peak.depth>.1||peak.front<=50,`the loudest moment (${peak.level.toFixed(1)} LUFS at ${peak.time.toFixed(1)} s) is as the flood reaches the listener (front ${peak.front} m, depth ${peak.depth.toFixed(2)} m)`).toBe(true);
+  console.log(`[disaster-sound] ${levels}; live nodes max ${Math.max(...rows.map(r=>r.nodes))}, sources max ${Math.max(...rows.map(r=>r.sources))}; module ${(rows.reduce((x,r)=>x+r.ms,0)/rows.length).toFixed(3)} ms a frame (mean of its own average), max ${Math.max(...rows.map(r=>r.msMax)).toFixed(3)} ms`);
+  // Evidence only: the flood at the listener (the wet lens) with the laboratory closed, then reopened
+  await page.getByRole('button',{name:'Close disaster controls',exact:true}).click();await page.screenshot({path:`${process.env.PW_OUT||'test-results'}/tsunami-heard-flood.png`});await page.getByRole('button',{name:'Disasters',exact:true}).click();
+ });
+ await test.step('When I mute disaster sound in the panel then the disaster bus is silent, and unmuting brings it back',async()=>{
+  await page.getByLabel('Mute disaster sound').check();await expect.poll(()=>page.evaluate(()=>window.__app.audio.disasterGain)).toBeLessThan(.001);
+  await page.getByLabel('Mute disaster sound').uncheck();await expect.poll(()=>page.evaluate(()=>window.__app.audio.disasterGain)).toBeGreaterThan(.5);
+  await page.screenshot({path:`${process.env.PW_OUT||'test-results'}/tsunami-heard-panel.png`});
+ });
+ await test.step('When I stop the disasters and restore the island then no disaster sound is left sounding',async()=>{
+  await page.getByRole('button',{name:'Stop all disasters',exact:true}).click();await page.getByRole('button',{name:'Restore island',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.__app.audio.disasterSources)).toBe(0);
+  await expect(status(page)).toHaveAttribute('data-audio-sources','0');expect(errors).toEqual([]);
+ });
 });
 
 test('Tsunami 3000 m: the wall tops the highest summit',async({page})=>{

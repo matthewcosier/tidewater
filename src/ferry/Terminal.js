@@ -1,6 +1,7 @@
 import { Vector3, Matrix4, Quaternion, InstancedMesh, Mesh, mergeGeometries } from '../engine/index.js';
 import { loadModel } from '../rally/VehicleModel.js';
 import { terminalPaint } from './TerminalPaint.js';
+import { paintFor } from './carPaint.js';
 import { WORLD } from '../world/WorldLayout.js';
 import { TERMINAL_SITE } from './terminalSite.js';
 
@@ -46,10 +47,13 @@ export function applyTerminalSite( terrain, site = TERMINAL_SITE, place = WORLD.
 
 }
 
-// Parked cars (tools/ferry/parked_cars.py: our four car models at about 5k triangles each, wheels 1600 each), one
+// Parked cars (tools/ferry/parked_cars.py: the five everyday cars of everyday_cars.py at about 9k triangles and the
+// Ridgeback at 5.5k, wheels up to 1600 each), one
 // instanced mesh per car part across the bays they fill, so the whole car park is a few dozen draws.
 // About two bays in three are taken, the mix and the pick fixed by the bay's index.
-const PARKED = [ [ 'ParkedWagon', 0.34 ], [ 'ParkedPickup', 0.3 ], [ 'ParkedAster', 0.2 ], [ 'ParkedJeep', 0.16 ] ];
+// The mix roughly the 2024 new-car sales one (SUVs over half, utes and vans about a fifth, passenger cars the
+// rest); each bay's paint from carPaint.js by its own hash, a tint on the instanced body at no extra draw.
+const PARKED = [ [ 'ParkedSuv', 0.3 ], [ 'ParkedUte', 0.22 ], [ 'ParkedHatch', 0.18 ], [ 'ParkedSedan', 0.14 ], [ 'ParkedVan', 0.08 ], [ 'ParkedJeep', 0.08 ] ];
 const PARKED_SHARE = 0.66, PAVING = 3.2;
 const bayHash = ( i, salt ) => { const x = Math.sin( i * 127.1 + salt * 311.7 ) * 43758.5453; return x - Math.floor( x ); };
 
@@ -219,7 +223,7 @@ export class Terminal {
 			if ( bayHash( i, 1 ) > PARKED_SHARE ) return;
 			let pick = bayHash( i, 2 ), name = PARKED[ 0 ][ 0 ];
 			for ( const [ n, share ] of PARKED ) { if ( pick < share ) { name = n; break; } pick -= share; }
-			byModel.get( name ).push( [ x, z, yaw ] );
+			byModel.get( name ).push( [ x, z, yaw, paintFor( bayHash( i, 3 ) ) ] );
 
 		} );
 		const group = this.parked = model.root;
@@ -237,6 +241,7 @@ export class Terminal {
 				if ( ! list.length ) continue;
 				const mesh = new InstancedMesh( part.geometry, part.material, list.length );
 				list.forEach( ( [ x, z, yaw ], i ) => mesh.setMatrixAt( i, m.compose( this.toWorld( [ x, PAVING, z ], p ), q.setFromAxisAngle( up, yaw + this.yaw ), one ) ) );
+				if ( part.material.name === 'Paint' ) list.forEach( ( e, i ) => mesh.setColorAt( i, e[ 3 ] ) );
 				mesh.castShadow = part.castShadow;
 				mesh.receiveShadow = true;
 				mesh.layers.mask = part.layers.mask;

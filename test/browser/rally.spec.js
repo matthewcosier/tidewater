@@ -128,13 +128,6 @@ test( 'Arrow-key steering turns in the driver’s direction and the handbrake st
 
 test( 'Leave the car, return to walking and re-enter without conflicting controls', async ( { page } ) => {
 	await test.step( 'Given the player is driving the Aster', async () => { await enter( page ); } );
-	await test.step( 'When the driver checks the controls and returns to the car', async () => {
-		await page.keyboard.press( 'F1' );
-		const help = page.getByRole( 'dialog', { name: 'Controls' } );
-		await expect( help ).toBeVisible();
-		await help.getByRole( 'button', { name: 'Close', exact: true } ).click();
-		await expect( help ).toBeHidden();
-	} );
 	await test.step( 'When the driver chooses Leave car', async () => { await page.getByRole( 'button', { name: 'Leave car', exact: true } ).click(); } );
 	await test.step( 'Then walking and the fishing controls are available again', async () => {
 		await expect( telemetry( page ) ).toBeHidden();

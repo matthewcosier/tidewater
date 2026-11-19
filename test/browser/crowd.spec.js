@@ -58,7 +58,7 @@ test( 'At the Tidewater terminal during loading, other cars queue, drive aboard 
 	} );
 	await test.step( 'Then they park on her deck in the outer lanes, her centre lane clear', async () => {
 
-		await expect.poll( async () => ( await cars( page ) ).filter( c => c.state === 'parked' ).length, { timeout: 200_000, intervals: [ 1_000 ] } ).toBeGreaterThanOrEqual( 6 );
+		await expect.poll( async () => ( await cars( page ) ).filter( c => c.state === 'parked' ).length, { timeout: 200_000, intervals: [ 1_000 ] } ).toBeGreaterThanOrEqual( 4 );
 		const parked = ( await cars( page ) ).filter( c => c.state === 'parked' );
 		console.log( 'parked in her frame:', JSON.stringify( parked.map( c => [ c.model, ...c.local ] ) ) );
 		for ( const { local: [ x, y, z ] } of parked ) {

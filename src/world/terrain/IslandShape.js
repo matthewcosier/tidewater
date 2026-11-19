@@ -1,6 +1,11 @@
 // Hand-authored large-scale structure of the island: the ridge skeleton of the volcanic
 // massif, sea stacks off the headlands and the footpaths around the village.
 
+import { joeyAt } from '../../joey/JoeyFrame.js';
+
+// Joey Island's ridges are written in its layout frame and placed with joeyAt (src/joey/JoeyFrame.js).
+const joeyRidge = r => r.map( ( [ x, z, h, w ] ) => [ ...joeyAt( x, z ), h, w ] );
+
 // Ridge skeleton: polylines of [x, z, crest height] (optional 4th value: half width, defaults
 // to 2.2 * height + 40 m). Each polyline is the max of its segments; polylines are combined
 // with a p-norm so junctions and saddles round off naturally. The cross profile is concave
@@ -24,12 +29,15 @@ export const RIDGES = [
 	[ [ 270, - 430, 115 ], [ 390, - 550, 52 ] ],
 	// Joey Island, across the strait to the south: a long low plateau (the main body) and the
 	// Dudley-like peninsula at its east end; the Joey ferry terminal sits on the north-west corner
-	[ [ - 170, 800, 24, 95 ], [ - 40, 788, 40, 110 ], [ 110, 782, 50, 120 ], [ 250, 770, 42, 110 ], [ 330, 752, 28, 85 ] ],
-	[ [ 370, 730, 24, 75 ], [ 460, 712, 38, 90 ], [ 530, 728, 22, 70 ] ],
+	...[
+		[ [ - 170, 800, 24, 95 ], [ - 40, 788, 40, 110 ], [ 110, 782, 50, 120 ], [ 250, 770, 42, 110 ], [ 330, 752, 28, 85 ] ],
+		[ [ 370, 730, 24, 75 ], [ 460, 712, 38, 90 ], [ 530, 728, 22, 70 ] ],
+	].map( joeyRidge ),
 ];
 
-// Joey Island's outline: ellipses [x, z, rx, rz] blended with a smooth minimum.
-export const JOEY = [ [ 70, 790, 290, 100 ], [ 340, 752, 90, 55 ], [ 462, 718, 112, 82 ] ];
+// Joey Island's outline: ellipses [x, z, rx, rz] blended with a smooth minimum, in its
+// layout frame (src/joey/JoeyFrame.js), placed where WORLD.joeyTerminal stands.
+export const JOEY = [ [ 70, 790, 290, 100 ], [ 340, 752, 90, 55 ], [ 462, 718, 112, 82 ] ].map( ( [ x, z, rx, rz ] ) => [ ...joeyAt( x, z ), rx, rz ] );
 
 for ( const r of RIDGES ) for ( const p of r ) if ( p.length < 4 ) p.push( 2.5 * p[ 2 ] + 50 );
 

@@ -206,7 +206,13 @@ export class CoastalRoad {
 		const driftOf = path => perSide( path, ( p, nx, nz ) => Math.min( 1, Math.max( 0.15, 0.25 + ( p.h - terrain.heightAt( p.x + nx * 16, p.z + nz * 16 ) - 0.2 ) * 0.7 ) ) );
 		// How sandy the island is beside the road (its own sand cover): verges are beach
 		// sand on the coast and by the town, grass and soil inland and in the hills.
-		const sandCover = ( x, z ) => ( terrain.sand[ Math.floor( ( z - terrain.origin ) / terrain.texel ) * terrain.res + Math.floor( ( x - terrain.origin ) / terrain.texel ) ] || 0 ) / 255;
+		// Per axis over the rectangular domain (stride resX); a sample off the domain is bare (0).
+		const sandCover = ( x, z ) => {
+
+			const i = Math.floor( ( x - terrain.originX ) / terrain.texel ), j = Math.floor( ( z - terrain.originZ ) / terrain.texel );
+			return i < 0 || j < 0 || i >= terrain.resX || j >= terrain.resZ ? 0 : terrain.sand[ j * terrain.resX + i ] / 255;
+
+		};
 		const sandyOf = path => soften( perSide( path, ( p, nx, nz ) => { const t = Math.min( 1, Math.max( 0, ( Math.max( sandCover( p.x + nx * 5, p.z + nz * 5 ), sandCover( p.x + nx * 9, p.z + nz * 9 ) ) - 0.1 ) / 0.5 ) ); return t * t * ( 3 - 2 * t ); } ) );
 		const strip = ( builder, path, offsets, lift, extra = null ) => {
 			const pts = path.points, count = offsets.length, base = builder.positions.length / 3, normal = new Vector3();

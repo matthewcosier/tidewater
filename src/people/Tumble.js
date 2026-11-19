@@ -12,7 +12,9 @@
 import { Ragdoll } from '../player/Ragdoll.js';
 import { capsuleContact, solveCapsules, collideWalker } from './ArticulatedContacts.js';
 import { Matrix4, Quaternion, Vector3 } from '../engine/index.js';
+import { trunkCylinders } from '../rally/WorldPhysics.js';
 
+const TRUNK_REFRESH = 1; // s
 export const MAX = 64;  // all 26 beach + up to 32 ferry people fit; every active rig has 14 bodies
 const SUB = 2, GETUPS = [ 'getup_back', 'getup_belly' ], CLIPS = [ ...GETUPS, 'tread', 'swim' ];   // tread and swim: overboard (Contact.js)
 const PELVIS = 'Bip01 Pelvis';
@@ -68,6 +70,19 @@ export class Tumbles {
 		// the ground the ragdoll meets is the player's (terrain, walkable boxes, walls), whatever he is doing now
 		const P = () => hub.app.player;
 		this.world = { get terrain() { return P().terrain; }, get colliders() { return P().colliders; }, get groundProviders() { return P().groundProviders; }, reef: null };
+		let trunkSet = null, trunkT = - Infinity;
+		this.trunks = () => {
+
+			const t = hub.t ?? 0;
+			if ( ! trunkSet || t < trunkT || t - trunkT > TRUNK_REFRESH ) {
+
+				trunkSet = trunkCylinders( hub.app.vegetation, hub.app.terrainData ?? P().terrain );
+				trunkT = t;
+
+			}
+			return trunkSet;
+
+		};
 
 	}
 
@@ -112,7 +127,7 @@ export class Tumbles {
 		if ( ! this.can( p ) ) return null;
 		const r = this.rig( p ), y = p.yaw || 0, g = p.group.position;
 		r.rd.waterY = - Infinity;
-		if ( ! r.rd.start( r.avatar, { x: g.x, y: g.y, z: g.z }, { x: 0, y: Math.sin( y / 2 ), z: 0, w: Math.cos( y / 2 ) }, v, { impulse: J, point, spin: { x: 0, y: 0, z: 0 } } ) ) return null;
+		if ( ! r.rd.start( r.avatar, { x: g.x, y: g.y, z: g.z }, { x: 0, y: Math.sin( y / 2 ), z: 0, w: Math.cos( y / 2 ) }, v, { impulse: J, point, spin: { x: 0, y: 0, z: 0 }, trunks: this.trunks } ) ) return null;
 		this.live.add( p );
 		this.count ++;
 		return r;
