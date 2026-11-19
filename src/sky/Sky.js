@@ -40,6 +40,9 @@ export class Sky {
 
 		this.atmosphere = atmosphere;
 		this.clouds = null; // set later: Clouds (module with cloudsSample / cloudsSampleView)
+		// set later, optional: a storm over the sky (disasters/StormSky.js: module with stormSky / stormSunDisk).
+		// Both return their input unchanged with no storm, so the fine-day sky is the same to the last bit.
+		this.storm = null;
 		this.params = new UniformBlock( 'SkyParams', {
 			moonDir: [ 'vec3f', new Vector3( - 0.3, 0.5, 0.8 ).normalize() ],
 			sunDiskIntensity: [ 'f32', 1 ],
@@ -65,9 +68,13 @@ export class Sky {
 		const clouds = this.clouds;
 		const deps = [ commonModule, this.atmosphere.module ];
 		if ( clouds ) deps.push( clouds.module );
+		const storm = this.storm;
+		if ( storm ) deps.push( storm.module );
+		// the storm's overcast lies under the cloud shell: composited over the finished sky radiance
+		const stormed = ( sky, fine ) => storm ? `stormSky( dir, ${ sky }, ${ fine } )` : sky;
 		const composite = ( sampler ) => clouds
-			? `let c = ${ sampler }( dir );\n\treturn base * c.a + c.rgb;`
-			: 'return base;';
+			? `let c = ${ sampler }( dir );\n\treturn ${ stormed( 'base * c.a + c.rgb', false ) };`
+			: `return ${ stormed( 'base', false ) };`;
 
 		return new ShaderModule( {
 			name: 'sky',
@@ -191,9 +198,9 @@ fn skyReflectionRadiance( dir: vec3f ) -> vec3f {
 // with cloudsSunTransmittance: no sun through the cut-off remainder of thick cloud)
 fn skyViewRadiance( dir: vec3f ) -> vec3f {
 	let base = skyBackground( dir, 1.0 ) + skyMoon( dir );
-	let sun = skySunDisk( dir );
+	let sun = skySunDisk( dir )${ storm ? ' * stormSunDisk()' : '' };
 	${ clouds ? `let c = cloudsSampleView( dir );
-	return base * c.a + sun * cloudsSunTransmittance( c.a ) + c.rgb;` : 'return base + sun;' }
+	return ${ stormed( 'base * c.a + sun * cloudsSunTransmittance( c.a ) + c.rgb', true ) };` : `return ${ stormed( 'base + sun', true ) };` }
 }
 `,
 		} );

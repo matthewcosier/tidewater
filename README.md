@@ -1,11 +1,13 @@
 # Tidewater
 
+> **Experimental snapshot — Storm clouds and sky lighting.** This historical build may contain unfinished behaviour. The [playable branch](https://github.com/matthewcosier/tidewater/tree/playable) contains the GT3 and phone features.
+
 An island fishing game for the browser. Cast from the pier, the beach or your own boat, fight the fish,
 sell your catch to Joe at the fish stand, and spend it on better gear at Marta's chandlery. Around it is a
 real-time tropical island and ocean: swim the reef, drive the boat out to deep water, and watch a humpback
 breach. It runs directly on WebGPU and WGSL with its own small rendering engine, no framework.
 
-**Play it:** https://dgreenheck.github.io/tidewater/
+To play this branch locally, run `npm ci` followed by `npm run dev`. The [original Tidewater demo](https://dgreenheck.github.io/tidewater/) is hosted by the upstream project.
 
 ![Fishing off the pier at golden hour](docs/screenshot.jpg)
 
@@ -75,16 +77,14 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
 
 | Key | Action |
 |---|---|
-| W A S D | Move on foot. In a car, W accelerates, S brakes or reverses, and A/D steer. |
+| W A S D | Move |
 | Mouse | Look (click to capture the mouse, Esc to release) |
 | Shift | Sprint / boat boost |
-| Space | Jump / swim up / car handbrake |
-| W + S | Hold both pedals near a standstill for a rear-drive burnout. Release S to launch. |
-| J | Toggle driving aids. Switch them off for deliberate power slides. |
+| Space | Jump / swim up |
 | C | Crouch / dive |
-| E | Interact: board the boat, take or leave the helm, step ashore, enter or leave a car, trade with the fish buyer or the chandlery |
+| E | Interact: board the boat, take or leave the helm, step ashore, trade with the fish buyer or the chandlery |
 | V | Boat camera at the helm (1st / 3rd person) |
-| R | Take out / put away the fishing rod, or recover the car while driving |
+| R | Take out / put away the fishing rod |
 | Left mouse | Hold to wind up, release to cast · strike when a fish takes the bait · hold to reel |
 | Right mouse | Reel an empty line in |
 | I or Tab | Cooler / fish hold and the fish log |
@@ -96,6 +96,18 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
 | H | Settings panel |
 | P | Photo mode |
 | F1 or ? | All controls |
+
+### Hang glider
+
+| Key | Action |
+|---|---|
+| E | At the launch deck: clip in. After landing: step off beside the wing. In flight: bail out (you fall, the glider flies on) |
+| W | On the deck: run off the ramp. In flight: pull the bar in to speed up |
+| S | Push the bar out to slow down (held too long, it stalls) |
+| A / D | Shift your weight to bank and turn |
+| Space | Flare: push out hard just above the ground to land |
+| R | Reset the glider at the summit |
+| C | Chase or harness camera |
 
 ### Fishing
 
@@ -126,13 +138,11 @@ Add these to the URL, for example `?fly&noAudio`:
 
 ## Running locally
 
-The compiled physics module and the two largest new vehicle models are stored losslessly under `assets/distribution/`. `npm ci`, `npm run dev` and `npm run build` prepare the ordinary runtime files in `public/`. If installation scripts are disabled, run `npm run assets:prepare` before direct tests. Building the Rust module or rebuilding either model refreshes its distribution file. Game and server URLs stay the same.
-
 ### Driving
 
 Pick a car in the lower-left card after entering the island, the **Aster RS** (a rear-drive
 rally coupe), the **Ridgeback 4x4** (a lifted, Blender-built 4x4 with mud-terrain tyres and a
-recorded HEMI V8), the **COSIER GT3 RS** (the white-and-red Blender car with its own seven-speed gearbox), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
+recorded HEMI V8), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
 hero cars: the **Fulmine V10** (a mid-engine wedge supercar), the **Corsaire W16** (a horseshoe-grille
 hypercar) or the **Sandpiper 1600** (an open-tub beach buggy), and choose where to start: the beach, the coastal road, the town backroad,
 the mountain summit, or either beach entrance. The Cedar wagon and Ridge pickup stay parked
@@ -173,7 +183,7 @@ engine, steering and wheels, through steam and smoke to fire. **T** repairs.
 The **Tidewater Spirit**, a 50 m car ferry, lies in the bay. Step onto her decks to come
 aboard, walk up to the bridge and press **E** at the wheel to take her helm: **A/D** turn the
 wheel, **W/S** work the throttles, **X** stops the engines, **C** centres the wheel,
-**Shift+A/D** runs the bow thruster, **H** sounds the horn, **V** swaps the bridge and chase
+**G** runs her engines up to boost and back, **Shift+A/D** runs the bow thruster, **H** sounds the horn, **V** swaps the bridge and chase
 views, **E** leaves the helm. Run her aground or into the pier and the hull takes damage; hole
 her and she floods. See `docs/ferry.md`.
 

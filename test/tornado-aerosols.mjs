@@ -4,6 +4,7 @@ import {TornadoParticles} from '../src/disasters/TornadoVisuals.js';
 import {dragRate,advanceAerosol,parcelRadius,parcelOpticalDepth} from '../src/disasters/AerosolDynamics.js';
 import {TornadoVisuals} from '../src/disasters/TornadoVisuals.js';
 import {DisasterField} from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 import {Scene,Vector3} from '../src/engine/index.js';
 
 const event={time:3,intensity:100,radius:180,duration:90};
@@ -68,7 +69,7 @@ test('Large slip and tiny response times remain finite and never overshoot carri
 });
 
 test('Shared wake air changes actual parcel transport and calm ground does not emit dust',()=>{
- const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:90});e.time=3;
+ const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:90});e.time=tornadoLifecycle(e,{}).genesis+3;
  const a=new TornadoParticles(f,{dust:1,flecks:0,turbulence:false});a.update(0,e);
  const p=a.dust[0];Object.assign(p.p,{x:20,y:40,z:0});p.diameter=10e-6;p.v={x:0,y:0,z:0};
  f.registerAirModifier((_x,_y,_z,air)=>{air.wx=12;air.wy=8;air.wz=-4;});
@@ -91,7 +92,7 @@ test('Cloud spread conserves extinction area while the bounded pool expires, dep
 });
 
 test('Submitting particle geometry settles position, size and rotation history before a paused render',()=>{
- const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:90});e.time=3;
+ const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:90});e.time=tornadoLifecycle(e,{}).genesis+3;
  const v=new TornadoVisuals({scene:new Scene(),camera:{position:new Vector3(0,50,120)},sceneRenderer:{opaqueCopy:{depthTexture:null}}},f);
  for(let i=0;i<60;i++)v.update(1/60);
  assert.ok(v.dust.geometry.instanceCount>20);

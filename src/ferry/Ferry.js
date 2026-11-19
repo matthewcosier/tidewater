@@ -3,7 +3,7 @@ import { loadModel } from '../rally/VehicleModel.js';
 import { FerryShip } from './FerryShip.js';
 import { FerryDeck } from './FerryDeck.js';
 import { ferryPaint } from './FerryPaint.js';
-import { FerryService } from './FerryService.js';
+import { FerryService, FLEET } from './FerryService.js';
 import { Traffic } from './Traffic.js';
 import { Crowd } from './Crowd.js';
 import './ferry.css';
@@ -15,7 +15,6 @@ import './ferry.css';
 // deck as a moving platform in the car physics. Blows to the hull add up: a hard
 // enough one holes her, and she floods, settles and resets to her mooring.
 const HULL_STRENGTH = 8e6;         // J of impact energy to hole her
-const PLATFORM = 1;                // the car physics platform id for her vehicle deck
 // Berth work. The stern ramp pivot turns about its own X: stowed upright as authored, lowered
 // with a little droop so its flaps rest on the linkspan's landing plate.
 const RAMP_STOWED = - Math.PI / 2 * 0.98, RAMP_LOWERED = 0.04;
@@ -37,9 +36,17 @@ function setText( el, value ) { if ( el.textContent !== value ) el.textContent =
 
 export class Ferry {
 
-	constructor( app ) {
+	// `spec`: her entry in FLEET (name, home berth, car physics platform id, livery); `lead`: the
+	// first ship, whose helm readout and departures board the others share (one of each on screen).
+	constructor( app, spec = FLEET[ 0 ], lead = null ) {
 
 		this.app = app;
+		this.name = spec.name;
+		this.home = spec.home;
+		this.platformId = spec.platform;  // her vehicle deck's id in the car physics
+		this.livery = spec.livery || null;
+		this.lead = lead;
+		this.rivals = [];                 // the other ships on the service (FerryService passing, partner)
 		this.hull = 0;             // damage, 0 sound .. 1 holed
 		this.flood = 0;            // 0 .. 1 while sinking
 		this.driven = false;
@@ -57,7 +64,7 @@ export class Ferry {
 		// her berths: { name, label, terminal, x, z, yaw }; `at` is the one she lies at (or last left)
 		const terminals = [ [ app.terminal, 'Tidewater' ], [ app.joeyTerminal, 'Joey Island' ] ].filter( ( [ t ] ) => t );
 		this.berths = terminals.map( ( [ terminal, label ] ) => ( { name: terminal.name, label, terminal, ...terminal.berth() } ) );
-		this.at = this.berths[ 0 ];
+		this.at = this.berths[ this.home ] || this.berths[ 0 ];
 
 	}
 
@@ -72,10 +79,17 @@ export class Ferry {
 	async init() {
 
 		const base = import.meta.env.BASE_URL;
-		const [ model, data ] = await Promise.all( [ loadModel( `${ base }ferry/ferry.glb`, { customize: ferryPaint } ), fetch( `${ base }ferry/ferry_colliders.json` ).then( r => r.json() ) ] );
+		// a sister's livery band in her own colour (FLEET), the rest of the paint as the Spirit's
+		const livery = this.livery, customize = livery ? ( source, options ) => {
+
+			if ( source.name === 'LiveryTeal' ) { options.color.r = livery[ 0 ]; options.color.g = livery[ 1 ]; options.color.b = livery[ 2 ]; }
+			return ferryPaint( source, options );
+
+		} : ferryPaint;
+		const [ model, data ] = await Promise.all( [ loadModel( `${ base }ferry/ferry.glb`, { customize } ), fetch( `${ base }ferry/ferry_colliders.json` ).then( r => r.json() ) ] );
 		this.model = model;
 		this.root = model.root;
-		this.root.name = 'Ferry';
+		this.root.name = this.lead ? `Ferry: ${ this.name }` : 'Ferry';
 		// her small interior fittings (the builder's 'Props' group) cast no shadows
 		for ( const mesh of model.pivots.get( 'Ferry Props' )?.children || [] ) mesh.castShadow = false;
 		this.app.scene.add( this.root );
@@ -86,7 +100,7 @@ export class Ferry {
 		const qs = new URLSearchParams( location.search );
 		this.service = new FerryService( this, { short: qs.get( 'ferryTimetable' ) === 'short', enabled: qs.get( 'ferryService' ) !== 'off' } );
 		this.deck = new FerryDeck( this, data );
-		this.app.player.vessel = this.deck;
+		if ( ! this.app.player.vessel ) this.app.player.vessel = this.deck;
 		const pivot = name => model.pivots.get( name );
 		this.parts = { wheel: pivot( 'HelmWheel' ), port: pivot( 'ThrottlePort' ), starboard: pivot( 'ThrottleStarboard' ), radars: [ pivot( 'RadarX' ), pivot( 'RadarS' ) ].filter( Boolean ), ramp: pivot( 'SternRamp' ) };
 		// Her vehicle deck in the car physics: every 'car' box, in her frame (pitch 0), and the
@@ -95,7 +109,12 @@ export class Ferry {
 		this.buildPlatform();
 		this.buildHud();
 		this.sync();
-		// other people's cars and foot passengers on the service (Traffic.js, Crowd.js), in the background
+		// other people's cars and foot passengers on the service (Traffic.js, Crowd.js), in the background.
+		// One of each, built by the lead: both queue at both terminals, so a second pair would stack
+		// cars and walkers on the same lane spots. The cars serve the fleet (Traffic.fleet(): each
+		// boards and leaves whichever ship lies at its terminal); the walkers still board the lead
+		// only (docs/ferry.md, Two ships: remainder).
+		if ( this.lead ) return;
 		this.traffic = new Traffic( this.app, this );
 		this.crowd = new Crowd( this.app, this );
 		this.traffic.init().catch( e => console.warn( 'Traffic: cars failed to load', e ) );
@@ -126,7 +145,8 @@ export class Ferry {
 		this.berthWork( dt );
 		const t0 = performance.now();
 		this.traffic?.update( dt );
-		const pending = this.app.ragdollPool?.prepare( this.crowd?.people ?? [], dt, this.app.disasters?.field );
+		// the ragdoll pool is prepared once a frame, for the crowd (the lead ship's)
+		const pending = this.crowd ? this.app.ragdollPool?.prepare( this.crowd.people, dt, this.app.disasters?.field ) : null;
 		if ( pending ) return pending.then( () => this.finishCrowd( dt, t0 ) );
 		this.finishCrowd( dt, t0 );
 	}
@@ -144,7 +164,7 @@ export class Ferry {
 		if ( this.platform ) {
 
 			const s = this.ship, p = s.position, q = s.quaternion, v = s.velocity;
-			this.app.rally.physics.set_platform( PLATFORM, new Float32Array( [ p.x, p.y - this.flood * 3.2, p.z, q.x, q.y, q.z, q.w, v.x, 0, v.z, 0, s.r, 0 ] ) );
+			this.app.rally.physics.set_platform( this.platformId, new Float32Array( [ p.x, p.y - this.flood * 3.2, p.z, q.x, q.y, q.z, q.w, v.x, 0, v.z, 0, s.r, 0 ] ) );
 
 		}
 		if ( this.shake > 0 ) this.shake = Math.max( 0, this.shake - dt * 2 );
@@ -194,9 +214,9 @@ export class Ferry {
 
 	toggleRamp() { if ( this.rampGoal > 0 ) this.raiseRamp(); else this.lowerRamp(); }
 
-	lowerRamp() {
+	lowerRamp( quiet = false ) {
 
-		if ( ! this.ship.moored || this.castingOff ) { this.app.game?.toast?.( 'Make fast before lowering the ramp', 2500 ); return false; }
+		if ( ! this.ship.moored || this.castingOff ) { if ( ! quiet ) this.app.game?.toast?.( 'Make fast before lowering the ramp', 2500 ); return false; }
 		this.rampGoal = 1;
 		return true;
 
@@ -252,14 +272,12 @@ export class Ferry {
 		this.gangway = toward( this.gangway, gangwayGoal, dt / GANGWAY_TIME );
 		const moving = this.ramp !== rampWas || this.gangway !== gangwayWas;
 		if ( this.parts.ramp ) this.parts.ramp.rotation.x = RAMP_STOWED + ( RAMP_LOWERED - RAMP_STOWED ) * smooth( this.ramp );
-		// the gangway and the linkspan barrier at the terminal she lies at; the other's stowed and down
-		for ( const b of this.berths ) {
-
-			b.terminal.setGangway?.( b === this.at ? smooth( this.gangway ) : 1 );
-			b.terminal.setBarrier?.( ! ( b === this.at && moored && this.ramp >= 1 ) );
-			b.terminal.updateBoom?.( dt );
-
-		}
+		// the gangway and the linkspan barrier at the terminal she lies at (or last left); with two
+		// ships on the service the other terminal is her partner's to work
+		const b = this.at;
+		b.terminal.setGangway?.( smooth( this.gangway ) );
+		b.terminal.setBarrier?.( ! ( moored && this.ramp >= 1 ) );
+		b.terminal.updateBoom?.( dt );
 		if ( ( this.ramp >= 1 ) !== this.platformLowered ) this.buildPlatform();
 		this.whine( moving );
 		if ( this.castingOff && this.ramp === 0 && this.gangway === 1 ) {
@@ -292,7 +310,7 @@ export class Ferry {
 
 		}
 		this.platformBoxes = [ ...this.carBoxes, ...transom, ...stern ];
-		this.platform = !! physics?.add_platform_pitched?.( PLATFORM, new Float32Array( this.platformBoxes ) );
+		this.platform = !! physics?.add_platform_pitched?.( this.platformId, new Float32Array( this.platformBoxes ) );
 
 	}
 
@@ -366,12 +384,12 @@ export class Ferry {
 		if ( this.flood < 1 ) return;
 		const { player } = this.app;
 		if ( player.mode === 'ferry' || player.mode === 'ferry-helm' ) { this.deck.overboard( player ); this.onHelm( false ); }
-		this.at = this.berths[ 0 ];
+		this.at = this.berths[ this.home ] || this.berths[ 0 ];
 		this.ship = new FerryShip( this.at );
 		this.ship.moor( this.at );
 		this.hull = 0; this.flood = 0;
 		this.ramp = this.rampGoal = 0; this.castingOff = false;
-		this.app.game?.toast?.( 'The Tidewater Spirit has been refloated at her mooring', 3500 );
+		this.app.game?.toast?.( `The ${ this.name } has been refloated at her mooring`, 3500 );
 
 	}
 
@@ -426,6 +444,7 @@ export class Ferry {
 
 	buildHud() {
 
+		if ( this.lead ) { this.buildSisterHud( this.lead ); return; }
 		const hud = this.hud = document.createElement( 'section' );
 		hud.className = 'fy-helm tw-glass';
 		hud.setAttribute( 'role', 'status' );
@@ -436,10 +455,11 @@ export class Ferry {
 			<div class="fy-read"><span class="fy-heading">000</span><small>heading</small></div>
 			<div class="fy-read"><span class="fy-rudder">0</span><small>rudder</small></div>
 			<div class="fy-read"><span class="fy-lever">Stop</span><small>throttles</small></div>
+			<div class="fy-read fy-boost-read" title="Boost halves the open-water passage; berthing is at a crawl either way"><span class="fy-boost">Off</span><small>boost</small></div>
 			<div class="fy-read fy-hull-read"><span class="fy-hull">Sound</span><small>hull</small></div>
 			<div class="fy-read fy-lines-read"><span class="fy-lines">On</span><small>lines</small></div>
 			<div class="fy-read"><span class="fy-ramp">Up</span><small>ramp</small></div>
-			<p class="fy-keys"><span class="fy-keyrow"><span><kbd>A</kbd><kbd>D</kbd> wheel</span> · <span><kbd>W</kbd><kbd>S</kbd> throttles</span> · <span><kbd>X</kbd> stop</span> · <span><kbd>C</kbd> centre</span> · <span><kbd>Shift</kbd>+<kbd>A</kbd><kbd>D</kbd> thruster</span></span><span class="fy-keyrow"><span><kbd>L</kbd> lines</span> · <span><kbd>R</kbd> ramp</span> · <span><kbd>H</kbd> horn</span> · <span><kbd>V</kbd> view</span> · <span><kbd>E</kbd> leave</span></span></p>`;
+			<p class="fy-keys"><span class="fy-keyrow"><span><kbd>A</kbd><kbd>D</kbd> wheel</span> · <span><kbd>W</kbd><kbd>S</kbd> throttles</span> · <span><kbd>X</kbd> stop</span> · <span><kbd>C</kbd> centre</span> · <span><kbd>G</kbd> boost</span> · <span><kbd>Shift</kbd>+<kbd>A</kbd><kbd>D</kbd> thruster</span></span><span class="fy-keyrow"><span><kbd>L</kbd> lines</span> · <span><kbd>R</kbd> ramp</span> · <span><kbd>H</kbd> horn</span> · <span><kbd>V</kbd> view</span> · <span><kbd>E</kbd> leave</span></span></p>`;
 		( document.querySelector( '.tw-root' ) || document.body ).appendChild( hud );
 		// the departures board: what the service does next, near a terminal or aboard
 		const board = this.board = document.createElement( 'section' );
@@ -447,33 +467,69 @@ export class Ferry {
 		board.setAttribute( 'role', 'status' );
 		board.setAttribute( 'aria-label', 'Ferry departures' );
 		board.hidden = true;
-		board.innerHTML = '<small>Tidewater Spirit</small><span class="fy-board-line"></span>';
 		( document.querySelector( '.tw-root' ) || document.body ).appendChild( board );
-		this.boardLine = board.querySelector( '.fy-board-line' );
+		this.tele = hud;
+		this.addBoardRow();
+		if ( typeof ResizeObserver === 'function' ) new ResizeObserver( () => document.documentElement.style.setProperty( '--fy-helm-h', `${ hud.offsetHeight }px` ) ).observe( hud );
 		const $ = s => hud.querySelector( s );
-		this.read = { speed: $( '.fy-speed' ), heading: $( '.fy-heading' ), rudder: $( '.fy-rudder' ), lever: $( '.fy-lever' ), hull: $( '.fy-hull' ), hullRead: $( '.fy-hull-read' ), lines: $( '.fy-lines' ), linesRead: $( '.fy-lines-read' ), ramp: $( '.fy-ramp' ) };
+		this.read = { speed: $( '.fy-speed' ), heading: $( '.fy-heading' ), rudder: $( '.fy-rudder' ), lever: $( '.fy-lever' ), boost: $( '.fy-boost' ), boostRead: $( '.fy-boost-read' ), hull: $( '.fy-hull' ), hullRead: $( '.fy-hull-read' ), lines: $( '.fy-lines' ), linesRead: $( '.fy-lines-read' ), ramp: $( '.fy-ramp' ) };
+
+	}
+
+	// A sister shares the lead's helm readout (it shows whichever ship is at the helm) and her
+	// departures board (a row each); her own state for tests and tools goes on a hidden element.
+	buildSisterHud( lead ) {
+
+		this.hud = lead.hud;
+		this.read = lead.read;
+		this.board = lead.board;
+		const tele = this.tele = document.createElement( 'div' );
+		tele.className = 'fy-telemetry';
+		tele.hidden = true;
+		tele.dataset.ship = this.name;
+		( document.querySelector( '.tw-root' ) || document.body ).appendChild( tele );
+		this.addBoardRow();
+
+	}
+
+	// Her row on the departures board: her name, then what she does next.
+	addBoardRow() {
+
+		const row = this.boardRow = document.createElement( 'div' );
+		row.className = 'fy-board-row';
+		row.dataset.ship = this.name;
+		row.innerHTML = `<small>${ this.name }</small><span class="fy-board-line"></span>`;
+		this.board.appendChild( row );
+		this.boardLine = row.querySelector( '.fy-board-line' );
 
 	}
 
 	updateBoard() {
 
-		const board = this.board, service = this.service, { text } = service.board(), mode = this.app.player.mode, cam = this.app.camera.position;
-		setData( board, 'phase', service.phase );
-		setData( board, 'leg', service.phase === 'sailing' ? service.pilot.leg : '' );
-		setData( board, 'crossing', service.lastCrossing.toFixed( 1 ) );
+		const board = this.board, row = this.boardRow, service = this.service, { text } = service.board(), mode = this.app.player.mode, cam = this.app.camera.position;
+		const phase = service.phase, leg = service.phase === 'sailing' ? service.pilot.leg : '', crossing = service.lastCrossing.toFixed( 1 );
+		// the lead's state stays on the board itself, where the specs have always read it
+		if ( ! this.lead ) { setData( board, 'phase', phase ); setData( board, 'leg', leg ); setData( board, 'crossing', crossing ); }
+		setData( row, 'phase', phase );
+		setData( row, 'leg', leg );
+		setData( row, 'crossing', crossing );
 		if ( this.boardLine.textContent !== text ) this.boardLine.textContent = text;
 		const aboard = mode === 'ferry' || mode === 'ferry-helm';
 		const hidden = ! service.enabled || ( ! aboard && ! this.berths.some( b => Math.hypot( cam.x - b.x, cam.z - b.z ) < 300 ) );
-		if ( board.hidden !== hidden ) board.hidden = hidden;
+		if ( row.hidden !== hidden ) row.hidden = hidden;
+		let shown = false;
+		for ( let i = 0; i < board.children.length; i ++ ) if ( ! board.children[ i ].hidden ) shown = true;
+		if ( board.hidden === shown ) board.hidden = ! shown;
 
 	}
 
 	updateHud() {
 
-		const ship = this.ship, r = this.read, hud = this.hud, set = setData, text = setText;
+		const ship = this.ship, r = this.read, hud = this.tele, set = setData, text = setText;
 		// State for tests and tools, kept current whether or not the readout shows.
 		set( hud, 'speed', ship.speed.toFixed( 3 ) );
 		set( hud, 'hull', this.hull.toFixed( 3 ) );
+		set( hud, 'boost', ship.boostLevel.toFixed( 3 ) );
 		set( hud, 'x', ship.position.x.toFixed( 2 ) );
 		set( hud, 'z', ship.position.z.toFixed( 2 ) );
 		set( hud, 'yaw', ship.yaw.toFixed( 4 ) );
@@ -484,7 +540,8 @@ export class Ferry {
 		set( hud, 'horn', this.lastHorn );
 		set( hud, 'berth', ship.moored ? this.at.name : '' );
 		this.updateBoard();
-		if ( hud.hidden ) return;
+		// the readout is shared: only the ship at the helm writes it
+		if ( ! this.driven ) return;
 		const knots = ship.speed * 1.9438 * Math.sign( ship.u || 1 );
 		const heading = ( ( Math.atan2( Math.sin( ship.yaw ), - Math.cos( ship.yaw ) ) * 180 / Math.PI ) + 360 ) % 360;
 		const rudder = Math.round( ship.rudder * 180 / Math.PI );
@@ -493,6 +550,9 @@ export class Ferry {
 		text( r.heading, String( Math.round( heading ) ).padStart( 3, '0' ) );
 		text( r.rudder, rudder === 0 ? '0' : `${ Math.abs( rudder ) }° ${ rudder > 0 ? 'stbd' : 'port' }` );
 		text( r.lever, lever === 0 ? 'Stop' : `${ lever > 0 ? 'Ahead' : 'Astern' } ${ Math.abs( lever ) }%` );
+		// boost: the switch, then the engines spooling up or easing back (FerryShip BOOST_SPOOL)
+		text( r.boost, ship.boost ? ( ship.boostLevel > 0.95 ? 'On' : 'Running up' ) : ship.boostLevel > 0.05 ? 'Easing' : 'Off' );
+		set( r.boostRead, 'level', ship.boost ? 'on' : '' );
 		text( r.hull, this.flood > 0 ? 'Flooding' : this.hull < 0.02 ? 'Sound' : `${ Math.round( this.hull * 100 ) }% damage` );
 		set( r.hullRead, 'level', this.flood > 0 || this.hull > 0.5 ? 'bad' : this.hull > 0.02 ? 'hurt' : '' );
 		text( r.lines, this.castingOff ? 'Letting go' : ! ship.moored ? 'Off' : ship.settled ? 'On' : 'Hauling in' );

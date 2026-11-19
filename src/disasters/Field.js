@@ -1,8 +1,10 @@
 import { GRAVITY, AIR_DENSITY, SEA_WATER_DENSITY, quadraticDrag, buoyancy as lift } from '../physics/Loads.js';
 import { WaterGrid, nWaveEta, nWaveSpeed } from './WaterGrid.js';
+import { WaterGridGPU } from './WaterGridGPU.js';
 import { mulberry32 } from '../util/Noise.js';
 import { freshSeed } from './EventRandom.js';
-import { tornadoMotion } from './TornadoMotion.js'; // tornado motion block only
+import { tornadoMotion } from './TornadoMotion.js';
+import { tornadoVortex, addTornadoWind, VORTEX } from './TornadoVortex.js'; // tornado block only
 export const DEFAULTS = Object.freeze({earthquake:{intensity:0.7,radius:160,duration:25,speed:180,frequency:2,width:55,direction:0,x:40,z:-115},tsunami:{warningLead:90,intensity:10,radius:220,duration:60,speed:18,frequency:2,width:55,direction:-90,x:40,z:-25},tornado:{intensity:65,radius:100,duration:60,speed:3,frequency:2,width:55,direction:0,x:40,z:-115}});
 export const LIMITS = {intensity:{earthquake:[0.05,2],tsunami:[0.5,3000],tornado:[5,120]},warningLead:[3,300],radius:[20,400],duration:[3,180],speed:{earthquake:[60,600],tsunami:[3,50],tornado:[0,15]},frequency:[0.2,8],width:[15,160],direction:[-180,180],x:[-950,950],z:[-950,950]};
 export const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -55,7 +57,7 @@ function sweepsSea(terrain,c) {
 // Crest celerity c = sqrt( g ( d + H ) ) over still depth d. The warning countdown is that travel
 // time from the source to the shoreline, integrated along the approach ray.
 const G=9.81; // m/s^2
-const APPROACH_TIME=75; // s: game choice inside the 60–120 s approach band
+const APPROACH_TIME=75;
 const APPROACH_STEP=4; // m: half a grid cell
 const MIN_LAUNCH=120; // m: the old fixed distance, kept as the floor near the grid edge
 const SPONGE=8*OUTER_GRID.dx; // m: the outer grid's absorbing edge band (8 cells)
@@ -67,23 +69,9 @@ function distanceToEdge(x,z,dx,dz,half=OUTER_HALF) {
  const tz=dz>0?(half-z)/dz:dz<0?(-half-z)/dz:Infinity;
  return Math.max(0,Math.min(tx,tz));
 }
-// Crest speed (m/s) of height H over still depth d, in two regimes, both checked against the solver on the
-// real island (test/tsunami-approach.mjs):
-// - Below the breaking limit, H < 0.78 d (McCowan 1894), the crest is a long wave: c = sqrt( g ( d + H ) ).
-//   The 2 m surge crest reached the 3 m gauges 2.5-10% inside that prediction.
-// - At or above it the front is a bore of the full height (the solver keeps it: 6.4 m of crest over the
-//   6.3 m gauge for the 10 m wave): Stoker's (1957) bore celerity sqrt( g ( d + H ) ( 2 d + H ) / ( 2 d ) ),
-//   held to the dam-break front 2 sqrt( g ( d + H ) ) (Ritter 1892) as d goes to 0. Both are at least
-//   sqrt( g H ), so a wall far taller than the water (the 3000 m preset) is never slower than that.
-// Was: Stoker with a depth-limited height min( H, 0.78 d ) everywhere. The 10 m countdown ran 20% late on
-// the -60 shelf and the 2 m ones 11-14% early.
-// - A wall fed from beyond the ring (sustained, e.farField) is a bore with its supply behind it, so it keeps
-//   Stoker's speed at any height: the dam-break cap is the front of a reservoir at rest, which a hump launched
-//   at rest becomes. Capped, the 3000 m wall (348 m/s over 90 m of sea, Stoker 732 m/s) carried too little
-//   momentum for its height and slumped to 1430 m within 3 s of the hand-off.
 const BREAKING=0.78; // McCowan breaking limit, H / d
 function crestCelerity(d,H,sustained=false) {
- if(H<BREAKING*d)return Math.sqrt(G*(d+H));
+ if(H<BREAKING*d)return 3*Math.sqrt(G*(d+H))-2*Math.sqrt(G*d);
  const stoker=Math.sqrt(G*(d+H)*(2*d+H)/(2*d));
  return sustained?stoker:Math.min(stoker,2*Math.sqrt(G*(d+H)));
 }
@@ -159,9 +147,9 @@ function arrivalField(terrain,H,tx,tz,sustained=false) {
  return time;
 }
 const AZIMUTH_SPREAD=8; // deg either side of the chosen direction: a source region, not a point
-const APPROACH_BAND=Object.freeze([60,90]); // s of long-wave travel to the source, inside the 60–120 s approach band
+const APPROACH_BAND=Object.freeze([60,90]);
 const CREST_WIDTH_BAND=Object.freeze([1,1.4]); // x the crest width (wavelength); 1 keeps the 6-cell floor
-const DRAWDOWN_BAND=Object.freeze([0.45,0.6]); // trough depth / H: approximately half the crest height
+const DRAWDOWN_BAND=Object.freeze([0.45,0.6]);
 const TROUGH_LEAD_BAND=Object.freeze([2,2.5]); // crest widths from crest to trough centre (was 2.2 fixed)
 const FAR_FIELD_BAND=Object.freeze([25,30]); // s of approach from beyond the ring before the hand-off
 // The wall's crest is a long wave: it stays at H for LONG_WAVE x its water depth behind the front, then falls
@@ -184,7 +172,7 @@ export function planApproach(terrain,config={}) {
  const random=mulberry32(seed),band=range=>range[0]+(range[1]-range[0])*random();
  const direction=c.direction+(2*random()-1)*AZIMUTH_SPREAD; // deg: the wave's actual heading
  const approachTime=band(APPROACH_BAND),widthScale=band(CREST_WIDTH_BAND);
- const drawdown=band(DRAWDOWN_BAND),troughLead=band(TROUGH_LEAD_BAND),farTime=band(FAR_FIELD_BAND); // preserve draw order for deterministic seeded replays
+ const drawdown=band(DRAWDOWN_BAND),troughLead=band(TROUGH_LEAD_BAND),farTime=band(FAR_FIELD_BAND);
  const plan={seed,requestedDirection:c.direction,direction,warning:c.warningLead};
  const H=c.intensity,a=direction*Math.PI/180,cx=Math.cos(a),cz=Math.sin(a);
  // Crest Gaussian width (m) of the front. The Advanced width is the floor; very high walls get a front at least
@@ -203,6 +191,7 @@ export function planApproach(terrain,config={}) {
  const cell=v=>Math.round((v+OUTER_HALF)/OUTER_GRID.dx)*OUTER_GRID.dx-OUTER_HALF; // m: nearest cell centre
  let shore=0;
  while(shore<room&&(terrain(c.x-cx*shore,c.z-cz*shore)>-MIN_TRAVEL_DEPTH||terrain(cell(c.x-cx*shore),cell(c.z-cz*shore))>=0))shore+=APPROACH_STEP;
+ plan.shoreDistance=shore; // m out from the target: the village shoreline, the coast watch's seaward edge
  let time=arrivalField(terrain,H,c.x-cx*shore,c.z-cz*shore);
  // Least arrival time over each source line, binned by its distance s back from the target (m). A line
  // holds the cells within half a cell of s, as the solver's plane crest does.
@@ -228,13 +217,6 @@ export function planApproach(terrain,config={}) {
  const rayTime=s=>time[Math.round((c.z-cz*s+OUTER_HALF)/dx)*n+Math.round((c.x-cx*s+OUTER_HALF)/dx)]??Infinity;
  let s=shore;
  while(s+APPROACH_STEP<=room&&!(rayTime(s)>=approachTime&&rayTime(s)<Infinity&&lineTime(s)>=approachTime&&lineTime(s)<Infinity))s+=APPROACH_STEP;
- // Land behind the sea approach (Joey Island behind the village bay) is crossed: the front is far
- // wider than the island and wraps round it, so the source sits in the open sea beyond.
- // The crest may not start on a shoal or the far side of a beach: it moves on into open water.
- // Only the crest must: a real trough is tens of km long and a bay far smaller than it drains as a whole,
- // so the trough may start in the bay. Moving it beyond Joey Island left 0.165 H of drawdown in the lee.
- // A sea shallower than that all the way to the grid edge keeps the spot where the travel time was met:
- // walking on to the edge gave a flat 2 m sea a 154 s countdown, outside the 60–120 s approach band.
  let deep=s;
  while(deep+APPROACH_STEP<=room&&terrain(c.x-cx*deep,c.z-cz*deep)>-MIN_SOURCE_DEPTH)deep+=APPROACH_STEP;
  if(terrain(c.x-cx*deep,c.z-cz*deep)<=-MIN_SOURCE_DEPTH)s=deep;
@@ -307,22 +289,29 @@ export class DisasterField {
   // A tsunami also runs the outer ring, and the inner grid nests in it.
   if(kind==='tsunami'&&!this.outer){this.outer=new WaterGrid(this.terrain,OUTER_GRID);this.water?.nestIn(this.outer);}
   if(needsWater&&!this.water)this.water=new WaterGrid(this.terrain,{...WATER_GRID,parent:this.outer??null});
+  if(kind==='tornado')this.detachGPU();else this.attachGPU();
   if(kind==='tsunami'){const e=this.events.get(kind);e.launched=false;Object.assign(e,planApproach(this.terrain,c));}return this.events.get(kind);}
  // A tsunami runs its warning, its approach to the shore, then `duration` of flooding.
- endTime(e){return e.kind==='tsunami'?e.warning+(e.approach??0)+e.duration:e.duration;}
- stop(){this.events.clear();this.water=null;this.outer=null;}
+ endTime(e){return e.kind==='tsunami'?e.warning+(e.approach??0)+e.duration:e.kind==='tornado'?this.tornadoEnd(e):e.duration;}
+ stop(){this.detachGPU();this.events.clear();this.water=null;this.outer=null;}
+ attachGPU(){
+  const device=this.device;if(this.gpuWater||!device||this.gpuLost||!this.water||this.events.has('tornado'))return;
+  if(!this.lostHooked){this.lostHooked=true;device.lost?.then(()=>{this.gpuLost=true;this.detachGPU();});}
+  this.gpuOuter=this.outer?new WaterGridGPU(device,this.outer):null;
+  this.gpuWater=new WaterGridGPU(device,this.water,{parent:this.gpuOuter});
+ }
+ detachGPU(){this.gpuWater?.destroy();this.gpuOuter?.destroy();this.gpuWater=null;this.gpuOuter=null;}
+ // A host write (launch, impulse) goes up to the GPU state. After a launch the wrapper's unspent lag is dropped as
+ // the host's is (WaterGrid.launch: the calm sea's lag replayed on the launched wave moved the 3000 m face 97-161 m).
+ uploadGPU(launched){for(const g of [this.gpuOuter,this.gpuWater]){if(!g)continue;if(launched){g.grid.time+=g.lag;g.lag=0;}g.upload();}}
  reset(){this.stop();this.time=0;this.paused=false;}
- // e.coastReached ("Coastal flooding detected", the evacuation route) means the bore is ashore at the coast the
- // warning names: land within the event's radius (m) of the target (coastWatch, WaterGrid.landWithin, built at launch).
- // Was any wet land in the grid: the plane crest's source line lies off other shores (Surge 2 m seed 7: the north
- // bay mouth, 900 m from the village) and their 0.1-0.3 m of run-up 0.2 s after launch flagged the coast with the
- // crest 97 s out (the surge regression, test/tsunami-coast.mjs). A target with no land in its radius watches the grid.
- advance(dt){if(this.paused||!this.events.size||!Number.isFinite(dt)||dt<=0)return;dt=Math.min(dt,0.1);this.time+=dt;for(const [k,e] of this.events){e.time+=dt;if(k==='tsunami'&&e.time>=(e.launchTime??e.warning)&&!e.launched){this.outer?.launch(e);this.water.launch(e);this.coastWatch=this.water.landWithin(e.x,e.z,e.radius);e.launched=true;}if(e.time>=this.endTime(e)){this.events.delete(k);}}if(this.water){if(!this.events.has('tsunami')&&!this.events.has('tornado')){this.water=null;this.outer=null;return;}this.applySurfaceWind();this.outer?.advance(dt);this.water.advance(dt);const e=this.events.get('tsunami');if(e?.launched&&!e.coastReached&&(this.coastWatch.length?this.water.floods(this.coastWatch):this.water.stats.inundatedArea>0)){e.coastReached=true;e.firstImpact=e.time;}}}
+ advance(dt){if(this.paused||!this.events.size||!Number.isFinite(dt)||dt<=0)return;dt=Math.min(dt,0.1);this.time+=dt;for(const [k,e] of this.events){e.time+=dt;if(k==='tsunami'&&e.time>=(e.launchTime??e.warning)&&!e.launched){this.outer?.launch(e);this.water.launch(e);this.uploadGPU(true);this.coastWatch=this.water.landWithin(e.x,e.z,e.radius,e.direction,(e.shoreDistance??Infinity)+this.water.dx);e.launched=true;}if(e.time>=this.endTime(e)){this.events.delete(k);}}if(this.water){if(!this.events.has('tsunami')&&!this.events.has('tornado')){this.detachGPU();this.water=null;this.outer=null;return;}if(this.gpuWater){this.gpuOuter?.advance(dt);this.gpuWater.advance(dt);}else{this.applySurfaceWind();this.outer?.advance(dt);this.water.advance(dt);}const e=this.events.get('tsunami');if(e?.launched&&!e.coastReached&&(this.coastWatch.length?this.water.floods(this.coastWatch):this.water.stats.inundatedArea>0)){e.coastReached=true;e.firstImpact=e.time;}}}
  applySurfaceWind(){
   const grid=this.water;if(!grid)return;const n=grid.n,ambient=this.ambient?.()??{x:0,z:0};grid.wind??={x:new Float32Array(n*n),z:new Float32Array(n*n)};grid.wind.x.fill(ambient.x);grid.wind.z.fill(ambient.z);
-  const e=this.events.get('tornado');if(e){const c=this.center(e),env=this.envelope(e),core=e.radius*.18,I=this.tornadoIntensity(e);
-  const loX=Math.max(0,Math.floor((c.x-e.radius-grid.x)/grid.dx)),hiX=Math.min(n-1,Math.ceil((c.x+e.radius-grid.x)/grid.dx)),loZ=Math.max(0,Math.floor((c.z-e.radius-grid.z)/grid.dx)),hiZ=Math.min(n-1,Math.ceil((c.z+e.radius-grid.z)/grid.dx));
-  for(let j=loZ;j<=hiZ;j++)for(let i=loX;i<=hiX;i++){const k=j*n+i;if(grid.h[k]<=1e-5)continue;const dx=grid.x+i*grid.dx-c.x,dz=grid.z+j*grid.dx-c.z,r=Math.hypot(dx,dz),safe=Math.max(.1,r),fall=smooth(1-r/e.radius),rank=r<core?r/core:core/safe,w=I*rank*fall*env;grid.wind.x[k]+=(-dz/safe-dx/safe*.28)*w;grid.wind.z[k]+=(dx/safe-dz/safe*.28)*w;}}
+  // The tornado's own vortex (TornadoVortex.js) at 10 m above the water, the height the 0.0015 drag coefficient is quoted for.
+  const e=this.events.get('tornado');if(e){const c=this.center(e),v=this.tornadoVortex(e),reach=VORTEX.reach*e.radius,air=this.surfaceAir??={wx:0,wy:0,wz:0};
+  const loX=Math.max(0,Math.floor((c.x-reach-grid.x)/grid.dx)),hiX=Math.min(n-1,Math.ceil((c.x+reach-grid.x)/grid.dx)),loZ=Math.max(0,Math.floor((c.z-reach-grid.z)/grid.dx)),hiZ=Math.min(n-1,Math.ceil((c.z+reach-grid.z)/grid.dx));
+  if(v.vmax>0)for(let j=loZ;j<=hiZ;j++)for(let i=loX;i<=hiX;i++){const k=j*n+i;if(grid.h[k]<=1e-5)continue;const dx=grid.x+i*grid.dx-c.x,dz=grid.z+j*grid.dx-c.z;air.wx=air.wz=0;addTornadoWind(v,dx,dz,Math.hypot(dx,dz),10,air);grid.wind.x[k]+=air.wx;grid.wind.z[k]+=air.wz;}}
   // Wake modifiers act on this same air field at the water surface. A bounds
   // getter is evaluated once per source per grid update, not once per wet cell.
   const air={wx:0,wy:0,wz:0};for(const entry of this.airModifiers){const b=typeof entry.bounds==='function'?entry.bounds():entry.bounds;if(entry.bounds&&!b)continue;
@@ -332,12 +321,13 @@ export class DisasterField {
  }
  envelope(e){return smooth(e.time/1.2)*smooth((this.endTime(e)-e.time)/2);}
  center(e){const a=e.direction*Math.PI/180,travel=e.kind==='tornado'?e.time*e.speed:0;if(e.kind==='tornado'){const m=this.tornadoMotion(e);return {x:e.x+Math.cos(a)*travel+m.cx,z:e.z+Math.sin(a)*travel+m.cz};}return {x:e.x+Math.cos(a)*travel,z:e.z+Math.sin(a)*travel};}
- // ---- Tornado track, intensity pulses and gusts (lane 2026-10-05) ----
- // The only tornado-motion code in this file; the rest of Field.js belongs to the water lane.
- // Each tornado takes a fresh seed, so its track wanders, its speed changes and its wind
- // pulses and gusts differently every run; the model and its sources are in TornadoMotion.js.
  tornadoMotion(e){return tornadoMotion(e);}
  tornadoIntensity(e){const m=this.tornadoMotion(e);return e.intensity*m.factor;}
+ // The one vortex (TornadoVortex.js) at e.time: Burgers-Rott swirl, surface inflow and updraft, its strength from the
+ // shared life cycle (TornadoFunnel.tornadoLifecycle). The funnel, the particles and the plume read the same record.
+ tornadoVortex(e){const m=this.tornadoMotion(e);return tornadoVortex(e,e.intensity*m.factor,1+Math.abs(m.pulse)+Math.abs(m.gust)+Math.abs(m.flutter));}
+ // The event is over once the vortex has decayed (at the configured duration) and what it lofted has landed.
+ tornadoEnd(e){return this.tornadoVortex(e).end;}
  // ---- end of the tornado motion block ----
  waterAt(x,z){const s=this.gridAt(x,z)?.sample(x,z,this.waterAtScratch??={});const h=s?.height??0;return this.farFieldAt(x,z,this.farScratch??={})?h+this.farScratch.height:h;}
  // The analytic wall (e.farField) where no solver holds it: everywhere until the hand-off, then outside the ring.
@@ -364,7 +354,7 @@ export class DisasterField {
  farCrest(e){return e.launchDistance+e.farField.speed*(e.launchTime-e.time);}
  // The inner grid where it covers (x, z), else the outer ring (the approach), else none.
  gridAt(x,z){const w=this.water;return w&&this.outer&&!w.contains(x,z)?this.outer:w;}
- addImpulse(x,z,radius,strength){return this.water?.addImpulse(x,z,radius,strength)??false;}
+ addImpulse(x,z,radius,strength){const ok=this.water?.addImpulse(x,z,radius,strength)??false;if(ok)this.uploadGPU(false);return ok;}
  sampleRaw(x,y,z,out={}) {
   out.ax=out.ay=out.az=out.wx=out.wy=out.wz=out.ux=out.uz=out.height=out.shake=0;
   if(!Number.isFinite(x+y+z))return out;
@@ -376,16 +366,13 @@ export class DisasterField {
     const t=e.time-r/e.speed;if(t<0||fall===0)continue;
     const a=e.intensity*9.81*fall*env*smooth(t/0.5),phase=t*e.frequency*Math.PI*2;
     out.shake=a; {out.ax+=a*(Math.sin(phase)+0.3*Math.sin(phase*1.73))/1.3;out.az+=a*Math.cos(phase*0.83)*0.8;out.ay+=a*Math.sin(phase*1.3)*0.35;}
-   }else if(e.kind==='tornado'&&fall>0){
-    const ground=this.terrain(x,z),core=e.radius*0.18,safe=Math.max(r,0.1),rank=r<core?r/core:core/safe,I=this.tornadoIntensity(e);
-    const w=I*rank*fall*env*Math.exp(-Math.max(0,y-Math.max(0,ground)-80)/80);
-    out.wx+=(-dz/safe-dx/safe*0.28)*w;out.wz+=(dx/safe-dz/safe*0.28)*w;
-    out.wy+=I*0.35*Math.exp(-r*r/(core*core*2))*env;
+   }else if(e.kind==='tornado'&&r<=VORTEX.reach*e.radius){
+    // One vortex for every consumer (TornadoVortex.js): height above the local ground, or above the sea surface offshore.
+    addTornadoWind(this.tornadoVortex(e),dx,dz,r,y-Math.max(0,this.terrain(x,z)),out);
    }
   }
   const grid=this.gridAt(x,z);
   if(grid){const w=grid.sample(x,z,this.waterScratch??={});out.height=w.height;out.ux=w.ux;out.uz=w.uz;}
-  // The wall coming in from beyond the ring: its water over the solver's still sea.
   if(this.farFieldAt(x,z,this.farScratch??={})){out.height+=this.farScratch.height;out.ux+=this.farScratch.ux;out.uz+=this.farScratch.uz;}
   return out;
  }

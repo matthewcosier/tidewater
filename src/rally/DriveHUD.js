@@ -4,7 +4,6 @@
 
 import { VEHICLES } from './Vehicles.js';
 
-// The tag, idle and redline of each car come from Vehicles.js, the one car table.
 const STARTS = { beach: 'Beach', coast: 'Coastal road', town: 'Town backroad', mountain: 'Mountain summit', west: 'West beach entrance', east: 'East beach entrance', ferryRoad: 'Ferry road', ferry: 'Ferry terminal', joey: 'Joey Island terminal', joeyLoop: 'Joey Island road' };
 const SURFACES = { sand: 'Sand', soil: 'Soil', rock: 'Rock', asphalt: 'Asphalt', gravel: 'Gravel', wood: 'Boardwalk', water: 'Shallows', 'wet-sand': 'Wet sand', afloat: 'Afloat' };
 // Per-wheel physics surface codes s[89..92], in code order.
@@ -52,7 +51,6 @@ export class DriveHUD {
 				<label class="rh-pick rh-start"><span class="rh-label">Start at</span><select aria-label="Start at">${ starts }</select></label>
 				<button type="button" class="rh-go">Drive Aster RS</button>
 				<div class="rh-acts">
-					<button type="button" class="rh-chip rh-drive-only" data-act="aids" aria-label="Driving aids" aria-pressed="true" aria-keyshortcuts="J"><kbd>J</kbd><span>Aids on</span></button>
 					<button type="button" class="rh-chip rh-drive-only" data-act="recover" aria-label="Recover car" aria-keyshortcuts="R"><kbd>R</kbd>Recover</button>
 					<button type="button" class="rh-chip rh-drive-only" data-act="repair" aria-label="Repair car" aria-keyshortcuts="T"><kbd>T</kbd>Repair</button>
 					<button type="button" class="rh-chip rh-drive-only" data-act="leave" aria-label="Leave car" aria-keyshortcuts="E"><kbd>E</kbd>Leave</button>
@@ -85,7 +83,6 @@ export class DriveHUD {
 		const $ = selector => root.querySelector( selector );
 		this.dock = $( '.rh-dock' ); this.go = $( '.rh-go' ); this.tag = root.querySelectorAll( '.rh-tag span' );
 		this.vehicle = $( '[aria-label="Vehicle"]' ); this.start = $( '[aria-label="Start at"]' );
-		this.aids = $( '[data-act="aids"]' ); this.aidsLabel = this.aids.querySelector( 'span' );
 		this.sound = $( '.rh-sound' ); this.keys = $( '.rh-keys' ); this.cluster = $( '.rh-cluster' );
 		this.speed = $( '.rh-speed' ); this.gearBox = $( '.rh-gear' ); this.gear = $( '.rh-gear b' );
 		this.val = $( '.rh-arc-val' ); this.head = $( '.rh-head' ); this.ticks = $( '.rh-ticks' );
@@ -102,7 +99,6 @@ export class DriveHUD {
 			hold(); rally.destination = this.start.value; rally.reset(); input.keys.clear(); input.pressed.clear(); canvas.focus();
 		} );
 		this.go.addEventListener( 'click', () => rally.enter() );
-		this.aids.addEventListener( 'click', () => { rally.toggleAssists(); canvas.focus(); } );
 		$( '[data-act="recover"]' ).addEventListener( 'click', () => { rally.recover(); canvas.focus(); } );
 		$( '[data-act="leave"]' ).addEventListener( 'click', () => rally.leave() );
 		$( '[data-act="repair"]' ).addEventListener( 'click', () => { rally.repair(); canvas.focus(); } );
@@ -171,11 +167,6 @@ export class DriveHUD {
 		const offered = this.offered( active, blocked );
 		this.dock.classList.toggle( 'is-away', ! offered );
 		this.dock.inert = ! offered;
-		if ( this.aidsOn !== rally.assists ) {
-			this.aidsOn = rally.assists;
-			this.aids.setAttribute( 'aria-pressed', String( rally.assists ) );
-			this.aidsLabel.textContent = rally.assists ? 'Aids on' : 'Aids off';
-		}
 		this.go.hidden = active;
 		this.go.textContent = `Drive ${ profile.name }`;
 		this.go.disabled = !! ( app.game.fight || app.game.landing );

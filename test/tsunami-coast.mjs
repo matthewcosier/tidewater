@@ -1,17 +1,3 @@
-// "Coastal flooding detected" is the warning banner's claim that this tsunami has come ashore at the coast it
-// warns about (src/disasters/Controls.js warning; src/evacuation/Route.js reads the same e.coastReached).
-// In the regression, the Surge 2 m from seed 7 read "Coastal flooding detected · crest estimate 103 s" right at launch.
-// The plane crest spans the whole grid (planApproach crestHalfLength), and on the -90 deg heading its source line
-// lies just north of Joey Island (launchDistance 1052 m, the islet's north beach about 1000-1040 m back along the
-// ray, ground 0.00-0.25 m), so that beach takes 0.3-1.3 m of the Gaussian's forward tail at 2-6 m/s within 1 s of
-// the launch (the Joey terminal car park), 900 m from the village and 104 s before the crest gets there.
-// The detector counted any wet land in the grid (stats.inundatedArea > 0). It must fire when the bore reaches
-// the target's own shore: land within the event's radius of the target, at the arrival the countdown promised.
-// Band: the beach floods on the crest's rising limb (a Gaussian front at least 6 x 32 m wide, CREST_CELLS), which
-// reaches the shoreline well before the peak the countdown times (Surge seed 7: first village land wet at 74.9 s,
-// the peak due at 98 s). So the flag is held to the front: within 15% of the countdown (the
-// planApproach band, test/tsunami-approach.mjs) of the first time the sea at the target's shoreline rises
-// INUNDATION_DEPTH above datum, never in the first half of the approach, and no later than the crest band.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TerrainData } from '../src/world/TerrainData.js';
@@ -43,9 +29,17 @@ for ( const [ name, H, x, z, radius, seed ] of [ [ 'Surge', 2, 40, - 115, 180, 7
 		const approach = e.arrival - launch; // s: the countdown at launch
 		const sea = {};
 		let front = null; // s after launch: the sea at the shoreline first INUNDATION_DEPTH above datum
+		const a = e.direction * Math.PI / 180, cx = Math.cos( a ), cz = Math.sin( a );
+		const shoreOut = ( e.x - shore.x ) * cx + ( e.z - shore.z ) * cz; // m
+		let flaggedOut = null; // m: the most seaward wet watched cell at the flag
 		const step = () => {
 			field.advance( STEP );
 			if ( front === null && e.launched && field.water.sample( shore.x, shore.z, sea ).height > INUNDATION_DEPTH ) front = e.time - launch;
+			if ( flaggedOut === null && e.coastReached ) {
+				const w = field.water;
+				flaggedOut = - Infinity;
+				for ( const k of field.coastWatch ) if ( w.h[ k ] > INUNDATION_DEPTH ) flaggedOut = Math.max( flaggedOut, - ( ( w.x + ( k % w.n ) * w.dx - e.x ) * cx + ( w.z + Math.floor( k / w.n ) * w.dx - e.z ) * cz ) );
+			}
 		};
 		while ( e.time < launch + 1 ) step();
 		assert.ok( e.launched, 'the crest launched' );
@@ -57,6 +51,7 @@ for ( const [ name, H, x, z, radius, seed ] of [ [ 'Surge', 2, 40, - 115, 180, 7
 		const report = `village land wet ${ flood.toFixed( 1 ) } s after launch, sea front at the shoreline ${ front.toFixed( 1 ) } s, countdown ${ approach.toFixed( 1 ) } s`;
 		console.log( `${ name } ${ H } m seed ${ seed }: ${ report }` );
 		assert.ok( flood >= 0.5 * approach, `${ report }: flagged in the first half of the approach` );
+		assert.ok( flaggedOut <= shoreOut + field.water.dx, `${ report }: the flag fired on land ${ flaggedOut.toFixed( 0 ) } m seaward of the target, beyond the village shoreline at ${ shoreOut.toFixed( 0 ) } m` );
 		assert.ok( Math.abs( flood - front ) <= 0.15 * approach, `${ report }: the flag must follow the front within 15% of the countdown` );
 		assert.ok( flood <= 1.15 * approach, `${ report }: later than the crest band` );
 	} );

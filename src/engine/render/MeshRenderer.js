@@ -254,7 +254,7 @@ export class MeshRenderer {
 		inheritGeometryMotion( geometry );
 		let byMat = _layouts.get( geometry );
 		if ( ! byMat ) _layouts.set( geometry, byMat = new Map() );
-		const inst = object.isInstancedMesh ? ( object.instanceColor ? 2 : 1 ) : 0;
+		const inst = object.isInstancedMesh ? ( object.instanceColor ? 2 : 1 ) + ( object.instancePrevMatrix ? 4 : 0 ) : 0;
 		const mkey = inst ? material.id + ':' + inst : material.id;
 		let e = byMat.get( mkey );
 		if ( e && e.version === material.version && e.attrsVersion === geometry.attributesVersion && ( ! inst || e.instanceMatrix === object.instanceMatrix ) ) {
@@ -297,6 +297,8 @@ export class MeshRenderer {
 
 			for ( let i = 0; i < 4; i ++ ) attrs.push( { name: 'instanceMatrix' + i, attr: object.instanceMatrix, column: i } );
 			if ( object.instanceColor ) attrs.push( { name: 'instanceColor', attr: object.instanceColor } );
+			// last frame's instance matrices (InstancedMesh.trackPreviousMatrices): one more vertex buffer
+			if ( object.instancePrevMatrix ) for ( let i = 0; i < 4; i ++ ) attrs.push( { name: 'instancePrevMatrix' + i, attr: object.instancePrevMatrix, column: i } );
 
 		}
 

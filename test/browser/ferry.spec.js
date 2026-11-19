@@ -111,6 +111,33 @@ test( 'Stepping aboard the moored ferry, the player takes her helm and drives he
 	} );
 } );
 
+test( 'At the helm, G runs her engines up to boost and she leaves her 24-knot service top behind', async ( { page }, testInfo ) => {
+	await takeTheHelm( page );
+	await castOff( page );
+	await test.step( 'When the player pushes the throttles full ahead and she settles into her stride', async () => {
+		await page.keyboard.down( 'w' ); await page.waitForTimeout( 2600 ); await page.keyboard.up( 'w' );
+		await expect( helm( page ) ).toContainText( 'Ahead 100%' );
+		await expect( helm( page ).locator( '.fy-boost' ) ).toHaveText( 'Off' );
+	} );
+	await test.step( 'And presses G for boost', async () => { await page.keyboard.press( 'g' ); } );
+	await test.step( 'Then the boost readout runs up and lights, and she passes 30 knots, faster than service rating can drive her', async () => {
+		await expect( helm( page ).locator( '.fy-boost' ) ).toHaveText( /Running up|On/ );
+		await expect.poll( () => reading( page, 'boost' ), { timeout: 15_000 } ).toBeGreaterThan( 0.95 );
+		await expect( helm( page ).locator( '.fy-boost' ) ).toHaveText( 'On' );
+		// 30 knots is 15.4 m/s; her service top is 12.5 m/s (24 knots), so only boost gets her there
+		await expect.poll( () => reading( page, 'speed' ), { timeout: 40_000, intervals: [ 1000 ] } ).toBeGreaterThan( 15.4 );
+		const r = await helm( page ).boundingBox(), c = await page.locator( '.gm-pin' ).boundingBox();
+		const clear = r.x + r.width <= c.x || c.x + c.width <= r.x || r.y + r.height <= c.y || c.y + c.height <= r.y;
+		expect( clear, `helm readout ${ JSON.stringify( r ) } clear of the Card PIN chip ${ JSON.stringify( c ) }` ).toBe( true );
+		await page.screenshot( { path: testInfo.outputPath( 'ferry-boost.png' ) } );
+	} );
+	await test.step( 'When the player presses G again', async () => { await page.keyboard.press( 'g' ); } );
+	await test.step( 'Then the engines ease back to service rating', async () => {
+		await expect( helm( page ).locator( '.fy-boost' ) ).toHaveText( /Easing|Off/ );
+		await expect.poll( () => reading( page, 'boost' ), { timeout: 20_000 } ).toBeLessThan( 0.05 );
+	} );
+} );
+
 test( 'Driving her hard to port off the berth runs her onto the rocks east of the harbour and damages the hull', async ( { page } ) => {
 	await takeTheHelm( page );
 	await castOff( page );

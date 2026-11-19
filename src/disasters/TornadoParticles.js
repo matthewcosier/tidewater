@@ -27,7 +27,11 @@ export class TornadoParticles {
   p.p.x=c.x+Math.cos(angle)*r;p.p.z=c.z+Math.sin(angle)*r;
   const ground=this.field.terrain(p.p.x,p.p.z),water=this.field.waterAt?.(p.p.x,p.p.z)??0;
   p.water=water>ground+.03;p.material=p.condensation?'condensation':p.water?'mist':'dust';
-  p.p.y=Math.max(ground,water)+.18+rand(3)*.7*s+alt;
+  // Dust and litter are born through the surface inflow layer, not on the ground: in a 60 m/s surface wind the shear
+  // turbulence (sigma_w about 1.25 u*, u* several m/s) mixes them through its lowest metres within a second, and the
+  // prescribed vortex resolves no such turbulence (its updraft is zero at the ground). Condensate keeps its own height.
+  const layer=p.condensation?.7*s:this.field.tornadoVortex?.(e).delta??.7*s;
+  p.p.y=Math.max(ground,water)+.18+rand(3)*layer+alt;
   p.v.x=p.v.y=p.v.z=0;p.age=-delay;p.life=p.kind?4+rand(4)*5:7+rand(4)*(PLUME.maxLifetime-7);
   const representation=plumeRepresentation(this.dust.length,e.intensity);p.representationWeight=p.kind?1:representation.weight;
   p.baseSize=p.kind?.08+rand(5)*.17:(p.condensation?4.5+rand(5)*4.0+alt*.022/s:1.5+rand(5)*2.4)*s;
@@ -70,7 +74,9 @@ export class TornadoParticles {
   if(!e){if(this.event?.time>=this.event?.duration)this.complete();else if(this.event)this.clear();return;}if(!Number.isFinite(dt)||dt<0||this.field.paused)return;
   if(this.event!==e){this.clear();this.event=e;for(const p of this.all)p.cycle=0;if(this.dust.length)this.spawn(this.dust[0],e);for(const p of this.flecks)this.spawn(p,e,(p.id-this.dust.length)/Math.max(1,this.flecks.length)*2.4);}
   this._centre=this.field.center(e);this._base=Math.max(0,this.field.terrain(this._centre.x,this._centre.z));
-  dt=Math.min(dt,.1);const steps=Math.max(1,Math.ceil(dt/(1/60))),h=dt/steps,env=this.field.envelope(e);
+  // Births follow the vortex's own life: they stop over the 2 s before its ground wind reaches zero at the duration
+  // (each source parcel's loading already follows the wind it is born in). What is aloft then falls and lands.
+  dt=Math.min(dt,.1);const steps=Math.max(1,Math.ceil(dt/(1/60))),h=dt/steps,env=fade((e.duration-e.time)/2);
   for(const p of this.all){Object.assign(p.previous,p.p);p.previousRotation=p.rotation;p.previousSize=p.size;}
   this.credit+=dt*plumeRepresentation(this.dust.length,e.intensity,env).birthRate;
   let searched=0;while(this.credit>=1&&searched<this.dust.length){const p=this.dust[this.cursor++%this.dust.length];searched++;if(p.active)continue;this.spawn(p,e);this.credit--;}
@@ -79,7 +85,7 @@ export class TornadoParticles {
    this.time+=h;
    for(const p of this.all){
     if(!p.active)continue;p.age+=h;if(p.age<0)continue;
-    if(p.age>p.life){this.expired++;if(p.kind)this.spawn(p,e);else retirePlumeParcel(p,'exported',this.budget);continue;}
+    if(p.age>p.life){this.expired++;if(p.kind){if(env>0)this.spawn(p,e);else{p.active=false;p.opacity=0;}}else retirePlumeParcel(p,'exported',this.budget);continue;}
     const ground=this.field.terrain(p.p.x,p.p.z),water=this.field.waterAt?.(p.p.x,p.p.z)??0,floor=Math.max(ground,water);
     if(p.kind){
      const a=this.field.acceleration(p.p,p.v,{mass:p.mass,area:p.area,height:.12,volume:0,buoyancy:false,supported:p.p.y<=floor+.05,dt:h},this._sample);
@@ -99,7 +105,7 @@ export class TornadoParticles {
   }
   for(const p of this.all){
    if(!p.active){p.opacity=0;continue;}
-   const t=p.age/p.life,lifetime=fade(p.age/.6)*(1-fade((t-.65)/.35))*env;
+   const t=p.age/p.life,lifetime=fade(p.age/.6)*(1-fade((t-.65)/.35));
    if(p.kind)p.opacity=lifetime*(p.water?0:1);
    // Aerosol extinction already comes from its accounted grain population; it
    // is not multiplied by a second arbitrary lifetime or event-opacity fade.
