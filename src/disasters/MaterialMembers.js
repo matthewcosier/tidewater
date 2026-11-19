@@ -38,7 +38,8 @@ function compactSpans(spans){
   let at=0;for(const s of run){pos.set(s.pos,at);if(nrm)nrm.set(s.nrm,at);at+=s.pos.length;}return {...first,count,pos,nrm};
  });
 }
-export function materialMembers(record,terrain){
+// fitting {mass kg, size m}: a member under both is not returned as a member of its own (see the end of the function).
+export function materialMembers(record,terrain,fitting=null){
  const spans=record.spans,described=spans.map(s=>{const f=memberFrame([s]),d=f.half.clone().multiplyScalar(2),material=s.member?.material;
   return {spans:[s],...f,material:material==='roofMetal'||material==='hard'?'steel':material==='stone'?'masonry':record.material==='light'?'light':'timber',area:d.x*d.y,source:material,d};});
  const deck=/pier|boardwalk|evacuation|stair|station/i.test(record.name);
@@ -73,8 +74,15 @@ export function materialMembers(record,terrain){
   m.forceCapacity=Math.max(300,Math.min(m.materialCapacity,material.fastener*Math.max(2,Math.ceil(width/.6))));
   m.momentCapacity=Math.max(50,material.stress*width*m.thickness**2/6*Math.sqrt(corrugation));
   m.relaxation=material.relaxation;
-  m.spans=compactSpans(m.spans);
  }
+ // A fitting (a cleat, a lamp, a rope end that fell in a deck bay of its own) is never a body of its own: a 2 kg,
+ // 5 cm box riding a fast member was flung 7 m up. Its triangles join the nearest larger member as a rigid
+ // attachment, drawn with it, and its mass and volume are added to that member. A record made only of fittings
+ // keeps them as they are.
+ if(fitting){const small=m=>m.mass<fitting.mass&&2*Math.max(m.half.x,m.half.y,m.half.z)<fitting.size,hosts=members.filter(m=>!small(m));
+  if(hosts.length){for(const m of members)if(small(m)){const host=hosts.reduce((a,b)=>distanceTo(m.center,a)<distanceTo(m.center,b)?a:b);host.spans.push(...m.spans.map(s=>({...s,rigidAttachment:true})));host.mass+=m.mass;host.volume+=m.volume;}members=hosts;}
+ }
+ for(const m of members)m.spans=compactSpans(m.spans);
  return members;
 }
 export function beamConnection(member,root=false){return [member.length/(2*member.EA),root?member.length/(6*member.EI):2*member.length/(3*member.EI),root?member.forceCapacity:member.materialCapacity,member.momentCapacity,member.relaxation];}

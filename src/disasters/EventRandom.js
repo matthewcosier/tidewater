@@ -1,7 +1,6 @@
-// An event draws a fresh seed. Explicit seeds give tests and bug reports reproducible conditions.
 
 // Independent streams, so adding draws to one element never shifts another element's values.
-export const STREAM=Object.freeze({ particles:1, anchor:2, member:3, tree:4, track:5, component:6 });
+export const STREAM=Object.freeze({ particles:1, anchor:2, member:3, tree:4, track:5, component:6, lightning:7 });
 
 // Scatter of capacity around the nominal value, as a coefficient of variation (sd / mean).
 // Declared game values inside the published ranges:

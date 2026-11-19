@@ -1,6 +1,6 @@
 import {test,expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
-import {gliderVisibility} from './helpers/glider-visibility.js';
+import {gliderVisibilityProbe} from './helpers/glider-visibility.js';
 const flightHUD=p=>p.getByRole('status',{name:'Flight instruments'}),gliderHUD=p=>p.getByRole('status',{name:'Glider instruments'});
 const click=(page,name)=>page.getByRole('button',{name,exact:true}).click();
 async function ready(page,tool){
@@ -32,13 +32,21 @@ test('Glider recovery: a push-out launch keeps the wing and suspended pilot visi
  await test.step('When I push out after four seconds of the ordinary launch',async()=>{
   await expect.poll(()=>page.evaluate(start=>window.__app.glider.flight.time-start,start),{timeout:12000,intervals:[50]}).toBeGreaterThan(4);
   await page.keyboard.down('ArrowDown');
-  for(let i=0;i<90;i++){
-   const row=await page.evaluate(()=>{const a=window.__app,f=a.glider.flight,eye=a.camera.position.clone(),q=f.quaternion;
+  await page.evaluate(([probe,start])=>{
+   const a=window.__app,f=a.glider.flight,visibility=new Function(`return (${probe})`)(),rows=window.__pushOutRows=[];let last=-Infinity;
+   const tick=()=>{if(f.time-start>11)return;if(f.time-last>=.1){last=f.time;
+    const eye=a.camera.position.clone(),q=f.quaternion;
     const rotate=([x,y,z])=>{const [qx,qy,qz,qw]=q,ix=qw*x+qy*z-qz*y,iy=qw*y+qz*x-qx*z,iz=qw*z+qx*y-qy*x,iw=-qx*x-qy*y-qz*z;return[ix*qw+iw*-qx+iy*-qz-iz*-qy,iy*qw+iw*-qy+iz*-qx-ix*-qz,iz*qw+iw*-qz+ix*-qy-iy*-qx];};
     const probes=[[0,0,0],[0,-.9,0],[-4.8,0,-1],[4.8,0,-1]].map(local=>{const off=rotate(local),p=eye.clone().fromArray(f.position.map((v,k)=>v+off[k])),d=eye.clone().sub(p),length=d.length();let terrain=Infinity;for(let j=1;j<=40;j++){const t=j/40,x=p.x+d.x*t,z=p.z+d.z*t,y=p.y+d.y*t;terrain=Math.min(terrain,y-a.terrainData.heightAt(x,z));}return {terrain,blocked:a.colliders.raycast(p,d.divideScalar(length),length)<length-.03};});
-    return {time:f.time,phase:f.phase,eye:eye.toArray(),position:f.position.slice(),clearance:eye.y-a.terrainData.heightAt(eye.x,eye.z),probes};
-   });row.visual=await gliderVisibility(page);observations.push(row);if(!airCapture&&row.phase==='airborne'&&row.time-start>8){airCapture=true;await shot(page,testInfo,'push-out-airborne');}if(row.time-start>11)break;await page.waitForTimeout(70);
-  }
+    const row={time:f.time,phase:f.phase,eye:eye.toArray(),position:f.position.slice(),clearance:eye.y-a.terrainData.heightAt(eye.x,eye.z),probes};row.visual=visibility();rows.push(row);}
+    requestAnimationFrame(tick);};
+   requestAnimationFrame(tick);
+  },[gliderVisibilityProbe.toString(),start]);
+  const flown=()=>page.evaluate(start=>window.__app.glider.flight.time-start,start);
+  await expect.poll(flown,{timeout:30000,intervals:[50]}).toBeGreaterThan(8);
+  if(await page.evaluate(()=>window.__app.glider.flight.phase)==='airborne')await shot(page,testInfo,'push-out-airborne');
+  await expect.poll(flown,{timeout:30000,intervals:[50]}).toBeGreaterThan(11);
+  observations.push(...await page.evaluate(()=>window.__pushOutRows));
   await page.keyboard.up('ArrowDown');await writeFile(testInfo.outputPath('camera-observations.json'),JSON.stringify(observations,null,2));
  });
  await test.step('Then the final rendered camera clears terrain and the entire flying subject clears the ramp',async()=>{
@@ -48,10 +56,12 @@ test('Glider recovery: a push-out launch keeps the wing and suspended pilot visi
 
 test('Glider recovery: a real crash has an honest terminal message and local exit; rejected relaunch preserves walking',async({page},testInfo)=>{
  let impact;
- await test.step('Given the beach practice approach',async()=>{await ready(page,'Hang glider');await click(page,'Practice beach approach');});
+ await test.step('Given the beach practice approach, which starts over land',async()=>{await ready(page,'Hang glider');await click(page,'Practice beach approach');
+  // Decision 2026-10-05: the practice approach starts over land (the sand north of the road), so an early flare hits the ground, not the sea.
+  const start=await page.evaluate(()=>{const a=window.__app,[x,,z]=a.glider.flight.position;return{ground:a.terrainData.heightAt(x,z),water:a.disasters?.field?.waterAt(x,z)||0};});expect(start.ground).toBeGreaterThan(start.water+.5);});
  await test.step('When I flare too early and actually hit the ground',async()=>{await page.keyboard.down('Space');await expect(gliderHUD(page)).toHaveAttribute('data-phase','crashed',{timeout:30000});await page.keyboard.up('Space');impact=await page.evaluate(()=>window.__app.glider.flight.position.slice());});
  await test.step('Then the instruments report the impact rather than airborne stall recovery',async()=>{await expect(gliderHUD(page)).toContainText('Ground impact');await expect(gliderHUD(page)).not.toContainText('STALL · pull in');});
- await test.step('When I leave the wreck with X and try Launch glider again',async()=>{await page.keyboard.press('x');await expect(gliderHUD(page)).toBeHidden();const p=await walker(page);expect(p.mode).toBe('walk');expect(Math.hypot(p.position[0]-impact[0],p.position[2]-impact[2])).toBeLessThan(6);await click(page,'Hang glider');await click(page,'Launch glider');});
+ await test.step('When I leave the wreck with E and try Launch glider again',async()=>{await page.keyboard.press('e');await expect(gliderHUD(page)).toBeHidden();const p=await walker(page);expect(p.mode).toBe('walk');expect(Math.hypot(p.position[0]-impact[0],p.position[2]-impact[2])).toBeLessThan(6);await click(page,'Hang glider');await click(page,'Launch glider');});
  await test.step('Then a reset instruction appears without seizing control of the old wreck',async()=>{await expect(page.getByRole('alert',{name:'Glider message'})).toContainText('Reset');expect((await walker(page)).glider).toBe(false);await click(page,'Close glider controls');const before=await walker(page);await page.keyboard.down('w');await page.waitForTimeout(1300);await page.keyboard.up('w');const after=await walker(page);expect(Math.hypot(after.position[0]-before.position[0],after.position[2]-before.position[2])).toBeGreaterThan(1);expect(after.mode).toBe('walk');await shot(page,testInfo,'crash-local-exit');});
  await test.step('When I choose the visible reset then launch again, a new normal ground run begins',async()=>{await click(page,'Hang glider');await click(page,'Reset glider');await click(page,'Launch glider');await expect(gliderHUD(page)).toHaveAttribute('data-phase','running');await expect(gliderHUD(page)).toHaveAttribute('data-phase','airborne',{timeout:30000});});
 });
@@ -59,6 +69,6 @@ test('Glider recovery: a real crash has an honest terminal message and local exi
 test('Glider recovery: a controlled beach landing can be left on foot beside the wing',async({page},testInfo)=>{
  let landing;
  await test.step('Given a real beach approach in the prevailing wind',async()=>{await ready(page,'Hang glider');await click(page,'Practice beach approach');await expect(gliderHUD(page)).toHaveAttribute('data-phase','airborne');await expect.poll(async()=>Number(await gliderHUD(page).getAttribute('data-agl'))).toBeGreaterThan(5);await expect.poll(async()=>Number(await gliderHUD(page).getAttribute('data-air-time'))).toBeGreaterThan(0);});
- await test.step('When I descend and flare below 1.5 metres',async()=>{await expect.poll(async()=>Number(await gliderHUD(page).getAttribute('data-agl')),{timeout:30000,intervals:[60]}).toBeLessThan(1.5);await page.keyboard.down('Space');await expect(gliderHUD(page)).toHaveAttribute('data-phase','landed',{timeout:15000});await page.keyboard.up('Space');landing=await page.evaluate(()=>window.__app.glider.flight.position.slice());await page.keyboard.press('x');});
+ await test.step('When I descend, flare below 1.5 metres and press E',async()=>{await expect.poll(async()=>Number(await gliderHUD(page).getAttribute('data-agl')),{timeout:30000,intervals:[60]}).toBeLessThan(1.5);await page.keyboard.down('Space');await expect(gliderHUD(page)).toHaveAttribute('data-phase','landed',{timeout:15000});await page.keyboard.up('Space');landing=await page.evaluate(()=>window.__app.glider.flight.position.slice());await page.keyboard.press('e');});
  await test.step('Then walking resumes on the sand beside the actual landing',async()=>{await expect(gliderHUD(page)).toBeHidden();const before=await walker(page);expect(before.mode).toBe('walk');expect(before.grounded).toBe(true);expect(Math.hypot(before.position[0]-landing[0],before.position[2]-landing[2])).toBeLessThan(6);await page.keyboard.down('w');await page.waitForTimeout(1200);await page.keyboard.up('w');const after=await walker(page);expect(Math.hypot(after.position[0]-before.position[0],after.position[2]-before.position[2])).toBeGreaterThan(1);await shot(page,testInfo,'beach-local-exit');});
 });

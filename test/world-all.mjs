@@ -18,7 +18,7 @@ const H = await worldHarness( { sun: [ 0.5, 0.5, 0.45 ] } );
 const data = new TerrainData();
 const colliders = new Colliders();
 const village = new Village( { scene: H.scene, terrain: data, colliders } );
-const shore = computeShoreField( data, { res: 512, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
+const shore = computeShoreField( data, { cell: 4, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
 const gpu = new TerrainGPU( data, shore );
 const terrain = new Terrain( { scene: H.scene, terrainData: data, terrainGPU: gpu } );
 terrain.material.appliesHillShadow = true;
@@ -59,7 +59,7 @@ const only = process.argv.find( ( a ) => a.startsWith( '--view=' ) );
 for ( const [ k, v ] of Object.entries( views ) ) {
 
 	if ( only && only.slice( 7 ) !== k ) continue;
-	await H.shot( `${ out }/world-${ k }.png`, v, 4 );
+	await H.shot( `${ out }/tidewater-world-${ k }.png`, v, 4 );
 
 }
 

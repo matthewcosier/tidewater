@@ -1,9 +1,8 @@
-// Events draw independent seeds. Replaying an explicit seed reproduces the event.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import init,{RallyPhysics} from '../public/rally/rally_physics.js';
-import {DisasterField,smooth} from '../src/disasters/Field.js';
+import {DisasterField} from '../src/disasters/Field.js';
 import {TornadoParticles} from '../src/disasters/TornadoParticles.js';
 import {Builder} from '../src/world/village/GeoBuilder.js';
 import {Colliders} from '../src/world/Colliders.js';
@@ -18,10 +17,11 @@ function run(seconds,config){
  for(let t=0;t<seconds;t+=1/30)field.advance(1/30);
  return {field,e,c:field.center(e)};
 }
-// Peak tangential plus radial wind at the core radius, divided by the configured intensity.
+// The swirl the field blows at the radius of maximum wind (0.18 radius), 40 m up where the vortex is upright,
+// over the configured intensity times the life cycle's ground strength: the seeded pulse and gust factor.
 function intensityFactor(field,e){
- const c=field.center(e),core=e.radius*.18,w=field.sampleRaw(c.x+core,1,c.z,{}),fall=smooth(1-core/e.radius);
- return Math.hypot(w.wx,w.wz)/(e.intensity*fall*Math.hypot(1,.28)*field.envelope(e));
+ const c=field.center(e),w=field.sampleRaw(c.x+e.radius*.18,40,c.z,{});
+ return w.wz/(e.intensity*field.tornadoVortex(e).strength);
 }
 
 test('Two fresh tornadoes take different tracks; a fixed seed replays one exactly',()=>{
@@ -45,7 +45,7 @@ test('Two fresh tornadoes take different tracks; a fixed seed replays one exactl
 test('Across 8 seeds the tornado keeps its configured speed, heading and intensity band',()=>{
  for(let seed=1;seed<=8;seed++){
   const field=new DisasterField(()=>0),e=field.start('tornado',{...TRACK,seed});let sum=0,n=0,lo=Infinity,hi=-Infinity;
-  for(let t=0;t<60;t+=1/30){field.advance(1/30);if(e.time<2)continue;const f=intensityFactor(field,e);sum+=f;n++;lo=Math.min(lo,f);hi=Math.max(hi,f);}
+  for(let t=0;t<60;t+=1/30){field.advance(1/30);if(field.tornadoVortex(e).strength<.05)continue;const f=intensityFactor(field,e);sum+=f;n++;lo=Math.min(lo,f);hi=Math.max(hi,f);}
   const c=field.center(e),along=c.x-TRACK.x,across=Math.abs(c.z-TRACK.z),straight=TRACK.speed*e.time;
   assert.ok(along>.75*straight&&along<1.25*straight,`seed ${seed}: ${along.toFixed(1)} m along the heading in ${e.time.toFixed(1)} s, want ${straight.toFixed(0)} m +-25%`);
   assert.ok(across<straight*Math.sin(15*Math.PI/180),`seed ${seed}: drifted ${across.toFixed(1)} m off the heading in ${straight.toFixed(0)} m (cap 15 deg)`);

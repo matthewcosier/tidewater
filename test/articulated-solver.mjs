@@ -5,6 +5,7 @@ import {Player} from '../src/player/Player.js';
 import {TerrainData} from '../src/world/TerrainData.js';
 import {Colliders} from '../src/world/Colliders.js';
 import {DisasterField} from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 import {Vector3,Quaternion,PerspectiveCamera} from '../src/engine/index.js';
 import {parseGLB} from '../src/engine/loaders/GLTF.js';
 import {SkinnedModel} from '../src/engine/render/Skinning.js';
@@ -18,22 +19,13 @@ StorageBuffer.prototype.write=function(data){this.pendingData=data.slice();};
 const bytes=await readFile(new URL('../public/models/characters/player.glb',import.meta.url));
 const source=parseGLB(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
 const V=(...a)=>new Vector3(...a);
-// The fixture stands on a fixed site, not on WORLD.start (Player's default). Moving the player's start for
-// gameplay (the baseline: 53.6,-77 to 55,-71, onto the pier arch centreline) moved this fixture 6.2 m and
-// changed every trajectory, so a mechanism test drifted with a design choice. SITE is the old start, where seed 6
-// was chosen (L10 sweep); test/ragdoll-tornado-burial.mjs stands on the same site.
 const SITE={x:53.6,z:-77}; // m, on the boardwalk up from the pier foot
 function fixture(seed){
  const model=new SkinnedModel(source),terrain=new TerrainData(),player=new Player({camera:new PerspectiveCamera(),input:{down:()=>false,hit:()=>false},terrain,colliders:new Colliders(),query:{allocate:()=>0}});
  model.play('idle',{fade:0});model.update(0);player.position.set(SITE.x,0,SITE.z);player.position.y=terrain.heightAt(player.position.x,player.position.z);model.group.position.copy(player.position);player.avatar={model,group:model.group,idle:model.layers[0]};
- const field=new DisasterField((x,z)=>terrain.heightAt(x,z));field.start('tornado',{x:player.position.x-20,z:player.position.z,intensity:120,radius:180,speed:0,duration:40,seed});field.events.get('tornado').time=1.2;
+ const field=new DisasterField((x,z)=>terrain.heightAt(x,z));const e=field.start('tornado',{x:player.position.x-20,z:player.position.z,intensity:120,radius:180,speed:0,duration:40,seed});e.time=tornadoLifecycle(e,{}).genesis+1.2;
  assert.equal(player.ragdoll(null,null,{velocity:V(),spin:V()}),true);player.rag.disasterField=field;return{player,rig:player.rag,terrain,field};
 }
-// A mechanism test (solver bounds, protection and time ledgers, settling): one fixed tornado seed (craft rule 6).
-// Seed 6 passes both cadences. Fresh seeds (L10 sweep, 2026-10-05) failed it two ways: at dt=0.1 the one
-// substep-budget cap removed 10.0-13.6 kJ on 6 of 8 draws (bound 10 kJ; disasters never feed 0.1 s since
-// SimulationPacing caps the interval at 25 ms), and at dt=1/60 limbs ended 2-8.5 cm into the slope on 4 of 8.
-// The burial is a real ragdoll defect; test/ragdoll-tornado-burial.mjs asserts it across seeds.
 for(const dt of [1/60,.1])test(`Severe articulated impact bounds physical advance, accounts protection and settles after the field stops (dt=${dt})`,t=>{
  const {player,rig:r,terrain,field}=fixture(6);let maximumSpeed=0,maximumPenetration=0,maximumAngleError=0,maximumSpin=0,maximumGap=0,stopped=false,recovered=null,solverEnergyGain=0,positionK=0,predictionK=0,forceK=0,integrationWork=0,geometryWork=0,positiveGeometryWork=0;
  r.debugStep=stage=>{if(stage==='forces')forceK=r.debugForcesK;if(stage==='predict'){predictionK=r.kineticEnergy();integrationWork+=predictionK-forceK;}if(stage==='position'){positionK=r.kineticEnergy();const work=positionK-predictionK;geometryWork+=work;positiveGeometryWork+=Math.max(0,work);}if(stage==='end')solverEnergyGain=Math.max(solverEnergyGain,r.kineticEnergy()-positionK);};

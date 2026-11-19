@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {TornadoParticles,TornadoVisuals} from '../src/disasters/TornadoVisuals.js';
-import {DisasterField} from '../src/disasters/Field.js';import {Scene,Vector3} from '../src/engine/index.js';
+import {DisasterField} from '../src/disasters/Field.js';import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js';import {Scene,Vector3} from '../src/engine/index.js';
 import {evaporatedDiameter,liquidMass,geometricExtinction,spreadRadius,plumeSource,plumeRepresentation} from '../src/disasters/TornadoPlume.js';
 const near=(a,b,t=1e-10)=>assert.ok(Math.abs(a-b)<=t,`${a} != ${b}`);
 const event={time:3,intensity:100,radius:180,duration:90};
@@ -76,9 +76,10 @@ test('Constant-source statistical representation preserves volume, mass and exti
 });
 test('The bounded production pool supplies ground mineral clouds continuously instead of starving when full',()=>{
  const run=dt=>{
-  const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:60}),m=new TornadoParticles(f,{dust:200,flecks:0}),bins=Array.from({length:54},()=>({births:0,represented:0}));let bin=0;
+  // 54 s of the mature stage (a 180 s tornado: its genesis is over by 40 s and it shrinks after 99 s at the earliest)
+  const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:180}),m=new TornadoParticles(f,{dust:200,flecks:0}),bins=Array.from({length:54},()=>({births:0,represented:0}));let bin=0;const mature=tornadoLifecycle(e,{}).genesis;
   const spawn=m.spawn.bind(m);m.spawn=(p,...args)=>{spawn(p,...args);if(p.active&&!p.kind&&!p.liquid){bins[bin].births++;bins[bin].represented+=p.representationWeight??1;}};
-  for(let i=1;i<=Math.round(54/dt);i++){bin=Math.min(53,Math.floor((i-1)*dt+1e-9));e.time=i*dt;m.update(dt,e);assert.ok(m.dust.filter(p=>p.active).length<=200);}
+  for(let i=1;i<=Math.round(54/dt);i++){bin=Math.min(53,Math.floor((i-1)*dt+1e-9));e.time=mature+i*dt;m.update(dt,e);assert.ok(m.dust.filter(p=>p.active).length<=200);}
   const steady=bins.slice(2);assert.ok(steady.every(b=>b.births>=8),JSON.stringify(steady));
   const represented=steady.reduce((s,b)=>s+b.represented,0),wanted=steady.length*(200/5)*(100/75)*.8;
   assert.ok(Math.abs(represented/wanted-1)<.06,'statistical source weight preserves the intended pre-cap mineral source rate');return represented;
@@ -94,7 +95,8 @@ test('The prescribed moist source is neighbour-continuous and changes in space a
 test('Natural event shutdown exports accounted clouds smoothly and closes the budget across real expiry',()=>{
  const f=new DisasterField(()=>0),e=f.start('tornado',{intensity:100,radius:180,speed:0,duration:6}),v=new TornadoVisuals({scene:new Scene(),camera:{position:new Vector3(0,50,200)},sceneRenderer:{opaqueCopy:{depthTexture:null}}},f);
  for(let i=0;i<240;i++){f.advance(1/60);v.update(1/60);}const atTail=v.snapshot().budget;assert.ok(atTail.liveDustExtinction+atTail.liveLiquidExtinction>100);
- while(e.time<5.9){f.advance(1/60);v.update(1/60);}const late=v.snapshot().budget;assert.ok(late.liveDustExtinction+late.liveLiquidExtinction<.03*(atTail.liveDustExtinction+atTail.liveLiquidExtinction),'last tenth second contains only a small optical tail');
+ // the event is over at e.end: the vortex has decayed (6 s) and what it lofted has had time to land
+ while(e.time<e.end-.1){f.advance(1/60);v.update(1/60);}const late=v.snapshot().budget;assert.ok(late.liveDustExtinction+late.liveLiquidExtinction<.03*(atTail.liveDustExtinction+atTail.liveLiquidExtinction),'last tenth second contains only a small optical tail');
  f.advance(.1);v.update(.1);assert.equal(f.events.has('tornado'),false);assert.equal(v.dust.geometry.instanceCount,0);const b=v.snapshot().completedBudget;assert.ok(b,'completed event exposes its final accounted export');
  for(const material of ['Dust','Liquid'])for(const quantity of ['Mass','Extinction']){
   const evaporated=material==='Liquid'?b[quantity==='Mass'?'evaporatedLiquidMass':'evaporatedExtinction']:0;

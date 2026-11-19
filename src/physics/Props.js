@@ -14,14 +14,44 @@ import { markGeometryMotion } from '../engine/render/GeometryMotion.js';
 // hits them fast enough; a slow push meets a solid fence.
 
 // Proxy volume density (air gaps included, kg/m^3), friction and bounce per material.
+// What a prop displaces in water (buoyancy is the weight of the water it pushes aside, never its bounding box):
+// solid is the density of its material (kg/m^3) and sealed says whether the air in it is shut in. An open prop floods,
+// so only its material displaces water: mass / solid. A sealed one displaces its whole proxy volume. The bounding box
+// gave a submerged lobster pot 14.6 times its weight in lift and a crate 6 times, and the flood threw them metres
+// into the air when they reached the surface.
 const MATERIALS = {
-	wood: { density: 170, friction: 0.6, bounce: 0.2 },
-	plastic: { density: 70, friction: 0.45, bounce: 0.3 },
-	steel: { density: 590, friction: 0.5, bounce: 0.1 }, // a mostly full drum, about 150 kg
-	picket: { density: 90, friction: 0.6, bounce: 0.15 },
+	// A slatted pine crate floods and floats on its wood: pine 500 kg/m^3 air-dry (USDA Wood Handbook FPL-GTR-282,
+	// Table 5-3, radiata and southern pines 0.42-0.55 specific gravity), so about half under.
+	wood: { density: 170, friction: 0.6, bounce: 0.2, solid: 500, sealed: false },
+	// A lobster pot is a coated wire cage with a concrete ballast runner so it sits on the sea bed: it sinks. 2,400
+	// kg/m^3 is the concrete (declared: the coated steel wire is denser, so the pot only sinks faster).
+	plastic: { density: 70, friction: 0.45, bounce: 0.3, solid: 2400, sealed: false },
+	// A closed steel drum: its whole volume displaces water. A mostly full drum, about 150 kg (declared), floats with
+	// 590 / 1025 of it under; an empty one would ride high.
+	steel: { density: 590, friction: 0.5, bounce: 0.1, solid: 7850, sealed: true },
+	// Fence pickets: open timber, floating on the wood as the crate does.
+	picket: { density: 90, friction: 0.6, bounce: 0.15, solid: 500, sealed: false },
 };
 // Prop type: material and proxy shape (0 box, 1 upright cylinder).
 const TYPES = { crate: [ 'wood', 0 ], trap: [ 'plastic', 0 ], barrel: [ 'steel', 1 ], fence: [ 'picket', 0 ] };
+
+// The rigid body a prop of this type and half extents (m) becomes: mass (kg), the volume of water it displaces fully
+// submerged (m^3), side area (m^2) and height (m), and its collision half extents (a drum is an upright cylinder of
+// radius max(x, z)). One answer for the props' physics and for the disaster loads (Disasters.bodyOptions).
+export function propBody( type, half, out = {} ) {
+
+	const [ material, shape ] = TYPES[ type ] ?? TYPES.crate;
+	const { density, solid, sealed } = MATERIALS[ material ];
+	const r = Math.max( half.x, half.z ), hx = shape === 1 ? r : half.x, hz = shape === 1 ? r : half.z;
+	const volume = shape === 1 ? Math.PI * r * r * half.y * 2 : 8 * half.x * half.y * half.z;
+	out.mass = Math.max( 0.5, volume * density );
+	out.volume = sealed ? volume : out.mass / solid;
+	out.area = shape === 1 ? 2 * r * 2 * half.y : 4 * half.y * Math.max( half.x, half.z );
+	out.height = 2 * half.y;
+	out.half = [ hx, half.y, hz ];
+	return out;
+
+}
 // Walker colliders of prop stacks (DebrisPlacement) handed over to the props they cover.
 const LINKED = new Set( [ 'crate', 'trap', 'barrel' ] );
 const CELL = 8;
@@ -341,26 +371,14 @@ export class PropPhysics {
 		if ( !this.awake.has(p.id) && this.awake.size >= MAX_AWAKE ) return;
 
 		const [ material, shape ] = TYPES[ p.type ];
-		const { density, friction, bounce } = MATERIALS[ material ];
+		const { friction, bounce } = MATERIALS[ material ];
 		const { c, half } = p.local;
 		p.m.decompose( _v, _q, _c );
 		_p.copy( c ).applyMatrix4( p.m );
 		const state = this._state;
 		state.set( [ _p.x, _p.y, _p.z, _q.x, _q.y, _q.z, _q.w, velocity?.x ?? 0, velocity?.y ?? 0, velocity?.z ?? 0 ] );
-		let volume;
-		if ( shape === 1 ) {
-
-			const r = Math.max( half.x, half.z );
-			this._dims.set( [ r, half.y, r ] );
-			volume = Math.PI * r * r * half.y * 2;
-
-		} else {
-
-			this._dims.set( [ half.x, half.y, half.z ] );
-			volume = 8 * half.x * half.y * half.z;
-
-		}
-		p.physical={mass:Math.max(.5,volume*density),volume,area:shape===1?2*this._dims[0]*2*half.y:4*half.y*Math.max(half.x,half.z),height:2*half.y};
+		p.physical = propBody( p.type, half, p.physical ?? {} );
+		this._dims.set( p.physical.half );
         if ( ! this.physics.wake_prop( p.id, shape, this._dims, state, p.physical.mass, friction, bounce, false ) ) return;
 		this.awake.set( p.id, p );
 		p.rest = 0;

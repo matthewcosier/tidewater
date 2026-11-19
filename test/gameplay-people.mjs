@@ -8,6 +8,7 @@ import {Crowd} from '../src/ferry/Crowd.js';
 import {FerryDeck} from '../src/ferry/FerryDeck.js';
 import {FerryShip} from '../src/ferry/FerryShip.js';
 import {DisasterField} from '../src/disasters/Field.js';
+import {tornadoLifecycle} from '../src/disasters/TornadoFunnel.js'; // the mature stage starts when the seeded genesis ends
 import {Disasters} from '../src/disasters/Disasters.js';
 import {WaterGrid} from '../src/disasters/WaterGrid.js';
 import {Ragdoll} from '../src/player/Ragdoll.js';
@@ -46,7 +47,7 @@ function tumbleFixture(){
 }
 test('Production walking player releases control to 14 physical bodies in a strong vortex',()=>{
  const f=playerFixture();f.player.position.set(20,0,0);f.player.avatar.group.position.copy(f.player.position);
- const e=f.field.start('tornado',{x:0,z:0,intensity:120,radius:180,speed:0});e.time=2;f.keys.add('KeyW');
+ const e=f.field.start('tornado',{x:0,z:0,intensity:120,radius:180,speed:0});e.time=tornadoLifecycle(e,{}).genesis+2;f.keys.add('KeyW');
  f.tick();assert.equal(f.player.mode,'ragdoll');assert.equal(f.player.ragFrom,'walk');assert.equal(f.player.rag.bodies.length,14);
  assert.equal(f.player.rag.disasterField,f.field);
  for(const b of f.player.rag.bodies){assert.ok(V(b.v.x,b.v.y,b.v.z).distanceTo(f.player.velocity)<1e-9);assert.deepEqual(b.w,{x:0,y:0,z:0});}
@@ -180,7 +181,7 @@ test('A recovered NPC swimmer is carried by actual current with its own body mas
 });
 test('A person walking the actual ferry can release deck locomotion to physical wind capture',()=>{
  const f=playerFixture(-100),{ship,deck}=ferryFixture(),p=f.player;p.groundProviders?.add(deck.support);p.position.copy(ship.toWorld(V(7.7,7,-1),V()));p.avatar.group.position.copy(p.position);deck.board(p,p.position);
- p.environment=f.field;const e=f.field.start('tornado',{x:p.position.x-20,z:p.position.z,intensity:120,radius:180,speed:0});e.time=2;
+ p.environment=f.field;const e=f.field.start('tornado',{x:p.position.x-20,z:p.position.z,intensity:120,radius:180,speed:0});e.time=tornadoLifecycle(e,{}).genesis+2;
  deck.walk(p,1/60);assert.equal(p.mode,'ragdoll');assert.equal(p.ragFrom,'ferry');assert.equal(p.rag.bodies.length,14);assert.equal(p.rag.disasterField,f.field);
 });
 test('The ferry point-velocity API includes measured heave, pitch and roll without treating a reset as an impulse',()=>{

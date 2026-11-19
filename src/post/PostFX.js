@@ -90,6 +90,10 @@ export class PostFX {
 			max: [ 'f32', 6.0 ],
 			up: [ 'f32', 1.6 ], // adaptation rates (1/s): brightening, darkening
 			down: [ 'f32', 1.1 ],
+			// Multipliers of refLum and max, 1 on a fine day (exact no-ops). Under a tornado's storm the
+			// meter aims lower and may not open as far, so a dark sky stays dark (StormSky.applyLight).
+			refScale: [ 'f32', 1 ],
+			maxScale: [ 'f32', 1 ],
 		}, { label: 'autoExposure' } );
 		// (`ref` is a WGSL keyword: the field is refLum, aliased as autoExposure.ref)
 		this.autoExposure = { ...this.aeUniforms.fields, ref: this.aeUniforms.fields.refLum };
@@ -440,9 +444,9 @@ ${ reduce }
 		let avg = exp2( sumL[ 0 ] / max( sumW[ 0 ], 1e-4 ) );
 		// the eye only partly compensates: dark scenes stay darker (dusk and night must not
 		// look like day), and at night at most one extra stop
-		let ratio = ae.refLum / avg;
+		let ratio = ae.refLum * ae.refScale / avg;
 		let partial = select( ratio, pow( ratio, 0.8 ), ratio > 1.0 );
-		let tgt = clamp( partial, ae.min, mix( ae.max, 2.0, frame.night ) );
+		let tgt = clamp( partial, ae.min, mix( ae.max * ae.maxScale, 2.0, frame.night ) );
 		let cur = aeExposure[ 0 ];
 		let rate = select( ae.down, ae.up, tgt > cur );
 		let k = 1.0 - exp( - frame.dt * rate );

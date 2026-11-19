@@ -64,15 +64,18 @@ test( 'At Joey Island the drive from the marshalling lanes to the island road is
 // Wherever the site cuts land back to the flat, the cut face is a bank, not a wall: the same
 // rule as the road grading (test/coastal-grade.mjs), 1.4 m per metre or the natural slope.
 test( 'The cut behind Joey\'s yard leaves a bank, never a cliff', () => {
-	const { res, heights } = terrain, before = natural.heights, walls = [];
+	// row-major over the rectangular domain: stride resX, i over resX columns (x), j over resZ rows (z)
+	const { resX, resZ, heights } = terrain, before = natural.heights, walls = [];
 	const o = PLACES.joey.position, reach = 160;
-	const i0 = Math.floor( ( o.x - reach - terrain.origin ) / terrain.texel ), i1 = Math.ceil( ( o.x + reach - terrain.origin ) / terrain.texel );
-	const j0 = Math.floor( ( o.z - reach - terrain.origin ) / terrain.texel ), j1 = Math.ceil( ( o.z + reach - terrain.origin ) / terrain.texel );
+	const i0 = Math.floor( ( o.x - reach - terrain.originX ) / terrain.texel ), i1 = Math.ceil( ( o.x + reach - terrain.originX ) / terrain.texel );
+	const j0 = Math.floor( ( o.z - reach - terrain.originZ ) / terrain.texel ), j1 = Math.ceil( ( o.z + reach - terrain.originZ ) / terrain.texel );
+	// a window off the domain (or a NaN from a missing field) would scan nothing and pass empty
+	assert.ok( i0 >= 0 && j0 >= 0 && i1 < resX && j1 < resZ, `the yard window [${ i0 }, ${ i1 }] x [${ j0 }, ${ j1 }] lies inside the ${ resX } x ${ resZ } domain` );
 	const cut = k => before[ k ] > FLAT + 0.1 && heights[ k ] < before[ k ] - 0.02;
 	let faces = 0;
 	for ( let j = j0; j < j1; j ++ ) for ( let i = i0; i < i1; i ++ ) {
-		const k = j * res + i;
-		for ( const n of [ k + 1, k + res ] ) {
+		const k = j * resX + i;
+		for ( const n of [ k + 1, k + resX ] ) {
 			if ( ! cut( k ) && ! cut( n ) ) continue;
 			faces ++;
 			const step = Math.abs( heights[ k ] - heights[ n ] ), slope = Math.abs( before[ k ] - before[ n ] );

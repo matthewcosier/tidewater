@@ -11,6 +11,7 @@
 //   Asphalt      aggregate, patched repairs, oil drips and tyre polish down the queue lanes
 //   Rock*        armour stone: granite grain, hairline cracks, rain streaks, small lichen rosettes on the dry
 //                tops, a dark wet splash band, a barnacle crust and weed below it
+//   Concrete     aggregate mottle, fading grit, rain streaks and a dark splash zone (the fender dolphins)
 //   Saltbush, Verge*  leafy shrubs and grass tufts
 //
 // Use with loadModel( url, { customize: terminalPaint } ). perlin3, mx_fractal_noise_float3, sat and
@@ -87,10 +88,12 @@ const ASPHALT = /* wgsl */`
 	// patched asphalt: saw-cut repairs of mixed sizes, newer ones black with a tar-sealed edge, older ones grey and ravelled
 	let pw = vec2f( 0.2 + 0.18 * fract( ph * 7.7 ), 0.14 + 0.2 * fract( ph * 13.1 ) );
 	let pd = max( abs( fract( aq.x / 6.0 ) - 0.5 ) - pw.x, abs( fract( aq.y / 6.0 ) - 0.5 ) - pw.y );
-	let pin = step( 0.6, ph ) * step( pd, 0.0 );
-	let pedge = step( 0.6, ph ) * ( 1.0 - smoothstep( 0.004, 0.012, abs( pd ) ) );
-	ac = mix( ac, mix( ac * 1.3 + vec3f( 0.025 ), ac * 0.5, step( 0.8, ph ) ), pin );
-	ac = mix( ac, vec3f( 0.02, 0.02, 0.022 ), pedge * 0.8 );
+	let pdr = pd + perlin3( vec3f( aq * 1.9, 9.1 ) ) * 0.004;
+	let pfw = max( fwidth( pdr ), 1e-5 );
+	let pin = step( 0.6, ph ) * ( 1.0 - smoothstep( - pfw, pfw, pdr ) );
+	let pedge = step( 0.6, ph ) * ( 1.0 - smoothstep( 0.002, 0.006 + pfw, abs( pdr ) ) ) * ( 1.0 - smoothstep( 0.002, 0.006, pfw ) );
+	ac = mix( ac, mix( ac * 1.2 + vec3f( 0.02 ), ac * 0.62, step( 0.8, ph ) ), pin );
+	ac = mix( ac, vec3f( 0.02, 0.02, 0.022 ), pedge * 0.6 );
 	// crack sealing: meandering tar lines, faded out where they would go sub-pixel
 	let crk = abs( perlin3( vec3f( aq * 0.22, 4.4 ) ) + 0.25 * perlin3( vec3f( aq * 1.3, 8.8 ) ) );
 	let cfw = fwidth( crk );
@@ -249,6 +252,24 @@ const SURFACES = {
 	SandyGravel: ground( 'in.color.rgb' ),
 	CrestGravel: ground( 'vec3f( 0.0, 0.35, 0.0 )' ),
 	Asphalt: ASPHALT,
+	LinkspanPlate: /* wgsl */`
+	let lkp = in.vs.vLocal;
+	let lkf = smoothstep( 0.008, 0.03, length( fwidth( lkp ) ) );
+	s.albedo = mix( s.albedo * ( 0.92 + 0.16 * perlin3( lkp * 0.7 ) ), vec3f( 0.152, 0.156, 0.16 ), lkf );`,
+	PaintedSteel: /* wgsl */`
+	let skp = in.vs.vLocal;
+	let skf = smoothstep( 0.008, 0.03, length( fwidth( skp ) ) );
+	let sku = smoothstep( 0.7, 0.9, abs( normalize( cross( dpdx( skp ), dpdy( skp ) ) ).y ) ) * ( 1.0 - step( 3.75, abs( skp.x ) ) );
+	s.albedo = mix( s.albedo, vec3f( 0.152, 0.156, 0.16 ), skf * sku );`,
+	Concrete: /* wgsl */`
+	let cp = in.vs.vLocal;
+	let cfw = 1.0 - smoothstep( 0.01, 0.04, length( fwidth( cp ) ) );
+	let cgr = fract( sin( dot( floor( cp * 45.0 ), vec3f( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
+	let cmo = perlin3( cp * 1.3 ) * 0.6 + perlin3( cp * 5.1 ) * 0.4;
+	let cst = smoothstep( 0.55, 0.95, perlin3( vec3f( cp.x * 4.0, cp.y * 0.3, cp.z * 4.0 ) ) * 0.5 + 0.5 );
+	let csp = 1.0 - smoothstep( 1.2, 2.6, cp.y );
+	s.albedo = s.albedo * ( 0.8 + 0.16 * cmo + 0.12 * ( cgr - 0.5 ) * cfw ) * ( 1.0 - 0.22 * cst ) * ( 1.0 - 0.45 * csp );
+	s.roughness = clamp( s.roughness - 0.35 * csp, 0.0, 1.0 );`,
 	// ground markings worn by tyres and weather (the buildings' white paint stands above y 3.3 and is left alone)
 	PaintWhite: /* wgsl */`
 	let wp = in.vs.vLocal;

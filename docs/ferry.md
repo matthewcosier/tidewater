@@ -5,11 +5,11 @@ A 50.4 m, 17.8 m beam aluminium catamaran car ferry after Austal's Spirit of Kan
 (Penneshaw layout: breakwater hook, L jetty, solar-roofed hall, marshalling yard, stern-to berth).
 Schedule, the Joey Island crossing, wake in game and marine life are later phases (plan at the end).
 
+## Design: a faster helm, boost, two ships and a longer strait (2026-10-05)
+
 ## Model: `tools/ferry/ferry_build.py`
 
 Procedural Blender build (Blender 5, headless):
-
-    blender --background --factory-startup --python tools/ferry/ferry_build.py
 
 Outputs `public/ferry/ferry.glb`, `public/ferry/ferry_colliders.json` and `assets/ferry/ferry.blend`.
 Most parts go through `tools/ferry/ferry_batch.py` (one mesh per group and material; sheets such as
@@ -39,8 +39,6 @@ Stations: `HelmStation`, `GangwayDoor` (port), `GangwayDoorStarboard`, `RampTop`
 
 Review renders: `tools/ferry/ferry_render.py` (Cycles on the GPU, a simulated sea with a wake mask
 painted into the water, marine paint shaders from `tools/ferry/ferry_paint.py`, render-only passengers):
-
-    blender --background assets/ferry/ferry.blend --python tools/ferry/ferry_render.py -- OUT_DIR view...
 
 Views: photo ref ref9 (framed like the reference photo) sideclose aerial1 bowlow sternq bow34 stern34
 profile aerial rampdown bridge helm wheel saloon cafe cardeck stairs sundeck bowdeck corridor.
@@ -99,15 +97,6 @@ the shell for the row behind; padded armrests sit on bent tube. The pan top stay
 (-8 degrees, `SEAT_PLATES`) is unchanged, so `SEATS` in `Crowd.js` and the seat numbers still fit. The seats cost
 about 100 k triangles (the GLB went from 236 k to 337 k triangles, 12.2 to 17.6 MB).
 
-Export weight (2026-09-27, round 2): `Seats` was never in `fb.flush`'s smooth groups, so the seats exported flat, every
-triangle with its own three vertices, and the rounded parts shaded faceted. `flush` now takes per-group sharp angles:
-`{'Hull': 35, 'Boat': 35, 'Seats': 50, 'Props': 50, 'Fittings': 50}` (50 keeps box edges and cylinder caps crisp, rounds
-8-sided tubes, welds everything else). Flat lettering (`text()`) is coplanar, so its faces are marked smooth and share
-vertices; extruded lettering (`tidy_glyphs`) is smooth with a 35 degree sharp pass. `pillow(..., caps=)` drops ends that
-are buried (the back cushion's and headrest's rear ends). Result: 575 k to 406 k vertices, 17.6 to 13.0 MB, with 349 k
-triangles including the new fit-out. Check a GLB's weight per material with a vertex/triangle ratio: near 2.0 means
-flat-shaded boxes or unwelded parts.
-
 `CorridorLaminate` draws 1.2 m panels with a shadow gap at least a pixel wide (`fwidth`), a linen weave above an
 oak-effect dado, an aluminium dado rail with its shadow line, a head joint at 2.15 m, scuffs, screw heads and a rubber
 skirting. `CarDeckWall`'s fill under the saloon is 0.2 (0.4 burnt the near-white wall out) and soot darkens it toward
@@ -130,26 +119,8 @@ tops sit forward of z -12.6). Walker's step is 0.45 m (two risers of a 0.183 m s
 
 ## Runtime: `src/ferry/`
 
-- `Ferry.js`: loads her, steps the ship, keeps her model, wheel, throttles and radars in step,
-  boards walkers who step onto her decks, registers her vehicle deck as a moving platform in the
-  car physics (`add_platform`/`set_platform`, see `docs/rally-physics.md`), turns impacts into
-  hull damage (8 MJ holes her; she floods over a minute, settling by the stern with a list, and
-  is refloated at her mooring), plays the procedural horn and crunch, and shows the helm readout
-  (`role=status`, name "Ferry helm", with `data-speed/-hull/-x/-z/-yaw`).
-- `FerryShip.js`: 3-DOF dynamics (450 t, 220 kN ahead / 60 % astern, top speed 8.2 m/s, lever
-  lag 1.8 s, rudder 35 deg at 12 deg/s in the propeller wash, 40 kN bow and 40 kN stern
-  thrusters 20 m either side of her centre), a gentle
-  swell, keel grounding against the terrain and hull strikes against world colliders. Handling:
-  1.6 m/s after 5 s, 8.05 m/s flat out, a 101 m turning radius flat out, 44 deg in 20 s on the
-  bow thruster from rest. The thrusters pushing the same way walk her sideways (about 0.6 m/s
-  at full), pushing opposite ways turn her in place; `ship.thruster` is the bow's (-1 bow to
-  port .. 1 bow to starboard), `ship.stern` the stern's (-1 stern to port .. 1 stern to
-  starboard). `HULL` exports her figures for the autopilot's feed forward.
-- `FerryDeck.js`: walking her decks in her frame (player modes `ferry` and `ferry-helm`),
-  stepping off onto the world, overboard into the sea, the helm and its bridge / chase views.
-
 Controls at the helm: A/D wheel (it stays where you leave it), W/S throttles, X stop, C wheel
-amidships, Shift+A/D bow thruster, H horn, V bridge or chase view, E leave the helm. The stern
+amidships, G boost (on or off), Shift+A/D bow thruster, H horn, V bridge or chase view, E leave the helm. The stern
 thruster is the autopilot's alone: there is no key for it, and `Ferry.update` zeroes it whenever
 the service is not steering.
 
@@ -163,7 +134,7 @@ looking out to sea, +Y up; world = position + rotateY( yaw ) · local, with loca
 `Object3D.rotation.y`. `terminalToWorld()` is the one place that transform lives; everything
 below derives from it, so moving the terminal is a one-line change.
 
-Data flow. The terminal generator (`tools/ferry/terminal_*.py`) writes three files, all in the glTF
+Data flow. The terminal lane (`tools/ferry/terminal_*.py`) writes three files, all in the glTF
 frame, and the game only reads them:
 - `src/ferry/terminalSite.js`: terrain edits and keep-clear zones (`fill`, `dredge`, `ridges`,
   `clear`, `roadEntry`, `parking`). `applyTerminalSite( terrainData )` runs in `App.init` straight
@@ -217,28 +188,36 @@ yaw is the terminal's, port side to the jetty. At rest her gunwale samples (x +/
 on the berth. The deployed gangway lands on her port door sill (+9.32, 7.0, 9.7): a walker
 crossing it from the covered walkway boards her through `FerryDeck.canBoard`.
 
-Terminal detail (2026-09-27):
-- Check-in booth (section 8, under `XF`): stainless kick plate, aluminium framed glazing and mullions, a sliding service
-  window on its track with a deal tray, speech grille and card reader, a cantilevered canopy over the lane edge
-  (x -6.05 authored, clear of a car; no collider) with a lit soffit and CHECK-IN / LANE 1 fascias, a ticket pedestal,
-  a back door and AC unit, four yellow bollards, grime and kerb scuffs. The island's `car` box is unchanged.
-- Boat shed: windows in both long walls and a flood lamp; `ShedCladding` paint (TerminalPaint `SHED`): corrugation,
-  laps every 760 mm, rain streaks, rust at the laps and foot, splash dirt.
-- Revetment: the dry rows (t < 2.0) use the craggy hero stones; the splash rows keep the lighter ones.
-- Ground (`ground()`): compacted zones, dried puddle silt and weed clumps at scales that hold from the air.
-- Hall: `Ceiling` gets a warm fill and a 600 x 1200 tile grid (it rendered dark green), `WallLining` a light fill.
-- Hall seating (round 2): `seat_shell()` sweeps a moulded 16 mm shell profile across the seat; the beam seating is six
-  shells a row on brackets off a steel box beam with end caps, tube armrests with pads, T-legs on glides; the cafe chairs
-  use the same shell. Colliders unchanged.
-- Yard paint (TerminalPaint, round 2): `Asphalt` has saw-cut repairs of mixed sizes (new ones black with a tar edge, old
-  ones grey), crack-seal lines, an oil stain per car length in the queue lanes, darker polished wheel paths and gully
-  grates down the lanes every 13.5 m; `PaintWhite` below y 3.3 (the ground markings) wears where tyres run;
-  `SandyGravel` has stronger zones and damp patches. Traced: `terminal.glb` has no `Saltbush` mesh (bounds probe), so
-  grey-green lumps seen near the terminal are not the terminal's; they come from the world scatter.
-- Departure board: bigger rows (0.2 m), dimmer glow (emissive 1.1 to 1.3, was 2.5 to 3.0, which bloomed into shimmer).
-- Lettering rule for the terminal: `text()` runs `tidy_glyphs`; with a 5 or 6 mm extrusion the weld still ate
-  straight strokes (E read as I', L as I, T lost its bar). Use at least 0.02 extrusion for lettering people read up
-  close; the triangle count does not change with depth. `dissolve_degenerate` is no longer part of `tidy_glyphs`.
+### Harbour time
+
+Slow only where the harbour needs it. Measured in `test/ferry-fleet.mjs` (real FerryShip and
+FerryService, both berths from WORLD), lines off to 200 m out / 200 m off the far berth to lines on:
+
+### Turning inside the breakwater
+
+- Thrusters, a declared game choice: 100 kN each (was 40 kN). Reference: tunnel thrusters give
+  about 11 to 13 kgf per kW, so a 50 m ship of her size carries 300 to 400 kW units (about 40 kN);
+  100 kN is an 800 kW unit, the size a 150 m ro-pax carries at the bow. She swings 180 degrees in
+  about 20 to 30 s and walks sideways at up to 0.8 m/s.
+- The gate (where she swings) is 85 m out along the berth's axis from her marks. Her corners turn
+  on a 26.5 m circle; there it passes the jetty head's corner (terminal x 10.1, z 78) 6.7 m clear.
+  At 60 m out the circle cuts into the marina walkway, and the sweep in `test/ferry-fleet.mjs`
+  failed at once (gunwale up to 2.96 m into the walkway box, and she hung on it).
+- She plans her braking to come to rest on the gate (0.5 m/s2, under her 0.59 m/s2 astern), and
+  inside 30 m of it she pivots on it: the levers hold the gate's distance along her bow and both
+  thrusters its distance abeam, while the thrusters' difference turns her at up to 0.12 rad/s.
+- She leaves along the axis until her stern is 5 m past the jetty head (85 m out), then turns.
+  At 60 m out the turn kicked her stern into the walkway.
+- She backs only when square within 3 degrees and on the line before her stern passes the jetty
+  head (within 0.25 m at full creep, stopped at 0.55 m off), on a 0.175 m/s2 braking curve, and
+  comes ahead again if she runs past her marks (the old crawl pushed her on astern into the
+  linkspan).
+- She turns out of her harbour at TURN only while the other ship is within 900 m (MEET).
+
+The sweep: `test/ferry-fleet.mjs` builds both terminals on the real terrain and loads
+`terminal_colliders.json`, then every frame in a harbour checks her keel lines against the seabed
+and the breakwater cores, and her gunwales (a 0.4 m capsule, as `FerryShip.collide`) against the
+terminal's boxes.
 
 ## Evidence
 
@@ -264,13 +243,13 @@ Spirit". Red before the terminal existed: the drop landed in the sea (`mode: swi
 
 ## Joey Island and the scheduled service
 
-- Joey Island lies across the strait to the south (src/world/terrain/IslandShape.js `JOEY` outline and two ridges; TerrainData `_coast()` blends it in). Its terminal is the same site placed a second time: `WORLD.joeyTerminal` (-176, 0, 652), yaw 220 degrees. `Terminal.js` takes a placement name (`new Terminal( app, 'joey' )`, `PLACES`), `applyTerminalSite( terrain, site, place )` edits the terrain for either, and each instance has its own `toWorld` and `berth()`.
+- Joey Island lies across the strait to the south (src/world/terrain/IslandShape.js `JOEY` outline and two ridges; TerrainData `_coast()` blends it in). Its terminal is the same site placed a second time: `WORLD.joeyTerminal` (-176, 0, 1802 since 2026-10-05; 652 before), yaw 220 degrees. `Terminal.js` takes a placement name (`new Terminal( app, 'joey' )`, `PLACES`), `applyTerminalSite( terrain, site, place )` edits the terrain for either, and each instance has its own `toWorld` and `berth()`.
 - `Ferry.berths` lists both berths; `onMarks`, the auto capture, `makeFast` and the berthing signals work against the nearest one, and the gangway and linkspan barrier follow the terminal she lies at (`ferry.at`). The helm readout carries `data-berth` ('tidewater' | 'joey' | '').
 - `FerryService.js`: the timetable (60 s layover at start with the ramp up, ramp down, 60 s loading, ramp up, cast off with the prolonged blast, sail, make fast, lower the ramp, load, return). It is on by default; `?ferryService=off` turns it off (she then lies made fast until a player takes her), and `?ferryTimetable=short` shortens only the waits at the berth to 4 s and 5 s (tests). When it is off the departures board stays hidden. Taking her helm pauses the service; leaving it resumes from where she is: made fast, the berth cycle goes on (a layover of at least 10 s); under way, she makes for the nearest berth.
 - The `Autopilot` drives her real lever, wheel and thrusters, in legs (`pilot.leg`, also `data-leg` on the board):
   - `depart`: dynamic positioning straight out along the berth's axis at service speed until 60 m out (`CLEAR`), the thrusters holding her on the line and on its heading so her port side never touches the jetty;
-  - `cross`: wheel and levers for the far berth's gate, 130 m out along its axis (`GATE`), at 7.8 m/s (`CRUISE`), slowing inside 130 m;
-  - `swing`: 60 m short of the gate (`SWEEP`) a slow sweeping turn onto the berth's axis heading out, so she lies stern-to well outside the breakwater head (about 70 m out);
+  - `cross`: wheel and levers for the far berth's gate, 130 m out along its axis (`GATE`), at 12 m/s (`CRUISE`, 7.8 m/s before 2026-10-05), slowing inside 200 m;
+  - `swing`: 60 m short of the gate (`SWEEP`) a pivot nearly in place on both thrusters (0 to 0.3 m/s, heading only) onto the berth's axis heading out, so she lies stern-to outside the breakwater head (about 170 m out from her marks);
   - `back`: dynamic positioning down the axis. Heading held on the berth's yaw by the thrusters turning against each other, sideways held on a line 0.3 m to starboard of her marks (`MARK`) by the thrusters pushing together, and astern on the levers at up to 3 m/s (`CREEP`), easing as the square root of the distance left (`sqrt( 0.07 * along )`, then `0.12 * along + 0.05` in the last metres) so she comes onto her marks at a crawl. She holds off (no way astern) while she is more than about 0.4 m plus 8 % of the distance left off the line, or more than 0.05 rad off heading. The lines go on through `Ferry.onMarks` (1.5 m, 3 deg, 0.4 m/s), and the winches haul her the last 0.3 m in.
   - `route()` puts her straight into `back` when she is resumed within 90 m of the berth (`HOLD`), under 2 m/s and within 0.8 rad of its heading.
 - Offline sim (terrain edits and both terminals' collider boxes, the autopilot and `FerryShip` as shipped, 60 and 30 fps): Tidewater to Joey Island makes fast 202.6 s after casting off, Joey Island to Tidewater 227.0 s; peak sideways error inside 90 m of the berth 0.30 m (the aim), no hull contact at all (no collider push, no grounding, no impact). The earlier bow-thruster-only approach never made fast at Joey Island (2 m off her marks) and brushed the jetty 1088 times.
@@ -278,6 +257,8 @@ Spirit". Red before the terminal existed: the drop landed in the sea (`mode: swi
 - Mooring and heading: her yaw is not wrapped, so a berth a full turn away (Joey Island's 220 degrees after a crossing) must be reached the short way. `FerryShip.hold()` takes the berth heading by the wrapped difference; snapping to the berth's raw yaw read as a one-frame spin of hundreds of rad/s and flung cars parked on her deck into the wing wall (test/ferry-mooring.mjs pins it).
 - Driving off: cars back off her stern down the ramp and the linkspan (terminal.spec.js "Driving off", crossing.spec.js at Joey Island). The ramp is 10 m wide on a 13.2 m deck, so a car parked hard over to one side has to swing its tail across while backing.
 - Departures board: top centre, dropping below the driving key hints while they show.
+- Joey's ground cover: the grass mask (`Scatter.js` `buildGrassMask`) holds rows for the main island (z -950..0) and for Joey over its outline's z extent, with the same density rules; GrassField's distance culling decides what draws. `test/joey-grass.mjs`: meadow on 47.8 % of Joey's open land (0.0 % before), none on its built sites, its road or the strait.
+- Review views (`src/core/DebugViews.js`, placed from `WORLD.joeyTerminal`): `joeyAir`, `joeyLowSun`, `joeyStrait` (from a deck about 650 m out), `joeyMeadow`, `joeySouth` (over Joey to the terrain's south edge).
 - Minimap: the bake covers 1800 m (the island, the strait and Joey Island).
 - Known gaps: Joey Island to Tidewater has only been timed in the sim (227 s); the helm has no key for the stern thruster (autopilot only).
 
@@ -285,33 +266,6 @@ Spirit". Red before the terminal existed: the drop landed in the sea (`mode: swi
 
 `src/ferry/Traffic.js` and `src/ferry/Crowd.js` (created and updated by `Ferry`, after `berthing()`;
 `ferry.peopleMs` is their smoothed CPU time) keep the terminals and her decks from being empty.
-
-- **Cars.** Each terminal keeps 6 to 9 of the four `parked_cars.glb` models queued in the lanes at
-  terminal x 0.75 and 4.0 from z -40 back, topped up by cars driving in through the check-in lane
-  (x -3.15) under the boom, which they lift with `terminal.openBoom()`. With her ramp down and the
-  service loading, the cars that crossed with her drive off first (once their drivers are back in),
-  then the queue drives aboard nose to tail: over the linkspan and up her ramp at 1.6 m/s, up her
-  centre lane, round at the bow and aft down her outer lanes (x ±4.9) to park facing the stern,
-  aftmost first, 10 slots clear of the wing stair doors. Her centre lanes stay free for the player.
-  Kinematic, no physics: a car stops for any car ahead of it in the order and for the player's car
-  (`app.rally.state`); aboard, its pose is kept in her frame. `FerryService` holds her ramp down
-  while `traffic.holding()` (cars still on or off, or queued with slots free, for up to 75 s past
-  her timetable).
-- **People.** Eight Rocketbox adults (`tools/characters/build_crowd.sh`, MIT), four instances each
-  sharing one set of maps. Foot passengers come out of the hall past the ticket counter, round the
-  yard path, up the stair tower and along the covered walkway to wait in pairs at the gangway gate
-  (half turned to each other, one talking with the hands, the other nodding); with the gangway out
-  and the service loading they file over it into her port door, to a saloon seat or the sun deck's
-  rail, and at the far side walk off into that terminal's hall and go. Drivers get out beside their
-  parked cars, climb the wing stairs and come back down as she swings for the far berth.
-  `crowd.holding()` keeps her while anyone is on the gangway. The walk comes from the `motextr_xy`
-  set with its root motion, which `rootMotion()` strips and turns into the pace the clip is played
-  at, so their feet don't slide.
-- **Greeting the player.** Within 3 m of the player and looked at, a person turns head and chest on
-  the skeleton (`turnHead`: head, neck and upper spine share the turn), standing people turn to
-  face the player, and they wave or nod; if the player stays, they talk with their hands or point.
-  Walkers pause to do it. A cool-down stops it looping.
-- Far people are hidden past 90 m and animated every third frame past 30 m; cars are hidden past 400 m.
 
 `test/browser/crowd.spec.js`: at Tidewater on the short timetable, cars queue, drive aboard and park
 in her outer lanes (asserted in her frame) and foot passengers walk over the gangway into her and

@@ -1,5 +1,6 @@
 import { Vector3 } from '../engine/index.js';
 import { AIR_DENSITY, SEA_WATER_DENSITY, GRAVITY } from '../physics/Loads.js';
+import { surfaceRate } from './SurfaceRate.js';
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 
 // The bridge returns actual v + omega cross r. No attitude differencing or
@@ -17,58 +18,106 @@ export function worldPrincipalInertia(diag,q){
  const axes=[new Vector3(1,0,0),new Vector3(0,1,0),new Vector3(0,0,1)].map(v=>v.applyQuaternion(q).toArray()),out=new Float64Array(9);
  for(let a=0;a<3;a++)for(let i=0;i<3;i++)for(let j=0;j<3;j++)out[i*3+j]+=diag[a]*axes[a][i]*axes[a][j];return out;
 }
-function solveSPD(A,b){
- const L=new Float64Array(36),y=new Float64Array(6),x=new Float64Array(6);
- for(let i=0;i<6;i++)for(let j=0;j<=i;j++){let s=A[i*6+j];for(let k=0;k<j;k++)s-=L[i*6+k]*L[j*6+k];L[i*6+j]=i===j?Math.sqrt(Math.max(1e-18,s)):s/L[j*6+j];}
- for(let i=0;i<6;i++){let s=b[i];for(let j=0;j<i;j++)s-=L[i*6+j]*y[j];y[i]=s/L[i*6+i];}
- for(let i=5;i>=0;i--){let s=y[i];for(let j=i+1;j<6;j++)s-=L[j*6+i]*x[j];x[i]=s/L[i*6+i];}return x;
-}
-function product(A,v){return Array.from({length:6},(_,i)=>{let s=0;for(let j=0;j<6;j++)s+=A[i*6+j]*v[j];return s;});}
 export function boxLoadPoints(half){
  const h=Array.isArray(half)?half:[half.x,half.y,half.z],points=[];
  for(let axis=0;axis<3;axis++)for(const sign of [-1,1]){const p=[0,0,0];p[axis]=sign*h[axis]*.65;points.push({local:p,half:h.map(x=>x*.35),areaWeight:1/6,volumeWeight:1/6});}return points;
 }
 // stemShare and crownShare split the body's buoyant volume. The crown's branch wood floats like the
 // stem (TreeMass.js): with no crown volume a floating tree's top sank and stood it on end.
-export function treeLoadPoints(height,radius,crownRadius,{crownY=height*.32,crownHalfHeight=height*.12,stemShare=1,crownShare=0}={}){
+// stemCdA and crownCdA (m²) give each point its own drag area, the same in air and in water (TreeFailure.js
+// crownDragArea, stemDragArea): the standing tree's aerodynamics carried onto the body, so the load does not jump at release.
+export function treeLoadPoints(height,radius,crownRadius,{crownY=height*.32,crownHalfHeight=height*.12,stemShare=1,crownShare=0,stemCdA,crownCdA}={}){
  const points=[];
- for(let i=0;i<5;i++)points.push({local:[0,(i-2)*height/5,0],half:[radius,height/10,radius],areaWeight:.2/5,volumeWeight:stemShare/5});
- for(const [x,z]of [[-1,0],[1,0],[0,-1],[0,1]])points.push({local:[x*crownRadius,crownY,z*crownRadius],half:[crownRadius*.5,crownHalfHeight,crownRadius*.5],areaWeight:.8/4,volumeWeight:crownShare/4});
+ for(let i=0;i<5;i++)points.push({local:[0,(i-2)*height/5,0],half:[radius,height/10,radius],areaWeight:.2/5,volumeWeight:stemShare/5,cda:stemCdA===undefined?undefined:stemCdA/5});
+ for(const [x,z]of [[-1,0],[1,0],[0,-1],[0,1]])points.push({local:[x*crownRadius,crownY,z*crownRadius],half:[crownRadius*.5,crownHalfHeight,crownRadius*.5],areaWeight:.8/4,volumeWeight:crownShare/4,cda:crownCdA===undefined?undefined:crownCdA/4});
  return points;
 }
 
-/** Coupled implicit point drag over the actual held-force interval.
- * (M + dt sum(k B'B)) deltaTwist = dt sum(k B'(u - B twist)).
- * B maps rigid COM/angular velocity to each rotated force point. M contains the
- * actual declared rotated inertia. This accounts for every point's effective mass and coupling;
- * still-fluid drag cannot increase frozen-attitude rigid kinetic energy.
- * Coefficients are reevaluated each frame. Native contacts and gravity are untouched.
+// Floats per drag record sent to the solver (set_disaster_drag, rally-physics/src/disasters.rs): the body's id, the
+// load point in the body's axes from its origin (m), rho Cd A / 2 for the point's share in this fluid (kg/m), a linear
+// damping (kg/s) and the fluid's velocity at the point (m/s, world axes).
+export const DRAG_RECORD=9;
+// A list of drag records. It grows by doubling, never per frame: Disasters.loads owns one, every body's load writes
+// its points into it and it is sent once a frame.
+export function dragList(records=64){return {data:new Float32Array(records*DRAG_RECORD),n:0};}
+function dragPoint(list,id,local,quadratic,linear,ux,uy,uz){
+ if(list.n+DRAG_RECORD>list.data.length){const grown=new Float32Array(list.data.length*2);grown.set(list.data);list.data=grown;}
+ const d=list.data,n=list.n;
+ d[n]=id;d[n+1]=local[0];d[n+2]=local[1];d[n+3]=local[2];d[n+4]=quadratic;d[n+5]=linear;d[n+6]=ux;d[n+7]=uy;d[n+8]=uz;
+ list.n=n+DRAG_RECORD;
+}
+// For a caller with no list of its own (a test, a tool): one body's records, read from out.drag.
+const OWN=dragList(24);
+const NO_OFFSET=[0,0,0];
+// Scratch for one call. The load runs for every awake body every frame (340 in a 25 m flood at the pier) and used
+// to build about thirty vectors, two 6 x 6 matrices and a closure per body per frame.
+const offset=new Vector3(),com=new Vector3(),arm=new Vector3(),at=new Vector3(),pointSample={},centreSample={};
+// m/s²: the bound on what is sent as a force held over the frame. It is safe on the three terms left there because
+// none of them is stiff. Buoyancy is at most g x 1025 / the body's density (20 m/s² for pine at 500 kg/m³, the
+// lightest material on the island) and changes only as the body moves through its own height. The crushed crown's
+// spring carries half the tree's weight at its crush depth and its period is well above a frame. Ground shaking is
+// the earthquake's acceleration, a few g at most. Drag is not on this list and has no bound: it goes to the solver.
+const HELD_BOUND=45;
+
+/** The environmental load on a rigid disaster body for one frame, in two parts.
+ *
+ * Drag, in air and in water, is stiff: water at 11 m/s puts 870 m/s² on a 26 kg crate. Sent as a force held over the
+ * frame it had to be bounded to 45 m/s², so the water could not hold a body a contact had thrown (a crate left a
+ * metre of water at 8 to 11 m/s and climbed 4.5 m), and without the bound the held force kept pushing a body a
+ * contact had already turned (bodies at 4,000 m/s). So drag is not a force here. Each load point's share goes to the
+ * solver as a record (`context.drag`, DRAG_RECORD floats: where the point is, rho Cd A / 2 for its wet or dry share,
+ * the fluid's velocity there) and the solver relaxes the point's velocity toward the fluid's every substep, implicitly
+ * (rally-physics/src/disasters.rs, fluid_drag). The water's velocity has its vertical part: the surface's rate
+ * (SurfaceRate.js), falling to zero at the bed. The wet share is this frame's (at most 25 ms of game time old).
+ *
+ * Buoyancy, a crushed crown's spring and ground shaking are returned as a force and a torque about the centre of
+ * mass (N, N m), held over the frame and bounded together to HELD_BOUND so the bound makes no torque of its own.
+ * A fallen tree's crown on the ground (body.crownGround) is a soft support at its centre, not a rigid ball (the
+ * rigid crown was a fulcrum: a felled tree's root end was thrown up at 5 to 12 m/s): a spring up from the crushed
+ * depth here, and its damping in every direction as a record with a linear coefficient and the ground's velocity, zero.
+ *
+ * `out` is `context.out` when the caller gives one (Disasters.loads reuses one object), else a new object.
  */
-export function rigidEnvironmentalLoad(field,physics,body,{position,velocity,dt,supported=false},out={}){
- const mass=body.mass,q=body.quaternion,h=body.half,step=Math.max(1e-6,dt),offset=new Vector3().fromArray(body.centerOfMass??[0,0,0]),com=position.clone().add(offset.clone().applyQuaternion(q)),omega=nativeAngularVelocity(physics,body.id,com,velocity);
- const twist=[velocity.x,velocity.y,velocity.z,omega.x,omega.y,omega.z],M=new Float64Array(36),I=body.principalInertia?worldPrincipalInertia(body.principalInertia,q):worldBoxInertia(mass,h,q);
- for(let i=0;i<3;i++){M[i*6+i]=mass;for(let j=0;j<3;j++)M[(i+3)*6+j+3]=I[i*3+j];}
- const A=M.slice(),rhs=new Float64Array(6),extra=new Float64Array(6),upAxes=[new Vector3(1,0,0),new Vector3(0,1,0),new Vector3(0,0,1)].map(v=>Math.abs(v.applyQuaternion(q).y));
- let rawForce=0,wetVolume=0;const centre=field.sample(com.x,com.y,com.z,{});
- if(supported){extra[0]+=mass*centre.ax;extra[1]+=mass*centre.ay;extra[2]+=mass*centre.az;}
- for(const point of body.loadPoints??boxLoadPoints(h)){
-  const r=new Vector3().fromArray(point.local).sub(offset).applyQuaternion(q),p=new Vector3().copy(com).add(r),s=field.sample(p.x,p.y,p.z,{}),half=point.half;
-  const B=[[1,0,0,0,r.z,-r.y],[0,1,0,-r.z,0,r.x],[0,0,1,r.y,-r.x,0]],pv=B.map(row=>row.reduce((sum,x,i)=>sum+x*twist[i],0));
-  const extent=Math.max(.005,half[0]*upAxes[0]+half[1]*upAxes[1]+half[2]*upAxes[2]),wet=s.height>field.terrain(p.x,p.z)+.02?clamp((s.height-p.y+extent)/(2*extent),0,1):0;
-  wetVolume+=body.volume*(point.volumeWeight??point.areaWeight)*wet;
-  const drag=(fluid,density,area,coefficient)=>{const relative=fluid.map((x,i)=>x-pv[i]),k=.5*density*area*coefficient*Math.hypot(...relative);rawForce+=k*Math.hypot(...relative);if(!k)return;
-   for(let i=0;i<6;i++){for(let c=0;c<3;c++)rhs[i]+=step*k*B[c][i]*relative[c];for(let j=0;j<6;j++)for(let c=0;c<3;c++)A[i*6+j]+=step*k*B[c][i]*B[c][j];}
-  };
-  drag([s.wx,s.wy,s.wz],AIR_DENSITY,body.area*point.areaWeight*(1-wet),body.dragCoefficient??1.1);
-  if(wet>0){drag([s.ux,0,s.uz],SEA_WATER_DENSITY,body.area*point.areaWeight*wet,body.waterDragCoefficient??1);
-   const lift=SEA_WATER_DENSITY*GRAVITY*body.volume*(point.volumeWeight??point.areaWeight)*wet;extra[1]+=lift;extra[3]-=r.z*lift;extra[5]+=r.x*lift;
+export function rigidEnvironmentalLoad(field,physics,body,context,out=context.out??{}){
+ const {position,velocity,supported=false}=context,list=context.drag??OWN;
+ if(!context.drag)list.n=0;
+ const first=list.n,mass=body.mass,q=body.quaternion,id=body.id,c=body.centerOfMass??NO_OFFSET;
+ offset.set(c[0],c[1],c[2]);com.copy(offset).applyQuaternion(q).add(position);
+ // How far each body axis reaches upward: the second row of the rotation matrix.
+ const upX=Math.abs(2*(q.x*q.y+q.w*q.z)),upY=Math.abs(1-2*(q.x*q.x+q.z*q.z)),upZ=Math.abs(2*(q.y*q.z-q.w*q.x));
+ let fx=0,fy=0,fz=0,tx=0,ty=0,tz=0,raw=0,wetVolume=0;
+ if(supported){const s=field.sample(com.x,com.y,com.z,centreSample);fx+=mass*s.ax;fy+=mass*s.ay;fz+=mass*s.az;}
+ const points=body.loadPoints??(body.boxPoints??=boxLoadPoints(body.half));
+ for(let i=0;i<points.length;i++){
+  const p=points[i],half=p.half,local=p.local;
+  arm.set(local[0],local[1],local[2]).sub(offset).applyQuaternion(q);at.copy(com).add(arm);
+  const s=field.sample(at.x,at.y,at.z,pointSample),ground=field.terrain(at.x,at.z);
+  const extent=Math.max(.005,half[0]*upX+half[1]*upY+half[2]*upZ),wet=s.height>ground+.02?clamp((s.height-at.y+extent)/(2*extent),0,1):0;
+  const share=p.volumeWeight??p.areaWeight;wetVolume+=body.volume*share*wet;
+  // A point with its own drag area (a tree's stem and crown) takes it in both fluids; others share the body's area by weight.
+  const own=p.cda!==undefined,area=own?p.cda:body.area*p.areaWeight;
+  const air=.5*AIR_DENSITY*area*(1-wet)*(own?1:body.dragCoefficient??1.1);
+  if(air>0){dragPoint(list,id,local,air,0,s.wx,s.wy,s.wz);raw+=air*((s.wx-velocity.x)**2+(s.wy-velocity.y)**2+(s.wz-velocity.z)**2);}
+  if(wet>0){
+   const rise=surfaceRate(field.gridAt?.(at.x,at.z),at.x,at.z)*clamp((at.y-ground)/Math.max(.05,s.height-ground),0,1);
+   const water=.5*SEA_WATER_DENSITY*area*wet*(own?1:body.waterDragCoefficient??1);
+   dragPoint(list,id,local,water,0,s.ux,rise,s.uz);raw+=water*((s.ux-velocity.x)**2+(rise-velocity.y)**2+(s.uz-velocity.z)**2);
+   const lift=SEA_WATER_DENSITY*GRAVITY*body.volume*share*wet;fy+=lift;tx-=arm.z*lift;tz+=arm.x*lift;
   }
  }
- const delta=solveSPD(A,rhs),J=product(M,delta),requested=J.map((x,i)=>x/step+extra[i]),linear=Math.hypot(...requested.slice(0,3));
- // Same disclosed translational safety bound as other disaster bodies; scale the
- // entire wrench together so the bound cannot manufacture a separate torque.
- const scale=Math.min(1,45*mass/Math.max(linear,1e-12));
- for(const [i,k]of ['fx','fy','fz','tx','ty','tz'].entries())out[k]=requested[i]*scale;
- const before=product(M,twist);out.dragWork=delta.reduce((sum,x,i)=>sum+x*(before[i]+J[i]*.5),0);out.rawDragForce=rawForce;out.rawAcceleration=linear/mass;out.limited=scale<1;out.wet=body.volume>0?wetVolume/body.volume:0;
- if(!['fx','fy','fz','tx','ty','tz','dragWork'].every(k=>Number.isFinite(out[k])))throw new Error('Non-finite rigid environmental load');return out;
+ const crown=body.crownGround;
+ if(crown){
+  arm.set(0,crown.y,0).sub(offset).applyQuaternion(q);at.copy(com).add(arm);
+  const crush=field.terrain(at.x,at.z)+crown.rest-at.y;
+  if(crush>0){const lift=crown.stiffness*crush;fy+=lift;tx-=arm.z*lift;tz+=arm.x*lift;dragPoint(list,id,crown.local??=[0,crown.y,0],0,crown.damping,0,0,0);}
+ }
+ // One scale for the force and the torque, so the bound cannot manufacture a separate torque.
+ const linear=Math.hypot(fx,fy,fz),scale=Math.min(1,HELD_BOUND*mass/Math.max(linear,1e-12));
+ out.fx=fx*scale;out.fy=fy*scale;out.fz=fz*scale;out.tx=tx*scale;out.ty=ty*scale;out.tz=tz*scale;
+ out.rawDragForce=raw;out.rawAcceleration=linear/mass;out.limited=scale<1;out.wet=body.volume>0?wetVolume/body.volume:0;out.drag=list;out.dragFirst=first;
+ // The solver refuses a whole batch for one bad number: a body with one keeps none of its records.
+ let finite=Number.isFinite(out.fx+out.fy+out.fz+out.tx+out.ty+out.tz);
+ for(let i=first;finite&&i<list.n;i++)finite=Number.isFinite(list.data[i]);
+ if(!finite){list.n=first;throw new Error('Non-finite rigid environmental load');}
+ return out;
 }
