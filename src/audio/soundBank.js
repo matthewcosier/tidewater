@@ -57,4 +57,16 @@ export const BANK = {
 	jetski_run: { file: 'jetski_run.ogg', loop: true, lufs: - 23.8 },
 	// the jetski's rocket pod (tools/audio/build-rocket.mjs, Freesound 515123 by LilMati, CC0)
 	rocket_roar: { file: 'rocket_roar.ogg', loop: true, lufs: - 23 },
+	// disaster sounds (tools/audio/build-disaster.mjs, Freesound CC0; src/disasters/DisasterSound.js)
+	dis_rush: { file: 'dis_rush.ogg', loop: true, lufs: - 24.5 },
+	dis_roar: { file: 'dis_roar.ogg', loop: true, lufs: - 24.7 },
+	dis_vortex: { file: 'dis_vortex.ogg', loop: true, lufs: - 25.4 },
+	dis_rumble: { file: 'dis_rumble.ogg', loop: true, lufs: - 23.1 },
+	dis_quake: { file: 'dis_quake.ogg', loop: true, lufs: - 23.7 },
+	dis_crack: { file: 'dis_crack.ogg', slices: [ [ 0.08, 0.3337 ], [ 0.4937, 0.984 ], [ 1.5577, 1.598 ] ], lufs: [ - 17.5, - 30, - 29.3 ] },
+	dis_tear: { file: 'dis_tear.ogg', slices: [ [ 0.08, 1.0738 ], [ 1.2338, 0.7738 ], [ 2.0877, 0.424 ] ], lufs: [ - 14.5, - 14.6, - 14.2 ] },
+	dis_treefall: { file: 'dis_treefall.ogg', slices: [ [ 0.08, 1.704 ], [ 1.864, 1.7973 ], [ 3.7413, 1.254 ], [ 5.0753, 2.8053 ] ], lufs: [ - 12.1, - 12.5, - 15.7, - 17.4 ] },
+	dis_collapse: { file: 'dis_collapse.ogg', slices: [ [ 0.08, 0.724 ], [ 0.884, 1.304 ], [ 2.268, 2.864 ], [ 5.212, 0.804 ], [ 6.096, 2.984 ] ], lufs: [ - 12, - 11.4, - 10.7, - 10.8, - 13.1 ] },
+	dis_glass: { file: 'dis_glass.ogg', slices: [ [ 0.08, 0.904 ], [ 1.064, 0.604 ] ], lufs: [ - 15.5, - 19.4 ] },
+	dis_impact: { file: 'dis_impact.ogg', slices: [ [ 0.08, 0.424 ], [ 0.584, 0.3616 ], [ 1.0256, 0.304 ], [ 1.4096, 0.364 ], [ 1.8536, 0.524 ], [ 2.4576, 0.504 ] ], lufs: [ - 17.8, - 17, - 18.4, - 17.9, - 18.7, - 16.6 ] },
 };

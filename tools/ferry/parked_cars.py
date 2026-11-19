@@ -1,15 +1,9 @@
-"""Low-detail parked cars for the ferry terminal's car park: our four real car models, each joined
-into one mesh (materials kept), decimated to a few thousand triangles and set on the ground
-(tyres on y 0, centred, bow +Z like the originals). The game instances them into the bays.
-Run:
-  Blender --background --factory-startup --python tools/ferry/parked_cars.py
-Output: public/ferry/parked_cars.glb with one root node per model (ParkedAster, ParkedJeep,
-ParkedWagon, ParkedPickup), the body as its mesh, and four wheel nodes under it
-(<root>WheelFrontL, ..R, <root>WheelRearL, ..R; L on -X like the Aster): identity rotation, at the
-wheel's hub, the wheel's mesh centred on it so it spins about its local X (the axle) and steers
-about its local Y. Traffic.js animates the pivots, and Terminal.js places parked cars.
+"""Build the six low-detail parked vehicles for the ferry terminals.
+Run Blender in background mode with this script to generate public/ferry/parked_cars.glb.
+Each model faces +Z in glTF. Its wheels turn about local X and steer about local Y.
+Traffic.js animates these wheel pivots and Terminal.js places the cars in parking bays.
 """
-import math
+import math, sys
 from pathlib import Path
 import bpy, bmesh
 from mathutils import Vector
@@ -21,7 +15,7 @@ WHEELS = ('WheelFrontL', 'WheelFrontR', 'WheelRearL', 'WheelRearR')
 # hub, so it would have wobbled as it rolled; at 1600 every wheel stays within 2 cm. The light
 # wagon and pickup wheels (about 2400) barely change.
 WHEEL_TRIS = 1600
-MODELS = (('ParkedAster', 'aster_rs', 5000), ('ParkedJeep', 'black_jeep', 5500), ('ParkedWagon', 'support_wagon', 4500), ('ParkedPickup', 'support_pickup', 4500))
+MODELS = (('ParkedJeep', 'black_jeep', 5500),)
 bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete(use_global=False)
 
 roots = []
@@ -109,6 +103,10 @@ for i, (name, src, target) in enumerate(MODELS):
     after = sum(len(p.vertices) - 2 for p in car.data.polygons)
     print(f'PARKED {name} {src}: {tris} -> {after} body triangles, {len(car.data.materials)} materials, size {max(xs) - min(xs):.2f} x {max(ys) - min(ys):.2f} x {max(zs) - min(zs):.2f}')
     roots.append(car)
+
+sys.path.insert(0, str(ROOT / 'tools/ferry'))
+import everyday_cars
+roots += everyday_cars.build_all(len(roots))
 
 bpy.ops.object.select_all(action='DESELECT')
 for o in roots:

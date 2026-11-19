@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { CRUISE, GATE, SWEEP, CLEAR } from '../../src/ferry/FerryService.js';
+import { carInHerFrame, pilot, ONTO_HER_DECK, OFF_HER_STERN } from './support/deck-pilot.js';
 
 // Given/When/Then on the real island and Joey Island across the strait, with the Tidewater Spirit
 // on her scheduled service. Only the free camera is posed from the test (the F-key camera a player
@@ -10,6 +12,27 @@ const board = page => page.getByRole( 'status', { name: 'Ferry departures' } );
 // her state, kept on the helm readout whether or not anyone is at the helm (hidden then)
 const state = page => page.locator( '[aria-label="Ferry helm"]' );
 const telemetryOf = page => page.getByRole( 'status', { name: 'Rally telemetry' } );
+// The timetable's clock (game seconds). A loaded machine runs it slower than the wall clock, so the
+// crossing waits are judged on it; the test timeouts are only wall-clock caps.
+const gameTime = page => page.evaluate( () => window.__app.ferry.service.time );
+// The game-time allowance for her next passage, lines off to lines on, from the route and the
+// service speed: out CLEAR along the berth she leaves and across to the far gate at CRUISE, half as
+// long again for the slow-down near the gate, then the swing and the stern-to run down the gate at
+// 1 m/s or better (SWING 0.6 to 1.6 m/s, CREEP 3 m/s easing to a crawl). It was a fixed 150 s of
+// wall clock: too short once Joey moved out to a 1400 m passage, and blind to a slow machine.
+async function passageAllowance( page ) {
+
+	const route = await page.evaluate( () => {
+		const f = window.__app.ferry, s = f.service, pick = b => ( { x: b.x, z: b.z, yaw: b.yaw } );
+		return { from: pick( f.berths.find( b => b !== s.next ) ), to: pick( s.next ) };
+	} );
+	const out = ( b, d ) => [ b.x + Math.sin( b.yaw ) * d, b.z + Math.cos( b.yaw ) * d ];
+	const [ cx, cz ] = out( route.from, CLEAR ), [ gx, gz ] = out( route.to, GATE );
+	const allowance = 1.5 * ( CLEAR + Math.hypot( gx - cx, gz - cz ) ) / CRUISE + ( SWEEP + GATE ) / 1; // s, game time
+	console.log( `passage allowance, lines off to lines on: ${ allowance.toFixed( 0 ) } s game time` );
+	return allowance;
+
+}
 
 async function openIsland( page, query = '' ) {
 
@@ -40,76 +63,23 @@ const frameMs = ( page, ms = 3000 ) => page.evaluate( ms => new Promise( done =>
 
 } ), ms );
 
-// The car in her frame (x to port, z to her bow, y up from her waterline), its speed, heading and uprightness.
-const carInHerFrame = page => page.evaluate( () => {
-
-	const app = window.__app, s = app.rally.state, ship = app.ferry.ship, V = app.camera.position.constructor;
-	const at = new V( s[ 0 ], s[ 1 ], s[ 2 ] ), p = ship.toLocal( at, new V() ), q = new ship.quaternion.constructor( s[ 3 ], s[ 4 ], s[ 5 ], s[ 6 ] );
-	const nose = ship.toLocal( at.clone().add( new V( 0, 0, 1 ).applyQuaternion( q ) ), new V() ).sub( p );
-	return { x: p.x, y: p.y, z: p.z, kmh: Math.abs( s[ 7 ] ), heading: Math.atan2( nose.x, nose.z ), up: new V( 0, 1, 0 ).applyQuaternion( q ).y, world: { x: s[ 0 ], y: s[ 1 ], z: s[ 2 ] } };
-
-} );
-
-// The player's hands: W (or S astern) held, A/D tapped to hold her centreline, until `until`.
-async function drive( page, { until, key = 'w', timeout = 40_000 } ) {
-
-	const started = Date.now(), astern = key === 's';
-	let steer = null, car = await carInHerFrame( page );
-	if ( key ) await page.keyboard.down( key );
-	const track = [];
-	while ( ! until( car ) && Date.now() - started < timeout ) {
-
-		// ahead, steer the nose toward the centreline; astern, the wheel works the other way round
-		const err = astern ? Math.atan2( car.x, 18 ) - car.heading : Math.atan2( - car.x, 18 ) - car.heading;
-		const want = err > 0.03 ? ( astern ? 'd' : 'a' ) : err < - 0.03 ? ( astern ? 'a' : 'd' ) : null;
-		if ( want !== steer ) { if ( steer ) await page.keyboard.up( steer ); if ( want ) await page.keyboard.down( want ); steer = want; }
-		await page.waitForTimeout( 50 );
-		car = await carInHerFrame( page );
-		track.push( car );
-
-	}
-	if ( steer ) await page.keyboard.up( steer );
-	if ( key ) await page.keyboard.up( key );
-	return { car, track };
-
-}
-
-// The player's hands going astern, the careful way: S feathered to keep her under about 10 km/h,
-// A/D tapped so the car backs straight down her centreline. Going astern the car swings the other
-// way for the same key, so the nose is steered toward the small heading whose reverse closes on x = 0.
-async function backOff( page, { until, timeout = 60_000 } ) {
-
-	const started = Date.now();
-	let steer = null, reverse = false, car = await carInHerFrame( page );
-	const track = [];
-	while ( ! until( car ) && Date.now() - started < timeout ) {
-
-		const want = car.kmh > 10 ? false : true;
-		if ( want !== reverse ) { if ( want ) await page.keyboard.down( 's' ); else await page.keyboard.up( 's' ); reverse = want; }
-		const err = Math.max( - 0.45, Math.min( 0.45, Math.atan2( car.x, 6 ) ) ) - car.heading;
-		const turn = err > 0.02 ? 'd' : err < - 0.02 ? 'a' : null;
-		if ( turn !== steer ) { if ( steer ) await page.keyboard.up( steer ); if ( turn ) await page.keyboard.down( turn ); steer = turn; }
-		await page.waitForTimeout( 50 );
-		car = await carInHerFrame( page );
-		track.push( car );
-
-	}
-	if ( steer ) await page.keyboard.up( steer );
-	if ( reverse ) await page.keyboard.up( 's' );
-	return { car, track };
-
-}
+const drive = ( page, { until, kmh = 12, budget = 90 } ) => pilot( page, { path: ONTO_HER_DECK, until, kmh, budget, label: 'aboard' } );
+const backOff = ( page, { until, budget = 90 } ) => pilot( page, { path: OFF_HER_STERN, until, astern: true, kmh: 10, budget, label: 'astern' } );
 
 test( 'A passenger rides the scheduled ferry from Tidewater to Joey Island', async ( { page } ) => {
 
-	test.setTimeout( 420_000 );
+	// a wall-clock cap only: the crossing itself is judged on the game's clock (below), which a
+	// loaded machine runs slower than the wall
+	test.setTimeout( 1_200_000 );
 	await test.step( 'Given a solo player on the real island, with Joey Island and its terminal across the strait', async () => {
 
 		await openIsland( page, '&ferryTimetable=short' );
 		const berth = await page.evaluate( () => { const b = window.__app.joeyTerminal?.berth(); return b && { x: b.x, z: b.z }; } );
 		expect( berth ).not.toBeNull();
 		// look only: from above Tidewater's terminal toward Joey Island, with and without its terminal drawn
-		await look( page, [ 190, 40, 250 ], [ - 150, 10, 700 ] );
+		// (the target sits 26 m east and 48 m south of Joey's terminal origin, wherever the island is)
+		const joey = await page.evaluate( () => { const p = window.__app.joeyTerminal.toWorld( [ 0, 0, 0 ] ); return [ p.x, p.z ]; } );
+		await look( page, [ 190, 40, 250 ], [ joey[ 0 ] + 26, 10, joey[ 1 ] + 48 ] );
 		await page.waitForTimeout( 2_000 );
 		const withJoey = await frameMs( page );
 		await page.evaluate( () => { const t = window.__app.joeyTerminal; t.root.visible = false; for ( const m of t.parkedMeshes ) m.visible = false; } );
@@ -153,20 +123,32 @@ test( 'A passenger rides the scheduled ferry from Tidewater to Joey Island', asy
 	} );
 	await test.step( 'Then she crosses the strait and makes fast at Joey Island through the berth capture, hull sound', async () => {
 
-		// her track, every 10 s of the way, for the record
-		const started = Date.now();
-		while ( ! ( await board( page ).textContent() ).includes( 'Arriving at Joey Island' ) && Date.now() - started < 150_000 ) {
+		const sailedAt = await page.evaluate( () => window.__app.ferry.service.sailedAt );
+		const allowance = await passageAllowance( page );
+		let arriving = false, logged = - Infinity;
+		while ( ( await state( page ).getAttribute( 'data-berth' ) ) !== 'joey' && ( await gameTime( page ) ) - sailedAt < allowance ) {
 
-			const at = await page.evaluate( () => { const f = window.__app.ferry, s = f.ship; return `${ f.service.pilot.leg } at ${ s.position.x.toFixed( 0 ) }, ${ s.position.z.toFixed( 0 ) } heading ${ ( s.yaw * 180 / Math.PI ).toFixed( 0 ) } speed ${ s.speed.toFixed( 1 ) } lever ${ s.lever.toFixed( 2 ) } hull ${ f.hull.toFixed( 3 ) } grounded ${ s.grounded }`; } );
-			console.log( `  ${ ( ( Date.now() - sailed ) / 1000 ).toFixed( 0 ) } s: ${ at }` );
-			await page.waitForTimeout( 10_000 );
+			if ( ! arriving && ( await board( page ).textContent() ).includes( 'Arriving at Joey Island' ) ) {
+
+				arriving = true;
+				await page.screenshot( { path: `${ OUT }/crossing-arriving-aboard.png` } );
+
+			}
+			// her track, every 10 s of the way, for the record
+			if ( Date.now() - logged >= 10_000 ) {
+
+				logged = Date.now();
+				const at = await page.evaluate( () => { const f = window.__app.ferry, s = f.ship; return `${ f.service.pilot.leg } at ${ s.position.x.toFixed( 0 ) }, ${ s.position.z.toFixed( 0 ) } heading ${ ( s.yaw * 180 / Math.PI ).toFixed( 0 ) }, ${ s.speed.toFixed( 1 ) } m/s, game ${ ( f.service.time - f.service.sailedAt ).toFixed( 0 ) } s`; } );
+				console.log( `  ${ ( ( Date.now() - sailed ) / 1000 ).toFixed( 0 ) } s wall: ${ at }` );
+
+			}
+			await page.waitForTimeout( 1_000 );
 
 		}
-		await expect( board( page ) ).toContainText( 'Arriving at Joey Island' );
-		await page.screenshot( { path: `${ OUT }/crossing-arriving-aboard.png` } );
-		await expect.poll( () => state( page ).getAttribute( 'data-berth' ), { timeout: 150_000, intervals: [ 500 ] } ).toBe( 'joey' );
+		expect( arriving, 'the board showed "Arriving at Joey Island" on the way in' ).toBe( true );
+		expect( await state( page ).getAttribute( 'data-berth' ) ).toBe( 'joey' );
 		const crossing = Number( await board( page ).getAttribute( 'data-crossing' ) );
-		console.log( `crossing, lines off at Tidewater to lines on at Joey Island: ${ crossing.toFixed( 1 ) } s game time, ${ ( ( Date.now() - sailed ) / 1000 ).toFixed( 1 ) } s wall` );
+		console.log( `crossing, lines off at Tidewater to lines on at Joey Island: ${ crossing.toFixed( 1 ) } s game time, ${ ( ( Date.now() - sailed ) / 1000 ).toFixed( 1 ) } s wall; hull damage at lines on ${ await state( page ).getAttribute( 'data-hull' ) }` );
 		expect( await state( page ).getAttribute( 'data-lines' ) ).toBe( 'on' );
 		expect( Number( await state( page ).getAttribute( 'data-hull' ) ) ).toBeLessThan( 0.02 );
 
@@ -204,7 +186,7 @@ test( 'A passenger rides the scheduled ferry from Tidewater to Joey Island', asy
 
 test( 'A car crosses on the ferry: driven aboard at Tidewater, it rides the crossing and drives off at Joey Island', async ( { page } ) => {
 
-	test.setTimeout( 600_000 );
+	test.setTimeout( 1_200_000 ); // a wall-clock cap only: the crossing is judged on game time
 	await test.step( 'Given a solo player on the real island who starts the Aster RS at the ferry terminal', async () => {
 
 		await openIsland( page );
@@ -227,8 +209,7 @@ test( 'A car crosses on the ferry: driven aboard at Tidewater, it rides the cros
 	await test.step( 'When the player drives down the lanes, over the linkspan and her ramp, and brakes aboard', async () => {
 
 		await drive( page, { until: car => car.z > - 58 } );
-		// on up her ramp under power, well onto her deck, before braking
-		await drive( page, { until: car => car.z > - 12 } );
+		await drive( page, { until: car => car.z > - 12, kmh: 8 } );
 		await page.keyboard.down( 's' );
 		await expect.poll( async () => ( await carInHerFrame( page ) ).kmh, { timeout: 15_000, intervals: [ 100 ] } ).toBeLessThan( 1 );
 		await page.keyboard.up( 's' );
@@ -238,6 +219,18 @@ test( 'A car crosses on the ferry: driven aboard at Tidewater, it rides the cros
 	await test.step( 'Then the car rests on her vehicle deck on all four wheels', async () => {
 
 		await page.waitForTimeout( 1_000 );
+		// each wheel: grounded, contact height in her frame (her deck top is y 2.6) and surface code
+		console.log( 'wheels at rest: ' + await page.evaluate( () => {
+
+			const app = window.__app, s = app.rally.state, ship = app.ferry.ship, V = app.camera.position.constructor;
+			return [ 0, 1, 2, 3 ].map( w => {
+
+				const c = ship.toLocal( new V( s[ 29 + w * 10 ], s[ 30 + w * 10 ], s[ 31 + w * 10 ] ), new V() );
+				return `${ s[ 13 + w * 4 + 3 ] > 0.5 ? 'on' : 'OFF' } x ${ c.x.toFixed( 2 ) } y ${ c.y.toFixed( 3 ) } z ${ c.z.toFixed( 2 ) } surface ${ s[ 89 + w ] }`;
+
+			} ).join( ' | ' ) + ` | ship roll ${ ship.quaternion.x.toFixed( 4 ) },${ ship.quaternion.z.toFixed( 4 ) }`;
+
+		} ) );
 		await expect.poll( async () => Number( await telemetryOf( page ).getAttribute( 'data-grounded' ) ), { timeout: 5_000 } ).toBe( 4 );
 		parked = await carInHerFrame( page );
 		console.log( `parked aboard at her x ${ parked.x.toFixed( 2 ) }, z ${ parked.z.toFixed( 2 ) }, heading ${ parked.heading.toFixed( 3 ) }` );
@@ -251,8 +244,12 @@ test( 'A car crosses on the ferry: driven aboard at Tidewater, it rides the cros
 	const track = [];
 	await test.step( 'When the timetable runs: she raises her ramp, casts off, crosses and makes fast at Joey Island', async () => {
 
-		const started = Date.now();
-		while ( await state( page ).getAttribute( 'data-berth' ) !== 'joey' && Date.now() - started < 420_000 ) {
+		// game time: what is left of her dwell, QUEUE for the traffic queue to drive aboard and her
+		// ramp to rise (about 100 s with a full queue, as the passenger scenario notes), then the passage
+		const QUEUE = 120; // s, game time
+		const t0 = await gameTime( page ), dwell = await page.evaluate( () => Math.max( 0, window.__app.ferry.service.wait ) );
+		const allowance = dwell + QUEUE + await passageAllowance( page );
+		while ( await state( page ).getAttribute( 'data-berth' ) !== 'joey' && ( await gameTime( page ) ) - t0 < allowance ) {
 
 			track.push( await carInHerFrame( page ) );
 			await page.waitForTimeout( 1_000 );
@@ -273,8 +270,9 @@ test( 'A car crosses on the ferry: driven aboard at Tidewater, it rides the cros
 	await test.step( 'When her ramp is down at Joey Island and the player backs the car off her stern, down the ramp and the linkspan', async () => {
 
 		await expect.poll( async () => Number( await state( page ).getAttribute( 'data-ramp' ) ), { timeout: 30_000 } ).toBe( 1 );
-		await backOff( page, { until: car => car.z < - 62, timeout: 60_000 } );
+		await backOff( page, { until: car => car.z < - 62 } );
 		await page.waitForTimeout( 1_500 );
+		await page.screenshot( { path: `${ OUT }/crossing-car-backed-off-joey.png` } );
 
 	} );
 	await test.step( 'Then the car stands on Joey Island\'s terminal flat, on land', async () => {
@@ -336,6 +334,11 @@ test( 'The minimap shows Joey Island and its terminal when a player starts there
 		console.log( `minimap under the car at Joey Island: ${ JSON.stringify( at ) }` );
 		expect( at.inside ).toBe( true );
 		await page.screenshot( { path: `${ OUT }/crossing-minimap-joey.png` } );
+		// look only: Joey Island from the air, from north-west of its terminal, for the review capture
+		const joey = await page.evaluate( () => { const p = window.__app.joeyTerminal.toWorld( [ 0, 0, 0 ] ); return [ p.x, p.z ]; } );
+		await look( page, [ joey[ 0 ] - 250, 220, joey[ 1 ] - 260 ], [ joey[ 0 ] + 200, 0, joey[ 1 ] + 120 ] );
+		await page.waitForTimeout( 3_000 );
+		await page.screenshot( { path: `${ OUT }/crossing-joey-from-air.png` } );
 
 	} );
 

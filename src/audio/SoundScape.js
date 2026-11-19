@@ -33,6 +33,7 @@
 // the gain is target minus the file's measured loudness (soundBank.js).
 
 import { WORLD } from '../world/WorldLayout.js';
+import { BED_CEILING, SHOT_CEILING, SAT_RANGE, saturationCurve } from '../disasters/DisasterSound.js';
 import { BANK } from './soundBank.js';
 
 const clamp = ( v, a, b ) => ( v < a ? a : v > b ? b : v );
@@ -116,7 +117,7 @@ const STEP = {
 };
 
 // max simultaneous one-shot voices per category (oldest is faded out beyond this)
-const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, whistle: 1 };
+const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, whistle: 1, dis: 12 }; // dis: src/disasters/DisasterSound.js MAX_VOICES
 
 // loaded at resume(); everything else on first use
 const CORE = [ 'surf_crash', 'surf_wash', 'surf_backwash', 'surf_far', 'wind', 'palms', 'step_sand', 'step_wetsand', 'step_wood', 'step_water', 'step_grass', 'splash', 'swim' ];
@@ -129,7 +130,7 @@ const EMPTY = {};
 export class SoundScape {
 
 	// Does not touch Web Audio: the context is created on the first resume() (autoplay policy).
-	// shore (optional): { shore: ShoreWaves, field: shore field { res, data }, terrain: TerrainData }; found
+	// shore (optional): { shore: ShoreWaves, field: shore field { data, resX, resZ, cellSize, originX, originZ }, terrain: TerrainData }; found
 	// on window.__app when not given (see attachShore()).
 	constructor( { baseUrl = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'audio/', shore = null } = {} ) {
 
@@ -158,6 +159,9 @@ export class SoundScape {
 		this._stAt = { x: 1e9, z: 1e9, t: - 1e9 };
 		this._fakeT = 3;
 		this._warned = new Set();
+		this.disaster = null; // the disaster bus (created on first use)
+		this._disBeds = new Map(); // key -> { src, lp, gain, trim, lufs, quiet }
+		this._disGain = 1;
 		this.env = {
 			lx: 0, ly: 1.7, lz: 0, fx: 0, fy: 0, fz: - 1, ux: 0, uy: 1, uz: 0,
 			u: 0, depth: 0, surf: 0.5, shoreDist: 60, onLand: true, wind: 7, day: 1, nearPier: false, hour: null,
@@ -255,6 +259,166 @@ export class SoundScape {
 
 		this._volume = clamp( num( v, this._volume ), 0, 1 );
 		this._applyVolume();
+
+	}
+
+	// ------------------------------------------------------------------ disaster sound (src/disasters/DisasterSound.js)
+	// One bus for every disaster sound, into the above-water chain: muffled with the rest when the lens goes under, and
+	// under the master volume, the mute and the limiter. Its own gain is the Disaster laboratory's sound volume and mute.
+	// The caller gives each level as loudness at the listener (LUFS), distance, spreading and air already applied, so a
+	// panner here only places the sound (rolloff 0). Beds are keyed by the caller, so a disaster bed can play a recording
+	// the ambience also plays (the tornado's wind on wind.ogg) on a gain of its own.
+
+	setDisasterGain( g ) {
+
+		this._disGain = clamp( num( g, 1 ), 0, 4 );
+		if ( this.disaster ) this._ramp( this.disaster.gain, this._disGain, 0.05 );
+
+	}
+
+	// asks for every recording a disaster may play as it is launched, so the first break of a session finds its buffer
+	// (a recording is otherwise fetched on its first use, and that first use plays nothing)
+	disasterPreload( banks ) {
+
+		if ( ! this.enabled ) return;
+		for ( let i = 0; i < banks.length; i ++ ) this._want( banks[ i ] );
+
+	}
+
+	get disasterGain() {
+
+		return this.disaster ? this.disaster.gain.value : 0;
+
+	}
+
+	// live disaster sources (beds and one-shots), nodes and one-shot voices
+	get disasterSources() {
+
+		return this._disBeds.size + ( this._voices.dis ? this._voices.dis.length : 0 );
+
+	}
+
+	get disasterVoices() {
+
+		return this._voices.dis ? this._voices.dis.length : 0;
+
+	}
+
+	get disasterNodes() {
+
+		return 3 * this._disBeds.size + 4 * this.disasterVoices + ( this.disaster ? 4 : 0 );
+
+	}
+
+	_disBus() {
+
+		if ( ! this.disaster ) {
+
+			const c = this.ctx;
+			this.disaster = c.createGain();
+			this.disaster.gain.value = this._disGain;
+			this.disaster.connect( this.above );
+			// every disaster sound passes one saturation ahead of the row's gain, as a microphone and the ear saturate
+			// (declared): their sum never exceeds BUS_SATURATION of full scale, whatever the event (DisasterSound.js)
+			const out = c.createGain();
+			out.gain.value = SAT_RANGE;
+			out.connect( this.disaster );
+			const shaper = c.createWaveShaper();
+			shaper.curve = saturationCurve( 4096 );
+			shaper.oversample = '4x';
+			shaper.connect( out );
+			this.disasterIn = c.createGain();
+			this.disasterIn.gain.value = 1 / SAT_RANGE;
+			this.disasterIn.connect( shaper );
+
+		}
+
+		return this.disasterIn;
+
+	}
+
+	// a looping bed at `lufs` at the listener (-Infinity: fade out), low-passed at `cutoff` Hz; started when it first
+	// rises over -62 LUFS, stopped and disconnected after 2 s under -66 LUFS
+	disasterBed( key, bank, lufs, rate = 1, cutoff = 20000 ) {
+
+		if ( ! this.enabled ) return;
+		const c = this.ctx, now = c.currentTime;
+		const on = Number.isFinite( lufs ) && lufs > - 66;
+		let bed = this._disBeds.get( key );
+		if ( ! bed ) {
+
+			if ( ! ( Number.isFinite( lufs ) && lufs > - 62 ) ) return;
+			const info = BANK[ bank ], buf = this._want( bank );
+			if ( ! buf || ! info ) return;
+			const src = c.createBufferSource();
+			src.buffer = buf;
+			src.loop = true;
+			src.playbackRate.value = rate;
+			const lp = c.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.Q.value = 0.5;
+			lp.frequency.value = clamp( num( cutoff, 20000 ), 60, 20000 );
+			const g = c.createGain();
+			g.gain.value = 0;
+			src.connect( lp ).connect( g ).connect( this._disBus() );
+			src.start( now + 0.02, Math.random() * buf.duration );
+			bed = { src, lp, gain: g, trim: buf.numberOfChannels === 1 ? MONO : 1, lufs: Array.isArray( info.lufs ) ? info.lufs[ 0 ] : info.lufs, quiet: - 1, first: true };
+			this._disBeds.set( key, bed );
+
+		}
+
+		this._ramp( bed.gain.gain, on ? dB( clamp( Math.min( lufs, BED_CEILING ) - bed.lufs, - 80, 24 ) ) * bed.trim : 0, bed.first ? 0.8 : on ? 0.25 : 0.4 );
+		bed.first = false;
+		this._ramp( bed.src.playbackRate, clamp( num( rate, 1 ), 0.25, 4 ), 0.15 );
+		this._ramp( bed.lp.frequency, clamp( num( cutoff, 20000 ), 60, 20000 ), 0.2 );
+		if ( on ) bed.quiet = - 1;
+		else if ( bed.quiet < 0 ) bed.quiet = now;
+		else if ( now - bed.quiet > 2 ) {
+
+			try {
+
+				bed.src.stop();
+
+			} catch ( e ) { /* already stopped */ }
+
+			bed.src.disconnect();
+			bed.lp.disconnect();
+			bed.gain.disconnect();
+			this._disBeds.delete( key );
+
+		}
+
+	}
+
+	// a one-shot slice of `bank` placed at (x, y, z) at `lufs` at the listener, low-passed at `cutoff` Hz (the air)
+	disasterShot( bank, x, y, z, lufs, rate = 1, cutoff = 20000, pick = - 1 ) {
+
+		if ( ! this.enabled || ! this._want( bank ) || ! BANK[ bank ] ) return null;
+		const c = this.ctx;
+		const p = this._panner( this._disBus(), 1, 0 );
+		if ( p.positionX ) {
+
+			p.positionX.value = x;
+			p.positionY.value = y;
+			p.positionZ.value = z;
+
+		} else p.setPosition( x, y, z );
+		const lp = c.createBiquadFilter();
+		lp.type = 'lowpass';
+		lp.frequency.value = clamp( num( cutoff, 20000 ), 60, 20000 );
+		lp.connect( p );
+		const n = BANK[ bank ].slices ? BANK[ bank ].slices.length : 1;
+		const v = this._shot( bank, 'dis', lp, Math.min( num( lufs, - Infinity ), SHOT_CEILING ), rate, 0, pick >= 0 ? pick % n : - 1 );
+		if ( ! v ) {
+
+			lp.disconnect();
+			p.disconnect();
+			return null;
+
+		}
+
+		v.extra = [ lp, p ];
+		return v;
 
 	}
 
@@ -771,12 +935,14 @@ export class SoundScape {
 	// shore field at (x, z): travel time T, direction (dx, dz) × exposure, time to the shoreline Ts
 	_field( x, z, o ) {
 
-		const { field, terrain } = this._shore;
-		const res = field.res, data = field.data;
-		const fx = clamp( ( x - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
-		const fz = clamp( ( z - terrain.origin ) / terrain.size * res - 0.5, 0, res - 1.001 );
+		// the field carries its own rectangle (ShoreField.js: resX x resZ cells of cellSize m from
+		// originX, originZ): texel centres at origin + ( i + 0.5 ) * cellSize, clamp and stride per axis
+		const field = this._shore.field;
+		const resX = field.resX, resZ = field.resZ, cell = field.cellSize, data = field.data;
+		const fx = clamp( ( x - field.originX ) / cell - 0.5, 0, resX - 1.001 );
+		const fz = clamp( ( z - field.originZ ) / cell - 0.5, 0, resZ - 1.001 );
 		const i = Math.floor( fx ), j = Math.floor( fz ), tx = fx - i, tz = fz - j;
-		const k = ( j * res + i ) * 4, kr = k + res * 4;
+		const k = ( j * resX + i ) * 4, kr = k + resX * 4;
 		for ( let c = 0; c < 4; c ++ ) {
 
 			const a = data[ k + c ], b = data[ k + 4 + c ], cc = data[ kr + c ], d = data[ kr + 4 + c ];

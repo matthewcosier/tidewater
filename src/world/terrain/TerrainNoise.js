@@ -98,34 +98,36 @@ export function erosionNoise( x, z, gx, gz, octaves = EROSION.octaves, cell0 = E
 
 }
 
-// bilinear sample of a grid whose texel centres are at o + (i + 0.5) * t
-export function sampleGrid( g, n, o, t, x, z ) {
+// bilinear sample of an nx x nz grid (row stride nx, rows along z) whose texel centres are at
+// ( ox + ( i + 0.5 ) * t, oz + ( j + 0.5 ) * t ); the terrain domain is a rectangle (WORLD.terrain)
+export function sampleGrid( g, nx, nz, ox, oz, t, x, z ) {
 
-	let fx = ( x - o ) / t - 0.5, fz = ( z - o ) / t - 0.5;
-	fx = fx < 0 ? 0 : fx > n - 1.001 ? n - 1.001 : fx;
-	fz = fz < 0 ? 0 : fz > n - 1.001 ? n - 1.001 : fz;
+	let fx = ( x - ox ) / t - 0.5, fz = ( z - oz ) / t - 0.5;
+	fx = fx < 0 ? 0 : fx > nx - 1.001 ? nx - 1.001 : fx;
+	fz = fz < 0 ? 0 : fz > nz - 1.001 ? nz - 1.001 : fz;
 	const i = fx | 0, j = fz | 0;
 	const tx = fx - i, tz = fz - j;
-	const k = j * n + i;
-	return ( g[ k ] * ( 1 - tx ) + g[ k + 1 ] * tx ) * ( 1 - tz ) + ( g[ k + n ] * ( 1 - tx ) + g[ k + n + 1 ] * tx ) * tz;
+	const k = j * nx + i;
+	return ( g[ k ] * ( 1 - tx ) + g[ k + 1 ] * tx ) * ( 1 - tz ) + ( g[ k + nx ] * ( 1 - tx ) + g[ k + nx + 1 ] * tx ) * tz;
 
 }
 
-// Upsample an n x n grid by 2 (texel centres aligned as in sampleGrid) with Catmull-Rom
-// (interpolating) or bilinear filtering. Separable.
-export function upsample2( src, n, cubic = true ) {
+// Upsample an nx x nz grid (row stride nx) by 2 per axis to 2nx x 2nz (texel centres aligned as
+// in sampleGrid) with Catmull-Rom (interpolating) or bilinear filtering. Separable.
+export function upsample2( src, nx, nz, cubic = true ) {
 
-	const m = n * 2;
-	const tmp = new Float32Array( m * n );
-	const out = new Float32Array( m * m );
+	const m = nx * 2, mz = nz * 2;
+	const tmp = new Float32Array( m * nz );
+	const out = new Float32Array( m * mz );
 	// new texel centre i maps to source coordinate (i + 0.5) / 2 - 0.5 = i / 2 - 0.25
 	// even i: frac 0.75 of (i/2 - 1), odd i: frac 0.25 of (i - 1) / 2
 	const wc = cubic ? catmull : linear;
 	const W0 = wc( 0.75 ), W1 = wc( 0.25 );
-	const clampI = ( i ) => i < 0 ? 0 : i >= n ? n - 1 : i;
-	for ( let j = 0; j < n; j ++ ) {
+	const clampI = ( i ) => i < 0 ? 0 : i >= nx ? nx - 1 : i;
+	const clampJ = ( j ) => j < 0 ? 0 : j >= nz ? nz - 1 : j;
+	for ( let j = 0; j < nz; j ++ ) {
 
-		const row = j * n;
+		const row = j * nx;
 		for ( let i = 0; i < m; i ++ ) {
 
 			const base = ( i & 1 ) ? ( i - 1 ) >> 1 : ( i >> 1 ) - 1;
@@ -136,11 +138,11 @@ export function upsample2( src, n, cubic = true ) {
 
 	}
 
-	for ( let j = 0; j < m; j ++ ) {
+	for ( let j = 0; j < mz; j ++ ) {
 
 		const base = ( j & 1 ) ? ( j - 1 ) >> 1 : ( j >> 1 ) - 1;
 		const w = ( j & 1 ) ? W1 : W0;
-		const r0 = clampI( base - 1 ) * m, r1 = clampI( base ) * m, r2 = clampI( base + 1 ) * m, r3 = clampI( base + 2 ) * m;
+		const r0 = clampJ( base - 1 ) * m, r1 = clampJ( base ) * m, r2 = clampJ( base + 1 ) * m, r3 = clampJ( base + 2 ) * m;
 		const o = j * m;
 		for ( let i = 0; i < m; i ++ ) {
 

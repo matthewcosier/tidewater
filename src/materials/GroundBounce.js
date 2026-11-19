@@ -10,8 +10,8 @@ import { SceneLighting } from './SceneLighting.js';
 // sunlit coral sand lights the underside of the pier, the eaves, the boat hull, palm trunks and the
 // undersides of rocks and fronds.
 //
-// Bake (compute, only when the key light moves): a 512^2 map over the terrain domain (4 m texels,
-// aligned with the terrain sun shadow map) of the light the ground reflects per unit of sun
+// Bake (compute, only when the key light moves): an NX x NZ map over the rectangular terrain domain
+// (CELL = 4 m texels per axis, aligned with the terrain sun shadow map) of the light the ground reflects per unit of sun
 // irradiance: albedo (sand / grass / forest / rock from the terrain masks, the sea as the seabed seen
 // through the water column) x cos(sun, ground normal) x heightfield sun shadow, minus what the
 // environment map's own ground (the atmosphere's dark planet surface) already gives, then blurred
@@ -25,7 +25,12 @@ import { SceneLighting } from './SceneLighting.js';
 // Installed as the `bounce` lighting hook (fn hookBounce( P, N ) -> vec3f, irradiance / PI). Skipped for
 // IS_WATER materials and materials with the define NO_GROUND_BOUNCE (the former
 // `material.groundBounce = false`: GroundBounce.exclude( material )).
-const N = 512;
+// Bounce map texel, m. 4 m was the old 512^2 over the 2048 m square domain; the domain is now a
+// rectangle (WORLD.terrain sizeX x sizeZ), so the texel count is worked out per axis from it.
+const CELL = 4; // m
+// workgroup edge of the bake and blur kernels, texels
+const WG = 8;
+const vec2 = ( a, b ) => `vec2f( ${ a.toFixed( 3 ) }, ${ b.toFixed( 3 ) } )`;
 // objects around the receiver shade part of the ground it sees (their shadows are not in the map)
 const SURROUND = 0.6;
 // the environment map's lower hemisphere: the atmosphere's planet ground (Atmosphere.groundAlbedo)
@@ -58,7 +63,10 @@ const lin = ( r, g, b ) => {
 // terrainSunShadowAt); clouds: optional Clouds (its module: cloudsShadow)
 export function installGroundBounce( { terrain, clouds = null } ) {
 
-	const make = ( name ) => new Texture( { label: name, width: N, height: N, format: 'rgba16float', usage: [ 'sample', 'storage' ] } );
+	// per axis from the terrain data (the one source of truth for the domain): width along x, height along z
+	const T = terrain.terrain;
+	const NX = Math.round( T.sizeX / CELL ), NZ = Math.round( T.sizeZ / CELL );
+	const make = ( name ) => new Texture( { label: name, width: NX, height: NZ, format: 'rgba16float', usage: [ 'sample', 'storage' ] } );
 	const raw = make( 'groundBounceRaw' );
 	const map = make( 'groundBounce' );
 	const uSun = params.fields.sun;
@@ -68,12 +76,15 @@ export function installGroundBounce( { terrain, clouds = null } ) {
 		label: 'Ground Bounce Bake',
 		modules: [ commonModule, terrain.module ],
 		bindings: { groundBounceParams: { uniform: params }, gbRawOut: { storageTexture: raw, access: 'write' } },
-		workgroupSize: [ 8, 8, 1 ],
+		workgroupSize: [ WG, WG, 1 ],
 		code: /* wgsl */`
 @compute @workgroup_size( WG_X, WG_Y, WG_Z )
 fn main( @builtin( global_invocation_id ) gid: vec3u ) {
+	// the grid is rounded up to whole workgroups: texels past the map edge do nothing
+	if ( gid.x >= ${ NX }u || gid.y >= ${ NZ }u ) { return; }
 	let ij = vec2f( gid.xy );
-	let xz = ( ij + 0.5 ) / ${ N }.0 * terrainParams.size + terrainParams.origin;
+	// texel centre in world xz, per axis (the inverse of terrainUvOf over the NX x NZ grid)
+	let xz = ( ij + 0.5 ) / ${ vec2( NX, NZ ) } * ${ vec2( T.sizeX, T.sizeZ ) } + ${ vec2( T.originX, T.originZ ) };
 	let h = terrainHeightAt( xz );
 	let nr = terrainNormalRockLevel( xz, 1.0 );
 	let n = vec3f( nr.x, sqrt( sat( 1.0 - dot( nr.xy, nr.xy ) ) ), nr.y );
@@ -107,14 +118,15 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	const w = [ 1, 4, 6, 4, 1 ];
 	let taps = '';
-	for ( let y = - 2; y <= 2; y ++ ) for ( let x = - 2; x <= 2; x ++ ) taps += `	sum += textureLoad( gbRaw, clamp( c + vec2i( ${ x }, ${ y } ), vec2i( 0 ), vec2i( ${ N - 1 } ) ), 0 ) * ${ ( w[ x + 2 ] * w[ y + 2 ] / 256 ).toFixed( 8 ) };\n`;
+	for ( let y = - 2; y <= 2; y ++ ) for ( let x = - 2; x <= 2; x ++ ) taps += `	sum += textureLoad( gbRaw, clamp( c + vec2i( ${ x }, ${ y } ), vec2i( 0 ), vec2i( ${ NX - 1 }, ${ NZ - 1 } ) ), 0 ) * ${ ( w[ x + 2 ] * w[ y + 2 ] / 256 ).toFixed( 8 ) };\n`;
 	const blur = new ComputeKernel( {
 		label: 'Ground Bounce Blur',
 		bindings: { gbRaw: { texture: raw, sampleType: 'unfilterable-float' }, gbMapOut: { storageTexture: map, access: 'write' } },
-		workgroupSize: [ 8, 8, 1 ],
+		workgroupSize: [ WG, WG, 1 ],
 		code: /* wgsl */`
 @compute @workgroup_size( WG_X, WG_Y, WG_Z )
 fn main( @builtin( global_invocation_id ) gid: vec3u ) {
+	if ( gid.x >= ${ NX }u || gid.y >= ${ NZ }u ) { return; }
 	let c = vec2i( gid.xy );
 	var sum = vec4f( 0.0 );
 ${ taps }	textureStore( gbMapOut, vec2u( gid.xy ), sum );
@@ -126,8 +138,8 @@ ${ taps }	textureStore( gbMapOut, vec2u( gid.xy ), sum );
 	const bake = () => {
 
 		uSun.value.copy( G.sunDir.value );
-		bakeRaw.dispatch( [ N / 8, N / 8, 1 ] );
-		blur.dispatch( [ N / 8, N / 8, 1 ] );
+		bakeRaw.dispatch( [ Math.ceil( NX / WG ), Math.ceil( NZ / WG ), 1 ] );
+		blur.dispatch( [ Math.ceil( NX / WG ), Math.ceil( NZ / WG ), 1 ] );
 		uReady.value = 1;
 
 	};
@@ -163,7 +175,8 @@ fn hookBounce( P: vec3f, Nw: vec3f ) -> vec3f {
 	var E = vec3f( 0.0 );
 	if ( view > 0.03 && P.y > frame.seaLevel - 0.3 && groundBounceParams.strength > 0.0 && groundBounceParams.ready > 0.0 ) {
 
-		let st = clamp( terrainUvOf( P.xz ) * ${ N }.0 - 0.5, vec2f( 0.0 ), vec2f( ${ N }.0 - 1.001 ) );
+		// bilinear over the NX x NZ map, clamped per axis
+		let st = clamp( terrainUvOf( P.xz ) * ${ vec2( NX, NZ ) } - 0.5, vec2f( 0.0 ), ${ vec2( NX - 1.001, NZ - 1.001 ) } );
 		let i = vec2i( floor( st ) );
 		let t = fract( st );
 		let s = mix(

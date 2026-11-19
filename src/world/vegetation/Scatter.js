@@ -2,6 +2,7 @@ import * as THREE from '../../engine/index.js';
 import { Noise2D, mulberry32, smoothstep, clamp } from '../../util/Noise.js';
 import { WORLD } from '../WorldLayout.js';
 import { getDetailTexture } from '../terrain/DetailTextures.js';
+import { JOEY } from '../terrain/IslandShape.js';
 
 // CPU-side vegetation placement: land cover, exclusion zones and per-type scattering.
 //
@@ -126,12 +127,13 @@ export class VegSite {
 	_mask( arr, x, z, scale = 1 ) {
 
 		const t = this.terrain;
-		const fx = ( x - t.origin ) / t.texel - 0.5, fz = ( z - t.origin ) / t.texel - 0.5;
-		if ( fx < 0 || fz < 0 || fx >= t.res - 1 || fz >= t.res - 1 ) return 0;
+		// the domain is a rectangle: x is bounded by resX, z by resZ, and a row is resX texels long
+		const fx = ( x - t.originX ) / t.texel - 0.5, fz = ( z - t.originZ ) / t.texel - 0.5;
+		if ( fx < 0 || fz < 0 || fx >= t.resX - 1 || fz >= t.resZ - 1 ) return 0;
 		const i = Math.floor( fx ), j = Math.floor( fz );
 		const tx = fx - i, tz = fz - j;
-		const k = j * t.res + i;
-		return ( ( arr[ k ] * ( 1 - tx ) + arr[ k + 1 ] * tx ) * ( 1 - tz ) + ( arr[ k + t.res ] * ( 1 - tx ) + arr[ k + t.res + 1 ] * tx ) * tz ) * scale;
+		const k = j * t.resX + i;
+		return ( ( arr[ k ] * ( 1 - tx ) + arr[ k + 1 ] * tx ) * ( 1 - tz ) + ( arr[ k + t.resX ] * ( 1 - tx ) + arr[ k + t.resX + 1 ] * tx ) * tz ) * scale;
 
 	}
 
@@ -642,24 +644,38 @@ export function scatterVegetation( site, seed = 99 ) {
 // Ground-flora density mask, RGBA8 over the terrain grid:
 //   R dune grass, G tall meadow grass, B sea oats, A beach creeper
 // RGBA density mask over the whole terrain at 2 m (linear filtered by the grass shader):
-//   R dune grass, G tall meadow grass, B sea oats, A beach creeper. Returns { data, res }.
-export const GRASS_MASK_TEXEL = 2;
+//   R dune grass, G tall meadow grass, B sea oats, A beach creeper.
+// Returns { data, resX, resZ, texel, originX, originZ }, row-major k = j * resX + i over the
+// rectangular terrain domain (resX texels across x, resZ rows along z). The 2 m texel is the same
+// on both axes; with sizes a multiple of 64 m it divides each side exactly, so resX * texel = sizeX.
+export const GRASS_MASK_TEXEL = 2; // m
+// The rows of the mask that hold land, along z (m): the main island, and Joey Island over its
+// outline's z extent (JOEY ellipses [ x, z, rx, rz ], already placed at WORLD.joeyTerminal). Every
+// other row is open sea and is skipped whole. Joey's open ground was bare soil while the band was
+// the main island's alone (z -950..0); it gets the same density rules, and GrassField's distance
+// culling decides what draws.
+const GRASS_BANDS = [
+	[ - 950, 0 ],
+	[ Math.min( ...JOEY.map( e => e[ 1 ] - e[ 3 ] ) ), Math.max( ...JOEY.map( e => e[ 1 ] + e[ 3 ] ) ) ],
+];
+const inGrassBand = z => ( z >= GRASS_BANDS[ 0 ][ 0 ] && z <= GRASS_BANDS[ 0 ][ 1 ] ) || ( z >= GRASS_BANDS[ 1 ][ 0 ] && z <= GRASS_BANDS[ 1 ][ 1 ] );
 export function buildGrassMask( site ) {
 
 	const t = site.terrain;
-	const res = Math.round( t.size / GRASS_MASK_TEXEL );
-	const texel = t.size / res;
-	const data = new Uint8Array( res * res * 4 );
+	const resX = Math.round( t.sizeX / GRASS_MASK_TEXEL );
+	const resZ = Math.round( t.sizeZ / GRASS_MASK_TEXEL );
+	const texel = t.sizeX / resX;
+	const data = new Uint8Array( resX * resZ * 4 );
 	const N = site.noise, N2 = site.noise2;
 	const c = {};
-	for ( let j = 1; j < res - 1; j ++ ) {
+	for ( let j = 1; j < resZ - 1; j ++ ) {
 
-		const z = t.origin + ( j + 0.5 ) * texel;
-		if ( z > 0 || z < - 950 ) continue;
-		for ( let i = 1; i < res - 1; i ++ ) {
+		const z = t.originZ + ( j + 0.5 ) * texel;
+		if ( ! inGrassBand( z ) ) continue;
+		for ( let i = 1; i < resX - 1; i ++ ) {
 
-			const k = j * res + i;
-			const x = t.origin + ( i + 0.5 ) * texel;
+			const k = j * resX + i;
+			const x = t.originX + ( i + 0.5 ) * texel;
 			if ( t.heightAt( x, z ) < 1.7 ) continue;
 			// Grass uses a separate filtered density mask from tree scattering.
 			// Honour the same reserved floors, allowing one metre for blade sway
@@ -749,6 +765,6 @@ export function buildGrassMask( site ) {
 
 	}
 
-	return { data, res };
+	return { data, resX, resZ, texel, originX: t.originX, originZ: t.originZ };
 
 }
