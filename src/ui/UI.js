@@ -2141,25 +2141,23 @@ export class UI {
 				<div class="tw-help-grid">
 					<section>
 						<h3>Move</h3>
-						${ row( wasd, 'Move<small>Driving: W accelerates, S brakes or reverses, A/D steer</small>' ) }
+						${ row( wasd, 'Move' ) }
 						${ row( mouse, 'Look around<small>Click to capture</small>' ) }
 						${ row( k( 'Shift' ), 'Sprint, boat boost' ) }
-						${ row( k( 'Space' ), 'Jump, swim up, car handbrake' ) }
-						${ row( k( 'W', 'S' ), 'Rear-drive burnout<small>Hold both at rest. Release S to launch.</small>' ) }
-						${ row( k( 'J' ), 'Driving aids<small>Toggle traction and stability assistance</small>' ) }
+						${ row( k( 'Space' ), 'Jump, swim up' ) }
 						${ row( k( 'C' ), 'Crouch, dive' ) }
 					</section>
 					<section>
 						<h3>Interact</h3>
-						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade, enter or leave a car</small>' ) }
+						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade</small>' ) }
 						${ row( k( 'V' ), 'Camera<small>1st / 3rd person, on foot and at the helm</small>' ) }
 						${ row( k( 'B' ), 'Whistle<small>Call the cockatoo back to your shoulder</small>' ) }
-						${ row( k( 'R' ), 'Take out / put away rod<small>In a car: recover</small>' ) }
+						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
 						${ row( k( 'LMB' ), 'Cast, strike, reel<small>Hold to wind up / reel</small>' ) }
 						${ row( k( 'RMB' ), 'Reel in an empty line' ) }
 						${ row( k( 'I' ), 'Cooler and fish log' ) }
 						${ row( k( 'F' ), 'Free camera' ) }
-						${ row( k( 'T' ), 'Pause time<small>In a car: repair</small>' ) }
+						${ row( k( 'T' ), 'Pause time' ) }
 						${ row( k( 'L' ), 'Flashlight' ) }
 						${ row( k( 'M' ), 'Mute' ) }
 					</section>

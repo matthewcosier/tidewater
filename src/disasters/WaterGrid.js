@@ -9,21 +9,49 @@ function wetComponent(bed,n,seeds) {
  while(head<tail){const k=queue[head++],i=k%n,j=Math.floor(k/n);add(i>0?k-1:-1);add(i<n-1?k+1:-1);add(j>0?k-n:-1);add(j<n-1?k+n:-1);}
  return connected;
 }
+// Cells (8-connected steps) from each cell to the nearest land (ground above datum), counted up to `cap`; land is
+// 0 and anything farther than cap reads cap. Built once per grid (the bed never changes) for the launch taper.
+function shoreDistance(bed,n,cap) {
+ const distance=new Uint8Array(bed.length).fill(cap),queue=new Int32Array(bed.length);let head=0,tail=0;
+ for(let k=0;k<bed.length;k++) {
+  if(bed[k]>0) {
+   distance[k]=0;
+   queue[tail++]=k;
+  }
+ }
+ while(head<tail) {
+  const k=queue[head++],i=k%n,j=Math.floor(k/n),next=distance[k]+1;
+  if(next>=cap)continue;
+  for(let dj=-1;dj<=1;dj++) {
+   for(let di=-1;di<=1;di++) {
+    const ii=i+di,jj=j+dj;
+    if(ii<0||jj<0||ii>=n||jj>=n)continue;
+    const m=jj*n+ii;
+    if(distance[m]>next) {
+     distance[m]=next;
+     queue[tail++]=m;
+    }
+   }
+  }
+ }
+ return distance;
+}
+export const LAUNCH_SHORE_CELLS=3;
+function shoreWeight(distance) {
+ const t=Math.min(1,Math.max(0,(distance-1)/(LAUNCH_SHORE_CELLS-1)));
+ return t*t*(3-2*t);
+}
 const TROUGH_LEAD=2.2; // crest widths (Gaussian sigma) from crest to trough centre; an event's e.troughLead (Field.js, drawn per event) wins
 const TROUGH_FLOOR=0.05; // fraction of the still depth a trough may leave (keeps h > 0 for the flux)
-// Second order (the default, order 2). First order smeared a bore over 3-5 cells and ate most of the
-// leading drawdown before it reached the shore: 0.13 H was left at the 2 m surge gauge
-// (test/tsunami-approach.mjs in the baseline). Order 2: per-cell slopes with the generalised minmod limiter
-// on the surface, depth and velocities; the central-upwind flux of Kurganov and Petrova (2007) on
-// the hydrostatic reconstruction of Audusse et al. (2004) with its second-order centred bed term, so
-// a lake at rest stays exactly at rest, wet or dry; Heun's SSP-RK2 in time. CPU reference: the GPU
-// compute port is the next step and must match it.
 const THETA=1.3; // generalised minmod (Kurganov and Petrova 2007): 1 is minmod (most diffusive), 2 is MC
 const DRY=1e-3; // m: a cell touching water this thin is reconstructed first order (wet/dry fronts stay balanced and positive)
 const NEST_BAND=8; // cells: a nested grid's edge band takes its water from the parent (was a sponge to rest)
 const NEST_HARD=2; // cells: the outermost band copies the parent outright (a Dirichlet boundary)
 const NEST_RATE=3; // 1/s: relaxation toward the parent just inside NEST_HARD, falling to 0 at NEST_BAND
 export const INUNDATION_DEPTH=0.1; // m: water over land (ground above datum) deeper than this counts as flooded (stats.inundatedArea, the coast watch)
+// m/s: land water moving slower than this stands (a pond): it cannot move fine sand (about 0.2 m/s, Hjulstrom 1935),
+// so the drain does not wait for it (Field.js); the calm hand-back soaks it in.
+export const STILL_SPEED=0.2;
 // Generalised minmod of the two one-sided differences and their centred mean (face values then stay
 // between the neighbours for THETA <= 2, so a reconstructed depth is never negative).
 function limited(a,b) {
@@ -31,16 +59,6 @@ function limited(a,b) {
  if(a<0&&b<0)return Math.max(THETA*a,0.5*(a+b),THETA*b);
  return 0;
 }
-// The N-wave surface (m) a tsunami source puts over still depth `depth` (m) at `along` m shoreward of its
-// crest line and `cross` m off its ray. One function for the solver's launch and the analytic wall beyond the
-// ring (Field.js farFieldAt, mirrored in WGSL by Water.js disasterFar), so the hand-off is exact.
-// Flat along the crest for crestHalfLength (m), then the old Gaussian falloff of `radius`. A 440 m wide patch
-// spread like a ripple and kept 0.18 of its height after 600 m.
-// Leading-depression N-wave: a trough of e.drawdown x H runs ahead (shoreward, along > 0) of the crest, so the
-// sea draws back before the wall arrives (was: a positive mound only, no drawdown). A trough deeper than the
-// water uncovers the bed; it cannot dig below it (TROUGH_FLOOR).
-// A wall fed from beyond the ring (e.farField) holds its crest at H for farField.length m behind the front
-// (seaward, along < 0) before the Gaussian falls away: the leading edge of a long wave, not a lone hump.
 export function nWaveEta(e,along,cross,depth) {
  const sigma=e.crestWidth??e.width;
  const lateral=Math.exp(-2*(Math.max(0,Math.abs(cross)-(e.crestHalfLength??0))/e.radius)**2);
@@ -49,16 +67,6 @@ export function nWaveEta(e,along,cross,depth) {
  const trough=Math.exp(-0.5*((along-(e.troughLead??TROUGH_LEAD)*sigma)/sigma)**2);
  return Math.max((TROUGH_FLOOR-1)*depth,e.intensity*(crest-(e.drawdown??0)*trough)*lateral);
 }
-// Depth-averaged water speed (m/s, along the heading) under the source at still depth `depth` and depth h (m).
-// A long wave takes the simple-wave relation u = 2 ( sqrt( g h ) - sqrt( g depth ) ): no arbitrary launch speed;
-// under the trough u < 0, the water runs out to sea ahead of the crest.
-// A wall that came in from beyond the ring (e.farField) is a bore moving at its Stoker speed C (Field.js
-// crestCelerity, sustained): its water moves at the flux of a profile translating at C, u = C ( h - depth ) / h,
-// which across the front is the Rankine-Hugoniot mass condition, so the state behind is the bore's own (3000 m
-// over 90 m: 711 m/s, Froude 4.1; 320 m: 83 m/s, Froude 1.3). Was: C held to the dam-break 348 m/s and u
-// limited to C - sqrt( g h ) = 174 m/s; a 3090 m column moving that slowly is no bore of its height, and the
-// wall slumped to 1430 m within 3 s (41% of H at the coast). Under the trough the simple wave stays: the
-// translating flux over the TROUGH_FLOOR film would ask for 19 C of outflow.
 export function nWaveSpeed(e,depth,h) {
  const simple=2*(Math.sqrt(9.81*h)-Math.sqrt(9.81*depth));
  if(!e.farField||h<=depth)return simple;
@@ -66,6 +74,7 @@ export function nWaveSpeed(e,depth,h) {
 }
 export class WaterGrid {
  constructor(terrain,{n=129,dx=8,x=0,z=0,sponge=true,friction=true,order=2,parent=null,maxInterval=0.1,fixedStep=false}={}){
+   this.calm=null; // { rate 1/s, soak m/s } during the hand-back (calmCell, set by Field.js)
   this.terrain=terrain;this.n=n;this.dx=dx;this.x=x-(n-1)*dx/2;this.z=z-(n-1)*dx/2;this.sponge=sponge;this.friction=friction;
   this.order=order; // 1 first-order Rusanov, 2 second-order central-upwind
   this.maxInterval=maxInterval; // s: the longest interval one advance() accepts; the rest is reported as dropped
@@ -75,7 +84,7 @@ export class WaterGrid {
   this.pixels=new Float32Array(count*4);
   // state: the latest step packed; previous: the step before (fixed-step mode blends them into pixels).
   this.fixedStep=fixedStep;this.lag=0;this.nextStep=null;
-  this.state=fixedStep?new Float32Array(count*4):this.pixels;this.previous=fixedStep?new Float32Array(count*4):this.pixels;this.time=0;this.version=0;this.stats={steps:0,massAdded:0,massRemoved:0,boundaryVolume:0,positivityCorrection:0,cfl:0,maxSpeed:0,limited:0,droppedTime:0,windImpulseX:0,windImpulseZ:0,windWork:0};
+  this.state=fixedStep?new Float32Array(count*4):this.pixels;this.previous=fixedStep?new Float32Array(count*4):this.pixels;this.time=0;this.version=0;this.stats={steps:0,massAdded:0,massRemoved:0,boundaryVolume:0,positivityCorrection:0,cfl:0,maxSpeed:0,limited:0,droppedTime:0,windImpulseX:0,windImpulseZ:0,windWork:0,calmVolume:0,landFlow:0,landMoving:0,landWet:0,seaOff:0};
   for(let j=0;j<n;j++)for(let i=0;i<n;i++){const k=j*n+i;this.bed[k]=terrain(this.x+i*dx,this.z+j*dx);this.h[k]=Math.max(0,-this.bed[k]);}
   this.initialVolume=this.volume();this.pack();
   if(parent)this.nestIn(parent);
@@ -93,11 +102,12 @@ export class WaterGrid {
   if(!this.oceanMask){const edges=[];for(let i=0;i<this.n;i++)edges.push(i,(this.n-1)*this.n+i,i*this.n,i*this.n+this.n-1);this.oceanMask=wetComponent(this.bed,this.n,edges);}
   let seed=-1,best=Infinity;for(let j=0;j<this.n;j++)for(let i=0;i<this.n;i++){const k=j*this.n+i;if(this.bed[k]>=-.3||!this.oceanMask[k])continue;const d=(this.x+i*this.dx-x)**2+(this.z+j*this.dx-z)**2;if(d<best){best=d;seed=k;}}
   const connected=wetComponent(this.bed,this.n,[seed]);
+  if(!this.shoreDistance)this.shoreDistance=shoreDistance(this.bed,this.n,LAUNCH_SHORE_CELLS+1);
 
   for(let j=0;j<this.n;j++)for(let i=0;i<this.n;i++){
    const k=j*this.n+i,b=this.bed[k];if(b>=-0.3||!connected[k])continue;
    const dx=this.x+i*this.dx-x,dz=this.z+j*this.dx-z,along=dx*c+dz*s,cross=-dx*s+dz*c;
-   const d=this.h[k],eta=nWaveEta(e,along,cross,d);
+   const d=this.h[k],eta=nWaveEta(e,along,cross,d)*shoreWeight(this.shoreDistance[k]);
    if(Math.abs(eta)<0.0001)continue;
    this.h[k]=d+eta;
    const u=nWaveSpeed(e,d,this.h[k]);
@@ -107,11 +117,6 @@ export class WaterGrid {
   // A wall from beyond the ring keeps coming in through this grid's open boundary (the outer ring only; a
   // nested grid takes it from its parent). See sources().
   this.inflow=e.farField&&!this.nest?{e,elapsed:0,c,s}:null;
-  // The wave just written is the sea at this instant, so the fixed-step accumulator owes it no time. The calm
-  // sea's unspent lag (up to one 0.24 s step on the 32 m ring) was replayed on the launched wave in the next
-  // frame: the 3000 m wall's face jumped 97-161 m (0.13-0.22 s x 732 m/s) ahead of the analytic face it took
-  // over (test/tsunami-farfield.mjs). pack() above already dropped the cached step; the
-  // grid clock moves on to the instant the state now holds.
   if(this.fixedStep){this.time+=this.lag;this.lag=0;}
  }
  // A bounded local vertical water displacement paired with a surrounding depression.
@@ -140,7 +145,7 @@ export class WaterGrid {
    // Petrova 2007, Theorem 2.1); the summed rate above allowed 0.45 on one axis.
    if(this.order>=2)rate=Math.max(rate,2*(Math.max(u,v)+c)/this.dx);}}
   if(!Number.isFinite(rate))throw new RangeError('Non-finite shallow-water characteristic speed');
-  const step=.45/Math.max(1,rate);this.stats.cfl=step*rate;this.stats.maxSpeed=speed;return step;
+  let step=.45/Math.max(1,rate);if(step*rate>.45)step*=1-1e-12;this.stats.cfl=step*rate;this.stats.maxSpeed=speed;return step;
  }
  // Fixed-step mode (the game's grids): whole CFL-sized steps from an accumulator, and the packed
  // field shown and sampled is the blend of the last two steps. Stepping every frame at the frame's
@@ -247,7 +252,14 @@ export class WaterGrid {
     // A slope is a property of the cell (both its faces and its bed term use it), so the first-order
     // fallback at the domain edge and next to thin water is decided per cell. Deciding it per face
     // broke the lake-at-rest balance.
-    if(along===0||along===n-1||h[p]<DRY||h[p-stride]<DRY||h[p+stride]<DRY){sE[p]=0;sH[p]=0;sU[p]=0;sV[p]=0;continue;}
+    // A step in the free surface is first order too: a neighbour whose surface lies below this cell's ground, or ground
+    // above this cell's surface (water falling off a ledge, or a ledge it falls from). The surface slope across a step
+    // lifted the downhill face's bed above the water: 10 m seed 1 left a 1.86 m pool at 30 m/s perched in a hollow on a
+    // 1:2 hillside (360, -128), its outflow face reconstructed dry, for 100 s after the crest (56 m2/s that never moved;
+    // test/tsunami-film.mjs). A lake at rest has no step, so its balance is untouched. DRY of margin keeps a near tie
+    // from switching order between the f64 CPU and the f32 GPU (test/tsunami-gpu-parity.mjs).
+    const bed=this.bed;
+    if(along===0||along===n-1||h[p]<DRY||h[p-stride]<DRY||h[p+stride]<DRY||eta[p-stride]<bed[p]-DRY||eta[p+stride]<bed[p]-DRY||eta[p]<bed[p-stride]-DRY||eta[p]<bed[p+stride]-DRY){sE[p]=0;sH[p]=0;sU[p]=0;sV[p]=0;continue;}
     const l=p-stride,r=p+stride;
     sE[p]=limited(eta[p]-eta[l],eta[r]-eta[p]);
     sH[p]=limited(h[p]-h[l],h[r]-h[p]);
@@ -298,8 +310,12 @@ export class WaterGrid {
    if(h[p]<1e-5){qx[p]=qz[p]=0;continue;}
    // Manning friction n=0.035 on inundated land, n=0.02 at sea (assumed roughness).
    // (sqrt and h^2 cbrt h: hypot and ** 7/3 cost 4.7 ms of a 257^2 step)
+   // The depth is the cell's own (h >= 1e-5 here; the implicit drag only grows as h falls, so it stays stable). It was
+   // floored at 2 cm, which gave a film 5 to 25 times too little friction: 10 m seed 1, 60 s after the crest, 200 land
+   // cells under 2 cm drained at up to 12.7 x the Manning speed h^(2/3) S^(1/2) / n (2 to 7 m/s in 2 to 4 mm of water,
+   // test/tsunami-film.mjs). Deeper flow was within 0.8-1.9 x of it and is unchanged in kind.
    const rough=this.friction?(bed[p]>0?0.035:0.02):0,speed2=qx[p]*qx[p]+qz[p]*qz[p];
-   if(rough>0&&speed2>0){const d=Math.max(0.02,h[p]),drag=1+dt*g*rough*rough*Math.sqrt(speed2)/(d*d*Math.cbrt(d));qx[p]/=drag;qz[p]/=drag;}
+   if(rough>0&&speed2>0){const d=h[p],drag=1+dt*g*rough*rough*Math.sqrt(speed2)/(d*d*Math.cbrt(d));qx[p]/=drag;qz[p]/=drag;}
    if(this.wind){
     // tau = rhoAir Cd |Uair-Uwater| (Uair-Uwater), Cd=.0015 assumed.
     // Exact relative-velocity relaxation over dt prevents overshoot in thin wet cells.
@@ -309,17 +325,24 @@ export class WaterGrid {
     this.stats.windWork+=.5*SEA_WATER_DENSITY*((qx[p]*qx[p]+qz[p]*qz[p])/h[p]-beforeEnergy)*dx*dx;
    }
    if(this.sponge&&!this.nest){const edge=Math.min(i,j,n-1-i,n-1-j);if(edge<8&&this.inflow&&this.inflowAt(p,i,j,edge,dt))continue;if(edge<8){const damp=Math.exp(-dt*0.7*(1-edge/8)**2),rest=Math.max(0,-bed[p]),before=h[p];h[p]=rest+(h[p]-rest)*damp;qx[p]*=damp;qz[p]*=damp;this.stats.boundaryVolume+=(before-h[p])*dx*dx;}}
+   if(this.calm)this.calmCell(p,dt);
   }
  }
- // Inflow: while the analytic wall (Field.farFieldAt, the same nWaveEta and nWaveSpeed) covers an edge
- // cell, the cell takes the wall's state instead of relaxing to rest: copied outright on the outer NEST_HARD cells,
- // relaxed at the nest's rate across the rest of the band (a wave-making relaxation zone, Mayer, Garapon and
- // Sorensen 1998). The wall's water outruns its waves there (Froude 4.1 for 3000 m, 1.3 for 320 m), so every
- // characteristic enters and both h and q are given, as the nest's Dirichlet band does. It lasts as long as the
- // crest does (farField.length / speed, Field.js LONG_WAVE), then the band is a sponge to rest again. Without it
- // the ring's sponge ate the wall's back and the 3000 m wall reached the coast at 41% of H. Returns false where no
- // wall is drawn (the old sponge applies). The crest is at the step's end time; stats.boundaryVolume keeps the
- // volume budget (negative: water let in).
+ // The calm hand-back (Field.js, after the land has drained): standing water on land soaks in at calm.soak (m/s) and
+ // every other wet cell returns to its still level (h = max( 0, -bed )) at calm.rate (1/s), velocity damped with it.
+ // Constant-rate soak on land reaches dry in finite time; the sea's leftover slosh decays exponentially. The volume
+ // handed back is kept in stats.calmVolume (it is not boundary or positivity volume).
+ calmCell(p,dt){
+  const {h,qx,qz,bed}=this,calm=this.calm,before=h[p];
+  if(bed[p]>0){
+   const next=Math.max(0,before-calm.soak*dt),keep=next>1e-5?next/before:0;
+   h[p]=next;qx[p]*=keep;qz[p]*=keep;
+  }else{
+   const rest=-bed[p],keep=Math.exp(-dt*calm.rate);
+   h[p]=rest+(before-rest)*keep;qx[p]*=keep;qz[p]*=keep;
+  }
+  this.stats.calmVolume+=(before-h[p])*this.dx*this.dx;
+ }
  inflowAt(p,i,j,edge,dt){
   const {e,elapsed,c,s}=this.inflow,rest=Math.max(0,-this.bed[p]);
   if(!(rest>0.3))return false; // m: the launch's own sea test
@@ -347,6 +370,11 @@ export class WaterGrid {
    nest.rate[c]=edge<NEST_HARD?Infinity:NEST_RATE*(1-(edge-NEST_HARD)/(NEST_BAND-NEST_HARD))**2;
   }
   this.parent=parent;this.nest=nest;
+  // The parent's cells this grid draws over (inside its nest band): Water.js and Field.gridAt show this grid there, so the
+  // parent's coarse copy of the land and sea under it is left out of the parent's drain state (drainStats).
+  const covered=new Uint8Array(parent.n*parent.n),lo=NEST_BAND*dx,hiX=this.x+(n-1)*dx-lo,hiZ=this.z+(n-1)*dx-lo;
+  for(let j=0;j<parent.n;j++)for(let i=0;i<parent.n;i++){const x=parent.x+i*parent.dx,z=parent.z+j*parent.dx;covered[j*parent.n+i]=x>this.x+lo&&x<hiX&&z>this.z+lo&&z<hiZ?1:0;}
+  parent.covered=covered;
  }
  nestToParent(dt){
   const {h,qx,qz,bed,nest}=this,P=this.parent.pixels,row=this.parent.n*4;let moved=0;
@@ -363,16 +391,16 @@ export class WaterGrid {
   this.stats.boundaryVolume+=moved*this.dx*this.dx;
  }
  contains(x,z){const span=(this.n-1)*this.dx;return x>=this.x&&z>=this.z&&x<=this.x+span&&z<=this.z+span;}
- // Cell indices of the land (ground above datum) within r m of (x, z): the coast a warning names. Built once
- // per launch so the per-frame check (floods) walks a fixed list and allocates nothing.
- landWithin(x,z,r) {
+ landWithin(x,z,r,heading=null,reach=Infinity) {
   const n=this.n,dx=this.dx,i0=Math.max(0,Math.floor((x-r-this.x)/dx)),i1=Math.min(n-1,Math.ceil((x+r-this.x)/dx));
   const j0=Math.max(0,Math.floor((z-r-this.z)/dx)),j1=Math.min(n-1,Math.ceil((z+r-this.z)/dx));
   const cells=[];
+  const a=heading===null?0:heading*Math.PI/180,cx=heading===null?0:Math.cos(a),cz=heading===null?0:Math.sin(a);
   for(let j=j0;j<=j1;j++) {
    for(let i=i0;i<=i1;i++) {
     const k=j*n+i,ex=this.x+i*dx-x,ez=this.z+j*dx-z;
-    if(this.bed[k]>0&&ex*ex+ez*ez<=r*r)cells.push(k);
+    const seaward=-(ex*cx+ez*cz); // m out from (x, z) against the heading
+    if(this.bed[k]>0&&ex*ex+ez*ez<=r*r&&seaward<=reach)cells.push(k);
    }
   }
   return Int32Array.from(cells);
@@ -383,9 +411,13 @@ export class WaterGrid {
   return false;
  }
  pack(){
-  let inundated=0,minSurface=0,maxSurface=0;for(let k=0;k<this.h.length;k++){const h=this.h[k],wet=h>0.002;if(this.bed[k]>0&&h>INUNDATION_DEPTH)inundated++;const S=this.state;S[k*4]=wet?h+this.bed[k]:Math.min(0,this.bed[k]);S[k*4+1]=wet?this.qx[k]/h:0;S[k*4+2]=wet?this.qz[k]/h:0;S[k*4+3]=h;minSurface=Math.min(minSurface,S[k*4]);maxSurface=Math.max(maxSurface,S[k*4]);}
-  this.stats.inundatedArea=inundated*this.dx*this.dx;if(this.fixedStep&&!this.stepping){this.previous.set(this.state);this.pixels.set(this.state);this.nextStep=null;}this.stats.minSurface=minSurface;this.stats.maxSurface=maxSurface;this.version++;
+  let inundated=0,minSurface=0,maxSurface=0,landFlow=0,landMoving=0,landWet=0,seaOff=0;for(let k=0;k<this.h.length;k++){const h=this.h[k],wet=h>0.002;const shown=!this.covered?.[k];if(this.bed[k]>0){if(h>INUNDATION_DEPTH)inundated++;if(wet&&shown){const q=Math.hypot(this.qx[k],this.qz[k]);landWet++;if(q>landFlow)landFlow=q;if(h>INUNDATION_DEPTH&&q>STILL_SPEED*h)landMoving++;}}else if(shown){const off=Math.abs(h+this.bed[k]);if(h>0&&off>seaOff)seaOff=off;}const S=this.state;S[k*4]=wet?h+this.bed[k]:Math.min(0,this.bed[k]);S[k*4+1]=wet?this.qx[k]/h:0;S[k*4+2]=wet?this.qz[k]/h:0;S[k*4+3]=h;minSurface=Math.min(minSurface,S[k*4]);maxSurface=Math.max(maxSurface,S[k*4]);}
+  this.stats.inundatedArea=inundated*this.dx*this.dx;if(this.fixedStep&&!this.stepping){this.previous.set(this.state);this.pixels.set(this.state);this.nextStep=null;}this.stats.minSurface=minSurface;this.stats.maxSurface=maxSurface;this.drainStats(landFlow,landMoving,landWet,seaOff);this.version++;
  }
+ // The drain and hand-back state for Field.js (one source for the CPU pack and the GPU readback): the largest land
+ // discharge h |u| (m2/s), land cells deeper than INUNDATION_DEPTH still moving faster than STILL_SPEED, land cells
+ // holding any water (the packed wet line, 2 mm), and the largest departure (m) of a wet sea cell from datum.
+ drainStats(landFlow,landMoving,landWet,seaOff){const s=this.stats;s.landFlow=landFlow;s.landMoving=landMoving;s.landWet=landWet;s.seaOff=seaOff;}
  sample(x,z,out={}){
   const u=(x-this.x)/this.dx,v=(z-this.z)/this.dx,n=this.n;out.height=out.ux=out.uz=out.depth=0;
   if(u<0||v<0||u>n-1||v>n-1)return out;

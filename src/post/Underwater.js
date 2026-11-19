@@ -4,6 +4,8 @@ import { RenderTarget } from '../engine/gpu/Texture.js';
 import { FullscreenPass } from '../engine/render/FullscreenPass.js';
 import { Matrix4, Vector3, Vector4 } from '../engine/math/index.js';
 import { localLightsModule } from '../materials/LocalLights.js';
+import { G } from '../engine/render/Frame.js';
+import { blendMedium, mediumOptics, floodMediumModule, BACKSCATTER } from '../disasters/FloodMedium.js';
 
 const IOR = 1.333;
 
@@ -75,6 +77,7 @@ export class Underwater {
 			enabled: [ 'f32', 1 ],
 			torchBeam: [ 'f32', 3 ], // flashlight beam in-scatter strength
 			hasShafts: [ 'f32', 0 ], // the half resolution shaft / torch march ran this frame
+			medium: [ 'f32', 0 ], // the water the camera is in: 0 the sea's own, 1 a flood's sediment-laden water (setMedium)
 		}, { label: 'underwater' } );
 		const U = this.uniforms.fields;
 		this.lensDistance = U.lensDistance;
@@ -90,6 +93,31 @@ export class Underwater {
 		// (rgb: in-scatter, a: the pixel's view distance for the depth-aware upsample in the composite)
 		this.shaftTarget = new RenderTarget( 1, 1, { colors: [ 'rgba16float' ], label: 'uwShafts' } );
 		this._shaftPass = null;
+
+	}
+
+	// The water the camera is in this frame: 0 the sea's own, 1 a flood's sediment-laden water (FloodMedium.floodMediumAt,
+	// from App). Blended over MEDIUM_BLEND s and landing exactly on its target: with no flood the medium is exactly 0
+	// and every term below is the sea's own, bit for bit.
+	setMedium( target, dt ) {
+
+		const m = this.uniforms.fields.medium;
+		m.value = blendMedium( m.value, target, dt );
+
+	}
+
+	get medium() {
+
+		return this.uniforms.fields.medium.value;
+
+	}
+
+	// Telemetry (specs, read only): the optics of the water at the camera, per metre and per colour channel, as the
+	// composite uses them this frame: the sea's own coefficients (Frame.js) plus the flood's sediment (FloodLook.js
+	// SED_ABSORB, SED_SCATTER) weighted by the medium.
+	mediumState() {
+
+		return mediumOptics( this.uniforms.fields.medium.value, G.waterAbsorption.value, G.waterScattering.value );
 
 	}
 
@@ -134,7 +162,7 @@ export class Underwater {
 		if ( this._module ) return this._module;
 		this._module = new ShaderModule( {
 			name: 'underwater',
-			deps: [ commonModule, this.query && this.query.module, this.caustics && this.caustics.module, flashModule ],
+			deps: [ commonModule, this.query && this.query.module, this.caustics && this.caustics.module, flashModule, floodMediumModule ],
 			uniforms: this.uniforms,
 			uniformName: 'underwaterParams',
 			bindings: {
@@ -263,8 +291,8 @@ fn fragment( in: FSIn ) -> vec4f {
 	let dist = max( min( length( ray * ( - vz ) ), 600.0 ) - underwaterParams.lensDistance * length( ray ), 0.0 );
 	let dir = underwaterWorldDir( uv );
 	let st = waterQueryCameraState();
-	let sigS = frame.waterScattering;
-	let sigT = frame.waterAbsorption + sigS;
+	let sigS = floodMediumScattering( underwaterParams.medium );
+	let sigT = floodMediumAbsorption( underwaterParams.medium ) + sigS;
 
 	let Ls = - refract( - frame.sunDir, vec3f( 0.0, 1.0, 0.0 ), 1.0 / UW_IOR ); // toward the sun, underwater
 	let mu = max( Ls.y, 0.15 );
@@ -317,9 +345,10 @@ fn _uwMed( pc: vec2i, dy: i32, mSize: vec2i ) -> f32 {
 	return textureLoad( underwaterMediumTex, vec2i( pc.x, clamp( pc.y + dy, 0, mSize.y - 1 ) ), 0 ).r;
 }
 
-fn _uwLit( m: f32, sigT: vec3f, zc: f32, dirY: f32, dist: f32 ) -> vec3f {
-	let a = sigT * zc / m;
-	let kk = sigT * ( 1.0 - dirY / m );
+// sigL: the attenuation of the light on its way down (the sea: sigT itself, and the second term of kk is exactly 0)
+fn _uwLit( m: f32, sigT: vec3f, sigL: vec3f, zc: f32, dirY: f32, dist: f32 ) -> vec3f {
+	let a = sigL * zc / m;
+	let kk = sigT * ( 1.0 - dirY / m ) + ( sigT - sigL ) * ( dirY / m );
 	let e0 = exp( - a );
 	let e1 = exp( - max( a + kk * dist, vec3f( 0.0 ) ) );
 	return select( ( e0 - e1 ) / kk, e0 * dist, abs( kk ) < vec3f( 1e-4 ) );
@@ -372,8 +401,8 @@ fn underwaterComposite( uv: vec2f, pixel: vec2f ) -> vec4f {
 
 		let st = waterQueryCameraState();
 		let zc = max( st.x - underwaterParams.camPos.y, 0.0 ); // camera depth below the surface
-		let sigA = frame.waterAbsorption;
-		let sigS = frame.waterScattering;
+		let sigA = floodMediumAbsorption( underwaterParams.medium );
+		let sigS = floodMediumScattering( underwaterParams.medium );
 		let sigT = sigA + sigS;
 
 		let Ls = - refract( - frame.sunDir, vec3f( 0.0, 1.0, 0.0 ), 1.0 / UW_IOR ); // toward the sun, underwater
@@ -390,10 +419,14 @@ fn underwaterComposite( uv: vec2f, pixel: vec2f ) -> vec4f {
 		let sunE = frame.sunColor * 0.96;
 		let ambE = frame.skyIrradiance * PI * 0.9;
 
-		let bb = sigS * 0.035;
+		let bb = sigS * ${ f32s( BACKSCATTER ) };
 		let msAlb = bb * 1.3 / ( sigA + bb );
-		let inSun = sunE * ( sigS * phase + msAlb * sigT * ( 1.0 / PI ) ) * _uwLit( mu, sigT, zc, dir.y, dist );
-		let inAmb = ambE * ( sigS * ( 1.0 / ( 4.0 * PI ) ) + msAlb * sigT * ( 1.0 / PI ) ) * _uwLit( 0.8, sigT, zc, dir.y, dist );
+		// In a flood's sediment the daylight goes down by the diffuse attenuation a + bb, not the beam's a + b: forward
+		// scattered light is still travelling down (Gordon 1989). With the beam value the water was black 15 cm under
+		// the surface; with this it glows brown through the top third of a metre. The sea keeps sigT (medium 0).
+		let sigL = mix( sigT, sigA + bb, underwaterParams.medium );
+		let inSun = sunE * ( sigS * phase + msAlb * sigT * ( 1.0 / PI ) ) * _uwLit( mu, sigT, sigL, zc, dir.y, dist );
+		let inAmb = ambE * ( sigS * ( 1.0 / ( 4.0 * PI ) ) + msAlb * sigT * ( 1.0 / PI ) ) * _uwLit( 0.8, sigT, sigL, zc, dir.y, dist );
 
 		// caustic light shafts and the torch beam: the half resolution march (underwaterShafts), depth-aware
 		// upsampled (bilinear weights times the view distance similarity)

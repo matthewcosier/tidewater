@@ -12,6 +12,8 @@ export const ZONE_ENERGY = 220, HIT_CAP = 0.42, HEAVY = 18;
 export const CORNER_ENERGY = 220, CORNER_CAP = 0.6;
 // A square hit on a hub this hard (about 50 km/h of delta-v) snaps the upright.
 export const SNAP = 14;
+// RCAR's low-speed structural test, 15 km/h: under it a hit is a bumper knock (dents only, see hit()).
+export const BUMPER = 4.2, DENT = 0.05;
 export const LEVELS = { steam: 0.2, smoke: 0.5, fire: 0.9, crack: 0.25, shatter: 0.6 };
 // Seconds for a fire to grow to full, then to finish the engine.
 export const FIRE_GROW = 16, FIRE_KILL = 6;
@@ -50,6 +52,27 @@ export function cornerWeights( p, dims ) {
 	return dims.wheels.map( ( [ x, z ] ) => ramp( 1 - Math.hypot( p[ 0 ] - x, p[ 2 ] - z ) / 1.0, 0, 0.5 ) );
 }
 
+export class ImpactMerge {
+	constructor() { this.pending = null; }
+
+	// hits: RallyPhysics.take_impacts() (8 floats each: car-local point xyz, push xyz, delta-v m/s,
+	// scenery flag); dt: s since the last call. Returns { p, d, severity, scenery } once a crash is over.
+	add( hits, dt ) {
+		for ( let i = 0; i + 7 < hits.length; i += 8 ) {
+			const c = this.pending ||= { p: [ 0, 0, 0 ], d: [ 0, 0, 0 ], severity: 0, scenery: 0, age: 0, span: 0 }, s = hits[ i + 6 ];
+			for ( let k = 0; k < 3; k ++ ) { c.p[ k ] += hits[ i + k ] * s; c.d[ k ] += hits[ i + 3 + k ] * s; }
+			c.severity += s; c.scenery = Math.max( c.scenery, hits[ i + 7 ] ); c.age = 0;
+		}
+		const crash = this.pending;
+		if ( ! crash ) return null;
+		crash.span += dt;
+		if ( ( crash.age += dt ) <= 0.12 && crash.span <= 0.25 ) return null;
+		this.pending = null;
+		const length = Math.hypot( ...crash.d ) || 1;
+		return { p: crash.p.map( v => v / crash.severity ), d: crash.d.map( v => v / length ), severity: crash.severity, scenery: crash.scenery };
+	}
+}
+
 export class DamageState {
 	// parts: [ { name, anchor: [ x, y, z ], at, radius } ] break where they were actually hit.
 	constructor( dims, parts = [] ) {
@@ -81,6 +104,13 @@ export class DamageState {
 		this.impacts ++;
 		const share = Math.min( HIT_CAP + ( 1 - HIT_CAP ) * ramp( severity, HEAVY, HEAVY + 8 ), energy / ZONE_ENERGY );
 		const w = zoneWeights( p, d, this.dims );
+		// Bumper floor: under RCAR's 15 km/h a hit dents the panel and nothing else, however many come
+		// (ECE R42 / 49 CFR 581: lights, cooling and suspension survive 4 km/h). The zones creep up to
+		// DENT at most, under LEVELS.steam and the engine-loss knee; no corner, toe, part or glass.
+		if ( severity < BUMPER ) {
+			for ( let i = 0; i < 5; i ++ ) this.zones[ i ] = Math.max( this.zones[ i ], Math.min( DENT, this.zones[ i ] + share * w[ i ] ) );
+			return out;
+		}
 		for ( let i = 0; i < 5; i ++ ) this.zones[ i ] = clamp( this.zones[ i ] + share * w[ i ] );
 		const cw = cornerWeights( p, this.dims );
 		for ( let i = 0; i < 4; i ++ ) {

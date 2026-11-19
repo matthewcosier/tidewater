@@ -1,4 +1,4 @@
-import { Vector3 } from '../engine/math/index.js';
+import { Vector2, Vector3 } from '../engine/math/index.js';
 import { Texture } from '../engine/gpu/Texture.js';
 import { generateMipmaps } from '../engine/gpu/Mipmaps.js';
 import { ShaderModule, UniformBlock } from '../engine/gpu/Shader.js';
@@ -33,10 +33,12 @@ import { detailBinding } from './terrain/TerrainShading.js';
 //                                                       terrainSplatLevel( xz, level )
 //   terrainShoreSample( xz: vec2f ) -> vec4f            shore field (T, dirX, dirZ, exposure), bilinear
 //   terrainSunShadowAt( P: vec3f ) -> f32               heightfield sun shadow: 0 in the hills' shadow .. 1 lit
-// Bindings: terrainParams (TerrainParams: origin, size, res, shoreRes, sunBake, sunBaked), terrainHeightTex,
+// Bindings: terrainParams (TerrainParams: origin, size, res, shoreRes as vec2f (x, z), sunBake, sunBaked), terrainHeightTex,
 // terrainNormalTex, terrainSplatTex, terrainDetailTex (tileable: sample with smpLinearRepeat / smpAnisoRepeat),
 // terrainShoreTex, terrainSunShadowTex.
-const SUN_N = 512;
+// Sun shadow cell (m): 512 cells over the old 2048 m square; per axis now, the domain is a rectangle
+// (WORLD.terrain), so the map is sizeX / 4 x sizeZ / 4 (512 x 832 at 2048 x 3328 m).
+const SUN_CELL = 4;
 const SUN_T0 = 24; // m: nearer occluders are left to the shadow map / N.L
 const SUN_DT0 = 6;
 const SUN_GROWTH = 1.22;
@@ -56,16 +58,16 @@ export class TerrainGPU {
 	constructor( terrain, shoreField ) {
 
 		this.terrain = terrain;
-		const res = terrain.res;
+		const { resX, resZ } = terrain;
 		const t0 = performance.now();
 
 		// heights: R32F, loaded with manual bilinear filtering (no sampler / float filtering needed)
-		this.heightTexture = dataTexture( terrain.heights, res, res, 'r32float', 'terrainHeights' );
+		this.heightTexture = dataTexture( terrain.heights, resX, resZ, 'r32float', 'terrainHeights' );
 
 		const maps = bakeTerrainMaps( terrain );
 		// trilinear, clamp to edge (smpLinearClamp), linear data (no colour space)
-		this.normalTexture = dataTexture( maps.normal, res, res, 'rgba8unorm', 'terrainNormalRockAO', true );
-		this.splatTexture = dataTexture( maps.splat, res, res, 'rgba8unorm', 'terrainSplat', true );
+		this.normalTexture = dataTexture( maps.normal, resX, resZ, 'rgba8unorm', 'terrainNormalRockAO', true );
+		this.splatTexture = dataTexture( maps.splat, resX, resZ, 'rgba8unorm', 'terrainSplat', true );
 		this.detailTexture = getDetailTexture();
 
 		// coarse heights for the sun shadow march (half float is filterable everywhere)
@@ -77,15 +79,19 @@ export class TerrainGPU {
 		this.shadowTexel = sh.texel;
 		this.maxHeight = sh.maxHeight;
 
-		this.size = terrain.size;
-		this.origin = terrain.origin;
-		this.res = res;
+		// the domain rectangle (WORLD.terrain); every uv below is ( xz - origin ) / size per axis
+		this.sizeX = terrain.sizeX;
+		this.sizeZ = terrain.sizeZ;
+		this.originX = terrain.originX;
+		this.originZ = terrain.originZ;
+		this.resX = resX;
+		this.resZ = resZ;
 
 		this.uniforms = new UniformBlock( 'TerrainParams', {
-			origin: [ 'f32', terrain.origin ],
-			size: [ 'f32', terrain.size ],
-			res: [ 'f32', res ],
-			shoreRes: [ 'f32', 1 ],
+			origin: [ 'vec2f', new Vector2( terrain.originX, terrain.originZ ) ], // m, west / north edge
+			size: [ 'vec2f', new Vector2( terrain.sizeX, terrain.sizeZ ) ], // m
+			res: [ 'vec2f', new Vector2( resX, resZ ) ], // height texels per axis
+			shoreRes: [ 'vec2f', new Vector2( 1, 1 ) ], // shore field cells per axis
 			sunBake: [ 'vec3f', new Vector3( 0, 1, 0 ) ],
 			sunBaked: [ 'f32', 0 ], // 0 until the first bake: everything lit
 		}, { label: 'terrainParams' } );
@@ -135,7 +141,9 @@ export class TerrainGPU {
 
 		// nearest + textureLoad (manual bilinear in terrainSunShadowAt): no sampler needed, every lit
 		// material includes this lookup
-		this.sunShadowTexture = new Texture( { label: 'terrainSunShadow', width: SUN_N, height: SUN_N, format: 'rgba16float', usage: [ 'sample', 'storage' ] } );
+		this.sunNX = Math.round( this.sizeX / SUN_CELL );
+		this.sunNZ = Math.round( this.sizeZ / SUN_CELL );
+		this.sunShadowTexture = new Texture( { label: 'terrainSunShadow', width: this.sunNX, height: this.sunNZ, format: 'rgba16float', usage: [ 'sample', 'storage' ] } );
 		this.uSunBake = this.uniforms.fields.sunBake;
 		this.uSunBaked = this.uniforms.fields.sunBaked;
 		this._sunBaked = false;
@@ -153,9 +161,9 @@ export class TerrainGPU {
 			code: /* wgsl */`
 @compute @workgroup_size( WG_X, WG_Y, WG_Z )
 fn main( @builtin( global_invocation_id ) gid: vec3u ) {
-	if ( gid.x >= ${ SUN_N }u || gid.y >= ${ SUN_N }u ) { return; }
+	if ( gid.x >= ${ this.sunNX }u || gid.y >= ${ this.sunNZ }u ) { return; }
 	let ij = vec2f( gid.xy );
-	let xz = ( ij + 0.5 ) / ${ SUN_N }.0 * terrainParams.size + terrainParams.origin;
+	let xz = ( ij + 0.5 ) / vec2f( ${ this.sunNX }.0, ${ this.sunNZ }.0 ) * terrainParams.size + terrainParams.origin;
 	let L = terrainParams.sunBake;
 	let lxz = max( length( L.xz ), 1e-4 );
 	let dir = L.xz / lxz;
@@ -183,14 +191,14 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	}
 
-	// Re-bake the sun shadow map when the key light moved (cheap: ~6 M texture fetches).
+	// Re-bake the sun shadow map when the key light moved (24 fetches per 4 m cell: ~10 M at 512 x 832).
 	// `renderer` is unused (kept for the call sites); the dispatch records into the frame encoder.
 	updateSunShadow( renderer, force = false ) {
 
 		const L = G.sunDir.value;
 		if ( ! force && this._sunBaked && L.angleTo( this.uSunBake.value ) < 0.0015 ) return false;
 		this.uSunBake.value.copy( L );
-		this.sunShadowKernel.dispatch( [ SUN_N / 8, SUN_N / 8, 1 ] );
+		this.sunShadowKernel.dispatch( [ Math.ceil( this.sunNX / 8 ), Math.ceil( this.sunNZ / 8 ), 1 ] );
 		this._sunBaked = true;
 		this.uSunBaked.value = 1;
 		return true;
@@ -199,12 +207,14 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	setShoreField( f ) {
 
+		// terrainShoreSample maps world xz through the terrain origin and size, so the field must
+		// cover exactly the terrain rectangle
+		if ( f.originX !== this.originX || f.originZ !== this.originZ || f.sizeX !== this.sizeX || f.sizeZ !== this.sizeZ ) throw new Error( 'Shore field must cover the terrain rectangle' );
 		this.shoreField = f; // CPU data for ShoreWaves.buildDirTexture
-		this.shoreRes = f.res;
-		if ( this.shoreTexture.width !== f.res ) {
+		if ( this.shoreTexture.width !== f.resX || this.shoreTexture.height !== f.resZ ) {
 
 			this.shoreTexture.destroy();
-			this.shoreTexture = dataTexture( f.data, f.res, f.res, 'rgba32float', 'terrainShoreField' );
+			this.shoreTexture = dataTexture( f.data, f.resX, f.resZ, 'rgba32float', 'terrainShoreField' );
 
 		} else {
 
@@ -212,7 +222,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 		}
 
-		this.uniforms.fields.shoreRes.value = f.res;
+		this.uniforms.fields.shoreRes.value.set( f.resX, f.resZ );
 
 	}
 
@@ -227,7 +237,7 @@ fn terrainUvOf( xz: vec2f ) -> vec2f {
 fn terrainHeightAt( xz: vec2f ) -> f32 {
 	let res = terrainParams.res;
 	let f = ( xz - terrainParams.origin ) / terrainParams.size * res - 0.5;
-	let fc = clamp( f, vec2f( 0.0 ), vec2f( res - 1.001 ) );
+	let fc = clamp( f, vec2f( 0.0 ), res - 1.001 );
 	let i = floor( fc );
 	let t = fract( fc );
 	let ii = vec2i( i );
@@ -237,7 +247,7 @@ fn terrainHeightAt( xz: vec2f ) -> f32 {
 	let d = textureLoad( terrainHeightTex, ii + vec2i( 1, 1 ), 0 ).x;
 	let h = mix( mix( a, b, t.x ), mix( c, d, t.x ), t.y );
 	// outside the domain: deep ocean floor
-	let outside = f.x < 0.0 || f.y < 0.0 || f.x > res - 1.0 || f.y > res - 1.0;
+	let outside = f.x < 0.0 || f.y < 0.0 || f.x > res.x - 1.0 || f.y > res.y - 1.0;
 	return select( h, -90.0, outside );
 }
 
@@ -302,11 +312,11 @@ fn terrainSampleSmoothG( tex: texture_2d<f32>, xz: vec2f, gx: vec2f, gy: vec2f )
 fn terrainShoreSample( xz: vec2f ) -> vec4f {
 	let res = terrainParams.shoreRes;
 	let f = ( xz - terrainParams.origin ) / terrainParams.size * res - 0.5;
-	let fc = clamp( f, vec2f( 0.0 ), vec2f( max( res - 1.001, 0.0 ) ) );
+	let fc = clamp( f, vec2f( 0.0 ), max( res - 1.001, vec2f( 0.0 ) ) );
 	let i = floor( fc );
 	let t = fract( fc );
 	let ii = vec2i( i );
-	let mx = vec2i( max( i32( res ) - 1, 0 ) );
+	let mx = max( vec2i( res ) - 1, vec2i( 0 ) );
 	let a = textureLoad( terrainShoreTex, ii, 0 );
 	let b = textureLoad( terrainShoreTex, min( ii + vec2i( 1, 0 ), mx ), 0 );
 	let c = textureLoad( terrainShoreTex, min( ii + vec2i( 0, 1 ), mx ), 0 );
@@ -317,8 +327,8 @@ fn terrainShoreSample( xz: vec2f ) -> vec4f {
 // 0 (in the terrain's shadow) .. 1 (lit) for a world position, soft penumbra that widens with the
 // occluder distance
 fn terrainSunShadowAt( P: vec3f ) -> f32 {
-	let N = f32( textureDimensions( terrainSunShadowTex ).x );
-	let st = clamp( terrainUvOf( P.xz ) * N - 0.5, vec2f( 0.0 ), vec2f( N - 1.001 ) );
+	let N = vec2f( textureDimensions( terrainSunShadowTex ) );
+	let st = clamp( terrainUvOf( P.xz ) * N - 0.5, vec2f( 0.0 ), N - 1.001 );
 	let i = vec2i( floor( st ) );
 	let t = fract( st );
 	let s = mix(

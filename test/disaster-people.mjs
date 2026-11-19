@@ -4,6 +4,8 @@ import {Ragdoll} from '../src/player/Ragdoll.js';
 import {Colliders} from '../src/world/Colliders.js';
 import {DisasterField} from '../src/disasters/Field.js';
 import {WaterGrid} from '../src/disasters/WaterGrid.js';
+import {cling} from '../src/people/Cling.js';
+import {trunkCylinders} from '../src/rally/WorldPhysics.js';
 
 const v=(x=0,y=0,z=0)=>({x,y,z}), q=()=>({x:0,y:0,z:0,w:1});
 // One unconstrained production capsule isolates the real capsule integration and
@@ -173,4 +175,149 @@ test('Overflow physical human remains grounded and cannot pass through an actual
  const contact=new Contact({app:{colliders:C,player:{groundAt:()=>0},disasters:{field}},t:1}),person={base:vec()},body={position:vec(),velocity:vec(),mass:72,supported:true},k={physical:body};let maxSpeed=0;
  for(let i=0;i<240;i++){contact.environmentBody(person,k,1/120,{});maxSpeed=Math.max(maxSpeed,body.velocity.length());assert.ok(body.position.x<=.83001);assert.ok(body.position.y>=0);}
  assert.ok(body.position.x>.8,'wind must actually move the person into the wall');assert.equal(body.supported,true);assert.equal(body.velocity.x,0);assert.equal(body.position.y,0);assert.ok(maxSpeed<10);
+});
+function bore(U,depth){const f=new DisasterField(()=>-depth);f.water=new WaterGrid(()=>-depth,{n:9,dx:8,x:0,z:0});
+ for(let i=0;i<f.water.h.length;i++){f.water.h[i]=depth;f.water.qx[i]=depth*U;f.water.qz[i]=0;}f.water.pack();return f;}
+function stand(field,depth,type='adult',speed=0){const owner=Object.create(Disasters.prototype);owner.changedPeople=new Map();owner.field=field;let falls=0;
+ const person={world:vec(0,-depth,0),model:{},brain:{type},_bv:{x:speed,y:0,z:0}};
+ owner.app={people:{list:[person],t:1,contact:{environment:()=>falls++}},player:{groundAt:()=>-depth,mode:'boat'}};owner.people(1/60);return falls;}
+test('Flood hazard h*u knocks an adult above 0.6 m²/s and a child above 0.4 m²/s; calm wading never trips',()=>{
+ // [depth m, current m/s, type, knocked?]: h*u 0.68 adult, 0.51 adult, 0.45 child, 0.45 adult, calm
+ for(const [depth,U,type,want] of [[.85,.8,'adult',1],[.85,.6,'adult',0],[.6,.75,'kid',1],[.6,.75,'adult',0],[.8,0,'adult',0]]){
+  const falls=stand(bore(U,depth),depth,type,U===0?1.4:0);
+  assert.equal(falls,want,`${type} in ${depth} m at ${U} m/s (h*u ${(depth*U).toFixed(2)} m²/s) knocked ${falls}`);
+ }
+});
+test('No get-up while the flow is above the line: a rising rig is put back in the water, and it may rise once the flow drops',()=>{
+ for(const [U,want] of [[.9,true],[.3,false]]){
+  const owner=Object.create(Disasters.prototype);owner.changedPeople=new Map();owner.field=bore(U,.85);let calls=0;
+  const rd={phase:'getup',focus:vec(0,-.7,0)};
+  const person={world:vec(0,-.85,0),model:{},brain:{type:'adult'},knock:{rag:{rd}}};
+  owner.app={people:{list:[person],t:1,contact:{environment:()=>{calls++;rd.phase='sim';}}},player:{groundAt:()=>-.85,mode:'boat'}};owner.people(1/60);
+  assert.equal(rd.pinned,want,`h*u ${(.85*U).toFixed(2)} m²/s: pinned ${rd.pinned}`);
+  assert.equal(rd.phase,want?'sim':'getup',`h*u ${(.85*U).toFixed(2)} m²/s: a get-up in progress ended as ${rd.phase}`);
+  assert.equal(calls,want?1:0);
+ }
+});
+test('A bore front tumbles a body about the cross-flow axis and its aerated water lets it go under; a slower flow does neither',()=>{
+ const run=U=>{const f=bore(U,.6),{rd,b}=capsule({y:-.4,ground:-.6,field:f});rd.waterY=0;for(let i=0;i<120;i++)rd.simulate(1/120);return {spin:-b.w.z,y:b.x.y,finite:Number.isFinite(b.x.x+b.x.y+b.x.z+b.w.x+b.w.y+b.w.z)};};
+ const front=run(4),calm=run(1.5); // Froude 1.65 (supercritical bore) and 0.62 (subcritical) in 0.6 m
+ assert.ok(front.finite&&calm.finite);
+ assert.ok(front.spin>1,`the bore front rolls the body at ${front.spin.toFixed(2)} rad/s about the cross-flow axis`);
+ assert.ok(Math.abs(calm.spin)<.2,`a subcritical 1.5 m/s flow spun the body at ${calm.spin.toFixed(2)} rad/s`);
+ assert.ok(front.y<calm.y-.05,`in the front the body sits at ${front.y.toFixed(3)} m, in the slow flow at ${calm.y.toFixed(3)} m`);
+});
+test('A person swept past a pole within reach clings and holds; when the flow rises above their grip they let go',()=>{
+ const pole={x:1.2,z:.35,radius:.08,yMin:-1.4,yMax:1.4,tag:'pole'};
+ const run=(U,holds,U2)=>{const {rd,b}=capsule({y:-.5,ground:-1,field:bore(U,1)});rd.waterY=0;const person={id:7,brain:{type:'adult'}};let held=0,flow={depth:1,ux:U,uz:0};
+  for(let i=0;i<480;i++){if(i===240&&U2){rd.disasterField=bore(U2,1);flow={depth:1,ux:U2,uz:0};}cling(rd,person,flow,holds,1234,1/120);rd.simulate(1/120);if(rd.cling)held+=1/120;}
+  return {x:b.x.x,held,holding:!!rd.cling,finite:Number.isFinite(b.x.x+b.x.z)};};
+ const held=run(1,[pole]),free=run(1,[]),fast=run(3,[pole]),rising=run(1,[pole],2.2);
+ assert.ok(held.finite&&free.finite&&fast.finite&&rising.finite);
+ assert.ok(held.holding&&Math.abs(held.x-pole.x)<1,`in 1 m of water at 1 m/s (h*u 1.0 m²/s) the body ended ${(held.x-pole.x).toFixed(2)} m past the pole, holding ${held.holding}`);
+ assert.ok(free.x>3,`with no pole the same flow carried the body only ${free.x.toFixed(2)} m`);
+ assert.ok(!fast.held&&fast.x>3,`at 3 m/s (h*u 3.0 m²/s, drag over any grip) the body held for ${fast.held.toFixed(2)} s and reached ${fast.x.toFixed(2)} m`);
+ assert.ok(rising.held>1&&!rising.holding&&rising.x>pole.x+2,`when the flow rose to 2.2 m/s the body had held ${rising.held.toFixed(2)} s, holding ${rising.holding}, at x ${rising.x.toFixed(2)} m`);
+});
+test('A person swept past a palm trunk clings to it and stops there; a felled palm is no hold',()=>{
+ const terrain={heightAt:()=>-1},palm={x:1.2,z:.35,s:1,H:6};
+ const run=records=>{const {rd,b}=capsule({y:-.5,ground:-1,field:bore(1,1)});rd.waterY=0;const set=trunkCylinders({records},terrain);rd.trunks=()=>set;const person={id:7,brain:{type:'adult'}};let held=0;const flow={depth:1,ux:1,uz:0};
+  for(let i=0;i<240;i++){cling(rd,person,flow,[],1234,1/120,rd.trunks());rd.simulate(1/120);if(rd.cling)held+=1/120;}
+  return {x:b.x.x,held,hold:rd.cling?.hold,finite:Number.isFinite(b.x.x+b.x.z)};};
+ const standing=run({palms:[palm],trees:[]}),felled=run({palms:[{...palm,disasterFallen:true}],trees:[]});
+ assert.ok(standing.finite&&felled.finite);
+ assert.ok(standing.hold&&Math.abs(standing.hold.x-palm.x)<1e-6&&standing.held>1,`at h*u 1.0 m²/s past a 0.2 m palm the body held ${standing.held.toFixed(2)} s, hold ${JSON.stringify(standing.hold)}`);
+ assert.ok(Math.abs(standing.x-palm.x)<1,`the clinging body ended ${(standing.x-palm.x).toFixed(2)} m past the palm`);
+ assert.ok(!felled.held&&felled.x>palm.x+.2,`a felled palm held the body ${felled.held.toFixed(2)} s; in 2 s it reached ${felled.x.toFixed(2)} m, not past the palm`);
+});
+test('A knocked person in a shallow flood tumbles with the flow above their h*u line and gets up once below it, never a crawl loop',async()=>{
+ const bytes=await readFile(new URL('../public/models/characters/player.glb',import.meta.url)),write=StorageBuffer.prototype.write;
+ StorageBuffer.prototype.write=function(data){this.pendingData=data.slice();};
+ try{
+  const D=.38; // m: the sheet in the capture; under 0.4 m the land get-up clips play (Ragdoll.settle)
+  const run=(hu,seconds)=>{
+   const field=bore(0,D),model=new SkinnedModel(parseGLB(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)));
+   const rd=new Ragdoll({terrain:{heightAt:()=>-D},colliders:new Colliders()},{mass:72,sub:3});
+   assert.ok(rd.start({model,group:model.group,idle:{clip:model.clips.get('idle'),time:0,weight:1,target:1}},vec(0,-D,0),new Quaternion(),vec(1.5,0,0)));
+   const owner=Object.create(Disasters.prototype);owner.changedPeople=new Map();owner.field=field;
+   const person={world:vec(0,-D,0),model:{},brain:{type:'adult'},knock:{rag:{rd}}};
+   const log={getups:0,reknocks:0,phases:new Set(),x1:null,x:0,U:0};
+   // the real Contact.environment for a rig already down: back to 'sim' from wherever it is
+   owner.app={people:{list:[person],t:1,contact:{environment:()=>{if(rd.phase!=='sim'){log.reknocks++;rd.phase='sim';rd.t=0;rd.rest=0;}}}},player:{groundAt:()=>-D,mode:'boat'},colliders:{cylinders:[]}};
+   let last=rd.phase,U=-1;
+   for(let i=0;i<seconds*60;i++){
+    const t=i/60,u=hu(t)/D;
+    if(u!==U){U=u;for(let k=0;k<field.water.h.length;k++)field.water.qx[k]=D*U;field.water.pack();}
+    owner.people(1/60);rd.update(1/60);
+    if(rd.phase==='getup'&&last!=='getup')log.getups++;
+    last=rd.phase;log.phases.add(rd.phase);
+    if(Math.abs(t-1)<1e-9)log.x1=rd.pelvis.x.x;
+    if(rd.phase==='sim')log.x=rd.pelvis.x.x;
+   }
+   log.U=U;log.end=`x ${rd.pelvis.x.x.toFixed(1)} y ${rd.pelvis.x.y.toFixed(2)} water ${rd.waterY?.toFixed(2)} pinned ${rd.pinned} supported ${rd.supported} speed ${rd.stats.restSpeed?.toFixed(2)} spin ${rd.stats.restSpin?.toFixed(2)}`;return log;
+  };
+  const under=run(()=>.45,12);   // 1.18 m/s: under the 0.6 m²/s adult line, they can stand in it
+  assert.equal(under.reknocks,0,`under the line a get-up was knocked back ${under.reknocks} times`);
+  assert.equal(under.getups,1,`under the line (h*u 0.45 m²/s) the rig started ${under.getups} get-ups in 12 s; phases ${[...under.phases]}; ${under.end}`);
+  const over=run(()=>.84,5);     // 2.2 m/s: above the line
+  assert.equal(over.getups,0,`above the line (h*u 0.84 m²/s) the rig started ${over.getups} get-ups`);
+  assert.ok(over.x-over.x1>.5*2.2*4,`above the line the body travelled ${(over.x-over.x1).toFixed(2)} m with a 2.2 m/s flow in 4 s`);
+  // a drawdown flow wavering across the line (1.6 s just under, 0.8 s just over): no get-up is started and
+  // knocked back; when the flow eases to 0.3 m²/s the rig stands once
+  const waver=run(t=>t<9.6?(t%2.4<1.6?.55:.66):.3,18);
+  assert.equal(waver.reknocks,0,`a wavering flow knocked a get-up back ${waver.reknocks} times (crawl loop)`);
+  assert.equal(waver.getups,1,`the wavering flow then 0.3 m²/s gave ${waver.getups} get-ups; phases ${[...waver.phases]}; ${waver.end}`);
+ }finally{StorageBuffer.prototype.write=write;}
+});
+test('A knocked body afloat in a chest-deep flow above its h*u line hands over to swimming: the pin blocks only the get-up',async()=>{
+ const bytes=await readFile(new URL('../public/models/characters/player.glb',import.meta.url)),write=StorageBuffer.prototype.write;
+ StorageBuffer.prototype.write=function(data){this.pendingData=data.slice();};
+ try{
+  const D=1.6; // m: chest deep, over the 0.4 m swim depth (Ragdoll wet) for a 1.7 m adult
+  const run=hu=>{
+   const field=bore(hu/D,D),model=new SkinnedModel(parseGLB(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)));
+   const rd=new Ragdoll({terrain:{heightAt:()=>-D},colliders:new Colliders()},{mass:72,sub:3});
+   assert.ok(rd.start({model,group:model.group,idle:{clip:model.clips.get('idle'),time:0,weight:1,target:1}},vec(0,-D+.9,0),new Quaternion(),vec(1.5,0,0)));
+   const owner=Object.create(Disasters.prototype);owner.changedPeople=new Map();owner.field=field;
+   const person={world:vec(0,-D,0),model:{},brain:{type:'adult'},knock:{rag:{rd}}};
+   const log={reknocks:0,getups:0,swim:null,pinnedFrames:0};
+   // the real Contact.environment for a rig already down (Contact.js): back to 'sim' from wherever it is
+   owner.app={people:{list:[person],t:1,contact:{environment:()=>{if(rd.phase!=='sim'){log.reknocks++;rd.phase='sim';rd.t=0;rd.rest=0;}}}},player:{groundAt:()=>-D,mode:'boat'},colliders:{cylinders:[]}};
+   for(let i=0;i<20*60&&!log.swim;i++){
+    owner.people(1/60);if(rd.pinned)log.pinnedFrames++;
+    const pinned=rd.pinned;rd.update(1/60);
+    if(rd.phase==='getup')log.getups++;
+    if(rd.phase==='swim')log.swim={t:i/60,pinned};
+   }
+   log.end=`y ${rd.pelvis.x.y.toFixed(2)} water ${rd.waterY?.toFixed(2)} pinned ${rd.pinned} speed ${rd.stats.restSpeed?.toFixed(2)} spin ${rd.stats.restSpin?.toFixed(2)} phase ${rd.phase}`;return log;
+  };
+  const still=run(0);
+  assert.ok(still.swim,`in still chest-deep water the rig never swam in 20 s; ${still.end}`);
+  const flow=run(1.2); // 0.75 m/s: h*u 1.2 m²/s, twice the 0.6 m²/s adult line (FloodHazard.js)
+  assert.ok(flow.pinnedFrames>0,`the 1.2 m²/s flow never pinned the rig; ${flow.end}`);
+  assert.ok(flow.swim&&flow.swim.pinned,`above the line the floating rig never handed over to swimming while pinned in 20 s (pinned ${flow.pinnedFrames} frames, re-knocks ${flow.reknocks}); ${flow.end}`);
+  assert.equal(flow.getups,0,`above the line the rig started a get-up`);
+ }finally{StorageBuffer.prototype.write=write;}
+});
+test('The ragdoll near gather reuses its trunk holds: no new object per nearby trunk per gather',()=>{
+ const T=new Float32Array([1,0,.2,0,6, -2,1,.25,0,7, 40,40,.2,0,6]); // [x, z, radius, bottom, top] m, as WorldPhysics.trunkCylinders
+ const rd={player:{colliders:{boxes:[],cylinders:[]}},pelvis:{x:{x:0,y:0,z:0},v:{x:0,y:0,z:0}},near:{boxes:[],cylinders:[]},trunks:()=>T};
+ Ragdoll.prototype.gather.call(rd);const first=[...rd.near.cylinders];
+ assert.equal(first.length,2,'the two trunks within reach, not the one 56 m away');
+ assert.deepEqual({...first[1]},{x:-2,z:1,radius:T[7],yMin:0,yMax:7});
+ for(let i=0;i<50;i++)Ragdoll.prototype.gather.call(rd);
+ assert.ok(rd.near.cylinders.length===2&&rd.near.cylinders.every((c,i)=>c===first[i]),'each gather built fresh trunk objects');
+ T[0]=1.5;Ragdoll.prototype.gather.call(rd);assert.equal(rd.near.cylinders[0].x,1.5,'a pooled hold is refilled from the current trunk set');
+});
+
+test('A surface swimmer in a fast flood above the h*u line is not re-knocked every frame; a stander in it is swept',()=>{
+ const D=2,U=1.5; // m deep, m/s: h*u 3 m²/s, five times the adult line
+ const run=(person,frames)=>{const owner=Object.create(Disasters.prototype);owner.changedPeople=new Map();owner.field=bore(U,D);let knocks=0;
+  owner.app={people:{list:[person],t:1,contact:{environment:()=>knocks++}},player:{groundAt:()=>-D,mode:'boat'},colliders:{cylinders:[]}};
+  for(let i=0;i<frames;i++)owner.people(1/60);return knocks;};
+ const swimmer={world:vec(0,-1.3,0),model:{},brain:{type:'adult'},knock:{sw:{velocity:vec(U,0,0)}}}; // treading: head out, carried at the flow speed
+ const swimKnocks=run(swimmer,120);
+ assert.equal(swimKnocks,0,`a surface swimmer in a ${(U*D).toFixed(1)} m²/s flow was re-knocked on ${swimKnocks} of 120 frames`);
+ const stander={world:vec(0,-D,0),model:{},brain:{type:'adult'},_bv:{x:0,y:0,z:0}};
+ assert.ok(run(stander,1)>0,'a person standing in the same flow is not swept');
 });

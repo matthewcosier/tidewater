@@ -4,6 +4,9 @@ import { Material, Texture, LAYERS, GPU } from '../engine/webgpu.js';
 const random=n=>{let x=Math.imul(n^0x5bd1e995,0x45d9f3b);x=Math.imul(x^(x>>>16),0x45d9f3b);return ((x^(x>>>16))>>>0)/4294967296;};
 
 import { TornadoParticles } from './TornadoParticles.js';
+import { TornadoVolume } from './TornadoVolume.js';
+import { volumeNoise } from './TornadoNoise.js';
+import { FUNNEL, StormState, tornadoLifecycle, funnelTip } from './TornadoFunnel.js';
 export { TornadoParticles } from './TornadoParticles.js';
 
 function noiseTexture(){
@@ -55,7 +58,8 @@ export class TornadoVisuals {
     // may be behind the wall while the front of the cloud is still visible.
     let visibleChord=smoothstep(-halfDepth,halfDepth,sceneDistance-centreDistance);
     let filament=.15+1.7*smoothstep(.2,.8,noise*.7+fine*.3);
-    let opticalDepth=in.vs.parcelData.y*falloff*filament*visibleChord;
+    let top=mat.flow.w;let lid=select(1.0,1.0-smoothstep(.35*top,top,in.P.y-mat.base.y),top>1.0);
+    let opticalDepth=in.vs.parcelData.y*falloff*filament*visibleChord*lid;
     let alpha=1.0-exp(-opticalDepth);if(alpha<.0003){discard;}
     let moisture=clamp(in.vs.parcelData.x,0.0,1.0);
     let tint=mix(vec3f(.13,.099,.061),vec3f(.16,.18,.20),moisture);
@@ -74,10 +78,74 @@ export class TornadoVisuals {
     let spin=rotate2(v.position.xz,v.details.w);let prevSpin=rotate2(v.position.xz,v.previous.w);
     let tilt=rotate2(vec2f(spin.x,v.position.y),v.details.w*1.7);let prevTilt=rotate2(vec2f(prevSpin.x,v.position.y),v.previous.w*1.7);
     v.useWorld=true;v.worldPos=v.parcel.xyz+vec3f(tilt.x,tilt.y,spin.y)*v.parcel.w;v.prevWorldPos=v.previous.xyz+vec3f(prevTilt.x,prevTilt.y,prevSpin.y)*v.parcel.w;
-    v.worldNormal=normalize(v.normal);if(v.details.y<.04){v.worldPos=vec3f(0.0,-1e5,0.0);v.prevWorldPos=v.worldPos;}
+    v.worldNormal=normalize(v.normal);
+    let fleckPixels=2.0*v.parcel.w*frame.proj[1][1]*.5*frame.resolution.y/max(.1,length(v.parcel.xyz-frame.cameraPos));
+    if(v.details.y<.04||fleckPixels<3.0){v.worldPos=vec3f(0.0,-1e5,0.0);v.prevWorldPos=v.worldPos;}
    `});
   this.flecks=new Mesh(particleGeometry(this.particles.flecks.length,true),fleckMaterial);this.flecks.count=this.particles.flecks.length;this.flecks.name='Force-integrated small litter';this.flecks.frustumCulled=false;this.group.add(this.flecks);
   app.scene.add(this.group);
+  this.volume=null;globalThis.requestIdleCallback?.(()=>volumeNoise(),{timeout:20000});this.storm=new StormState();this.life={};this.presence=0;this.clock=0;this.vmax=0;
+  this.funnel={rc:0,storm:0,presence:0,genesis:0,ropeStart:0,descent:0,ropeOut:0,base:0,lcl:0,wallRadius:0,tip:0,vmax:0,x:0,z:0,ground:0};
+ }
+ // Runs every frame, with or without a tornado. Holds while the simulation is paused.
+ updateStorm( dt, e ) {
+
+	if ( this.field.paused ) dt = 0;
+	this.storm.update( dt, !! e, this.app );
+	// the funnel lifts away over 1.5 s (time constant) once the wind has stopped
+	this.presence += ( ( e ? 1 : 0 ) - this.presence ) * ( 1 - Math.exp( - dt / 1.5 ) );
+	if ( ! e && this.presence < 0.002 ) this.presence = 0;
+	this.clock += dt;
+	const f = this.funnel, life = this.life;
+	if ( e ) {
+
+		tornadoLifecycle( e, life );
+		const c = this.field.center( e );
+		f.x = c.x;
+		f.z = c.z;
+		f.ground = Math.max( 0, this.field.terrain( c.x, c.z ) );
+		this.vmax = this.field.tornadoIntensity( e ) * this.field.envelope( e ); // m/s, with the seeded pulses
+		this.rc = e.radius * 0.18 / FUNNEL.peakRadius; // m: the field's core radius is the radius of peak wind
+		this.debrisRadius = e.radius * 0.55; // m
+
+	}
+	const visible = ( this.storm.value > 0.001 || this.presence > 0.001 ) && life.base !== undefined;
+	if ( this.volume ) this.volume.mesh.visible = visible;
+	if ( ! visible ) return;
+	if ( ! this.volume ) {
+
+		const { data, size } = volumeNoise();
+		this.volume = new TornadoVolume( this.app, new Texture( { label: 'tornado-volume-noise', width: size, height: size, depth: size, dimension: '3d', format: 'rgba8unorm', data, sampler: 'linearRepeat' } ) );
+		this.volume.mesh.visible = true;
+
+	}
+	const u = this.volume.material.uniforms;
+	const VG = this.vmax / FUNNEL.burgersPeak, core = this.presence * life.descent * VG * VG;
+	const kappa = core > 1 ? FUNNEL.g / core : 1e6; // 1/m; 1e6 draws no funnel
+	const rope = life.ropeOut * life.base * 0.6; // m, trailing offset of the rope's lower end
+	u.base.value.set( f.x, f.ground, f.z, this.clock );
+	u.shape.value.set( this.rc, life.base, kappa, life.ropeOut );
+	// texture spin: the angular velocity at the radius of peak wind, capped at 2.5 rad/s (faster strobes at 30 fps)
+	u.trail.value.set( life.tiltX * rope, life.tiltZ * rope, Math.min( 2.5, this.vmax / ( FUNNEL.peakRadius * this.rc ) ), this.debrisRadius );
+	u.wall.value.set( life.wallRadius, life.lcl, life.lcl + FUNNEL.deckThickness, FUNNEL.deckRadius );
+	// The funnel hangs at the rear edge of its wall cloud and the storm base runs ahead of both (the rope
+	// trails behind, along the seeded tilt): wall-cloud and deck centres 0.3 of their radii forward (declared).
+	u.drift.value.set( - 0.3 * life.wallRadius * life.tiltX, - 0.3 * life.wallRadius * life.tiltZ, - 0.3 * FUNNEL.deckRadius * life.tiltX, - 0.3 * FUNNEL.deckRadius * life.tiltZ );
+// debris lofting from about 25 m/s, full by 55 m/s (declared)
+	u.storm.value.set( this.storm.value, life.wall, life.debrisHeight, this.presence * Math.max( 0, Math.min( 1, ( this.vmax - 25 ) / 30 ) ) );
+	f.rc = this.rc;
+	f.storm = this.storm.value;
+	f.presence = this.presence;
+	f.genesis = life.genesis;
+	f.ropeStart = life.ropeStart;
+	f.descent = life.descent;
+	f.ropeOut = life.ropeOut;
+	f.base = life.base;
+	f.lcl = life.lcl;
+	f.wallRadius = life.wallRadius;
+	f.vmax = this.vmax;
+	f.tip = funnelTip( life.base, this.vmax, this.presence * life.descent );
+
  }
  clear(completed=false){this.group.visible=false;if(completed)this.particles.complete();else this.particles.clear();for(const mesh of [this.dust,this.flecks]){mesh.geometry.instanceCount=0;}Object.assign(this.stats,{budget:this.particles.snapshot().budget,completedBudget:this.particles.completedBudget,liquidParcels:0,evaporated:0,maxRadius:0,dust:0,flecks:0,samples:0,sourceSamples:0,emitted:0,deposited:0,expired:0,bounds:null});}
  settleMotion(){
@@ -99,14 +167,15 @@ export class TornadoVisuals {
   mesh.geometry.instanceCount=sorted.length;for(const key of ['parcel','previous','details','motion'])attrs[key].needsUpdate=true;
  }
  update(dt){
-  const e=this.field.events.get('tornado');if(!e){if(this.particles.event)this.clear(this.particles.event.time>=this.particles.event.duration);return;}
+  const e=this.field.events.get('tornado');this.updateStorm(dt,e);if(!e){if(this.particles.event)this.clear(this.particles.event.time>=this.particles.event.duration);return;}
   if(this.field.paused){this.settleMotion();return;}
   this.group.visible=true;const c=this.field.center(e),scale=e.radius/100,base=Math.max(0,this.field.terrain(c.x,c.z));
   this.cloudMaterial.uniforms.base.value.set(c.x,base,c.z);this.cloudMaterial.uniforms.flow.value.set(e.time,scale,e.intensity*.22,0);
   this.particles.update(dt,e);this.write(this.dust,this.particles.dust);this.write(this.flecks,this.particles.flecks);this.scheduleMotionCommit();
   const s=this.particles.snapshot(),bounds={minX:c.x,maxX:c.x,minY:base,maxY:base,minZ:c.z,maxZ:c.z};
   for(const p of this.particles.all)if(p.opacity>0){const r=p.size*1.5;bounds.minX=Math.min(bounds.minX,p.p.x-r);bounds.maxX=Math.max(bounds.maxX,p.p.x+r);bounds.minY=Math.min(bounds.minY,p.p.y-r);bounds.maxY=Math.max(bounds.maxY,p.p.y+r);bounds.minZ=Math.min(bounds.minZ,p.p.z-r);bounds.maxZ=Math.max(bounds.maxZ,p.p.z+r);}
+  this.cloudMaterial.uniforms.flow.value.w=bounds.maxY-base; // plume top above the ground (m), read next frame by the lid taper
   Object.assign(this.stats,{budget:s.budget,completedBudget:s.completedBudget,liquidParcels:s.liquidParcels,evaporated:s.evaporated,maxRadius:s.maxRadius,dust:s.dust,flecks:s.flecks,samples:s.samples,sourceSamples:s.sourceSamples,emitted:s.emitted,deposited:s.deposited,expired:s.expired,capacity:s.capacity,time:e.time,bounds});
  }
- snapshot(){return {...this.stats,visible:this.group.visible,particles:this.particles.snapshot()};}
+ snapshot(){return {...this.stats,visible:this.group.visible,particles:this.particles.snapshot(),funnel:{...this.funnel}};}
 }

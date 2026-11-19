@@ -330,6 +330,20 @@ export class Beach {
 	// put someone somewhere at once (their place and their knock base both)
 	moveTo( p, v ) { p.world.copy( v ); p.base.copy( v ); }
 
+	place( id, x, z ) {
+
+		const p = this.people.find( q => q.id === id );
+		if ( ! p ) return null;
+		p.path = null;
+		p.then = null;
+		p.beat = null;
+		p.gesture = null;
+		p.home.set( x, this.floor( x, z ), z );
+		this.moveTo( p, p.home );
+		return { x: p.world.x, y: p.world.y, z: p.world.z };
+
+	}
+
 	say( p, key, urgent = false ) { const text = line( key, p.brain.type, p.brain.said ); if ( text ) this.hub.say( p, text, key, urgent ); }
 
 	update( dt ) {

@@ -1,8 +1,9 @@
 import { Vector3, Vector4, Matrix4, Sphere, PlaneGeometry, InstancedBufferGeometry, BufferAttribute, Mesh } from '../engine/index.js';
 import {
-	GPU, UniformBlock, Texture, StorageBuffer, ShaderModule, ComputeKernel, Material, generateMipmaps, commonModule,
+	GPU, UniformBlock, Texture, StorageBuffer, ShaderModule, ComputeKernel, Material, Readback, generateMipmaps, commonModule,
 } from '../engine/webgpu.js';
 import { GRAVITY } from '../core/Globals.js';
+import { G } from '../engine/render/Frame.js';
 import { LAYERS } from '../core/SceneRenderer.js';
 
 // GPU spray particles: drops, ligaments, dense spray and mist.
@@ -73,6 +74,11 @@ const byKind = ( kind, arr ) => `sprayByKind( ${ kind }, ${ arr.map( fl ).join( 
 
 const MAX_REQUESTS = 32;
 
+// Particles thrown by a flood (disasters/FloodSpray.js) carry a tag at or above this. The integer part of a tag below it
+// names the breaking crest that made the particle (Breakers: valid below twice its station count, far under this), so
+// a flood particle never reads a crest's shadow. 2^16 leaves 7 bits of the float's fraction for the particle's seed.
+export const SPRAY_FLOOD_TAG = 65536;
+
 // helpers shared by the kernels and the sprite material (no bindings)
 const sprayCommon = new ShaderModule( {
 	name: 'sprayCommon',
@@ -106,7 +112,7 @@ fn sprayPhaseHG( cosT: f32, g: f32 ) -> f32 {
 
 export class Spray {
 
-	constructor( renderer, { query, terrain, sceneCopy, clouds = null, gpuCapacity = 32768, cpuCapacity = 16384 } ) {
+	constructor( renderer, { query, terrain, sceneCopy, clouds = null, gpuCapacity = 32768, cpuCapacity = 16384, floodCapacity = 32768 } ) {
 
 		this.renderer = renderer;
 		this.query = query;
@@ -121,7 +127,13 @@ export class Spray {
 		this.waveShadow = null;
 		this.NG = gpuCapacity; // power of two (ring index wraps with the uint head)
 		this.NC = cpuCapacity;
-		this.N = gpuCapacity + cpuCapacity;
+		// The flood's own region (disasters/FloodSpray.js), after the surf's ring and the CPU part: a power of two with
+		// its own head, kept by that emitter. The surf's ring turns over about every 2 s (Breakers._budget) and flood
+		// mist lives up to 9 s, so in one ring each emitter overwrote the other's live sprites. The region is simulated
+		// and drawn only while a flood's sprites are in the air (setFloodLive): with no flood nothing here costs more.
+		this.NF = floodCapacity;
+		this.floodLive = false;
+		this.N = gpuCapacity + cpuCapacity + floodCapacity;
 
 		const N = this.N;
 		// pos: xyz, age (s) | vel: xyz, radius (m) | info: kind, life (s, 0 = dead), water height, tag
@@ -395,7 +407,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 	if ( i >= SPRAY_N ) { return; }
 
 	// ---- CPU-owned slots: spawn from this frame's requests
-	if ( i >= ${ NG }u ) {
+	if ( i >= ${ NG }u && i < ${ NG + NC }u ) {
 		let k = ( i - ${ NG }u + ${ NC }u - sprayParams.cpuStart ) % ${ NC }u;
 		if ( k < sprayParams.cpuCount ) {
 			var r = 0u;
@@ -494,9 +506,55 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 		this.cpuHead = ( this.cpuHead + n ) % this.NC;
 		if ( this.nReq > 0 ) this.reqBuffer.write( this.reqData.subarray( 0, this.nReq * 16 ) );
 		this.frameSeed.value = ( ++ this._frame ) >>> 0;
-		this.updateKernel.dispatch( Math.ceil( this.N / 64 ) );
+		this.updateKernel.dispatch( Math.ceil( ( this.floodLive ? this.N : this.NG + this.NC ) / 64 ) );
 		this.nReq = 0;
 		this.nReqParticles = 0;
+		if ( this._snap && this._snap.waiting.length && ! this._snap.pending ) this._snapshotRequest();
+
+	}
+
+	// The flood region joins the update and the draw while a flood's sprites are in the air, and leaves them after
+	// (FloodSpray.update, every frame).
+	setFloodLive( on ) {
+
+		if ( on === this.floodLive ) return;
+		this.floodLive = on;
+		this.mesh.count = this.mesh.geometry.instanceCount = on ? this.N : this.NG + this.NC;
+
+	}
+
+	// Test hook, read only: every slot's position (xyz, age) and info (kind, life, water height, tag) as they are after
+	// one update(), with that update's simulation time, read back once. Nothing runs and nothing is allocated until a snapshot is asked for; the copies are
+	// recorded by the next update(), because a readback is a command in that frame's encoder.
+	snapshot() {
+
+		if ( ! this._snap ) this._snap = { waiting: [], pending: false, pos: null, info: null, posData: null, infoData: null };
+		return new Promise( ( resolve ) => this._snap.waiting.push( resolve ) );
+
+	}
+
+	_snapshotRequest() {
+
+		const S = this._snap;
+		if ( ! S.pos ) {
+
+			S.pos = new Readback( { byteLength: this.N * 16, ring: 1, label: 'spraySnapshotPos' } );
+			S.info = new Readback( { byteLength: this.N * 16, ring: 1, label: 'spraySnapshotInfo' } );
+			const done = () => {
+
+				if ( ! S.posData || ! S.infoData ) return;
+				const result = { count: this.N, gpu: this.NG, floodTag: SPRAY_FLOOD_TAG, time: S.time, pos: new Float32Array( S.posData ), info: new Float32Array( S.infoData ) };
+				S.posData = S.infoData = null;
+				S.pending = false;
+				for ( const resolve of S.waiting.splice( 0 ) ) resolve( result );
+
+			};
+			S.pos.onData = ( data ) => { S.posData = data; done(); };
+			S.info.onData = ( data ) => { S.infoData = data; done(); };
+
+		}
+		S.time = G.time.value; // simulation time (s) of the state read back
+		S.pending = S.pos.request( this.pos ) && S.info.request( this.info );
 
 	}
 
@@ -509,7 +567,7 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 		geo.setAttribute( 'position', new BufferAttribute( new Float32Array( [ - 1, - 1, 0, 1, - 1, 0, 1, 1, 0, - 1, 1, 0 ] ), 3 ) );
 		geo.setIndex( [ 0, 1, 2, 0, 2, 3 ] );
 		geo.boundingSphere = new Sphere( new Vector3(), 1e7 );
-		geo.instanceCount = this.N;
+		geo.instanceCount = this.NG + this.NC; // + the flood region while it is live (setFloodLive)
 
 		const noiseTex = makePuffTexture();
 		const dotsTex = makeDotsTexture();
@@ -529,6 +587,13 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 			uniforms: {
 				intensity: [ 'f32', 1 ],
 				maxDistance: [ 'f32', 320 ],
+				// particles thrown by a flood (tag >= SPRAY_FLOOD_TAG; set by disasters/FloodSpray.js): how far they are
+				// drawn (a front is watched from across the bay; the surf's spray is gone by 320 m), the tint over
+				// sediment-laden water, and the opacity of their mist (a haze over a front a kilometre long is seen
+				// through many times fewer sprites than a breaker's wisp)
+				floodMaxDistance: [ 'f32', 320 ],
+				floodTint: [ 'vec3f', new Vector3( 1, 1, 1 ) ],
+				floodMist: [ 'f32', 1 ],
 				// the rider the camera follows (xyz) and how wide she is at her distance (w, m; 0: none): spray
 				// between the eye and her thins to a veil (setFocus)
 				focus: [ 'vec4f', [ 0, - 1e5, 0, 0 ] ],
@@ -548,6 +613,7 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 				vCol: 'vec4f', // premultiplied-ready radiance, opacity
 				vMisc: 'vec4f', // kind, water height, softness, seed
 				vFwd: 'vec4f', // forward-scattered sun (thin parts glow with it), w: half-size in pixels
+				vFlood: 'f32', // 1: thrown by a flood (its sprites are metres across: see `detail` in the fragment)
 			},
 			vertex: /* wgsl */`
 	let posA = sprayPosR[ v.instance ];
@@ -563,6 +629,11 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	let isMist = kind > 0.5 && kind < 1.5;
 	let water = isDrop || isLig; // clear water: drops and ligaments
 	let alive = life > 0.0 && age < life;
+	// thrown by a flood: the tag's integer part past SPRAY_FLOOD_TAG is the sediment in the water that threw it (0..15)
+	let flood = info.w >= ${ fl( SPRAY_FLOOD_TAG ) };
+	let floodSed = select( 0.0, sat( ( floor( info.w ) - ${ fl( SPRAY_FLOOD_TAG ) } ) / 15.0 ), flood );
+	let tint = mix( vec3f( 1.0 ), mat.floodTint, floodSed );
+	let maxD = select( mat.maxDistance, mat.floodMaxDistance, flood );
 
 	let toCam = frame.cameraPos - p;
 	let dist = max( length( toCam ), 0.05 );
@@ -638,8 +709,8 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	// through it (forward lobe) is passed on: the thin torn parts glow when backlit
 	let cClear = frame.skyIrradiance * 0.95 + sun * 0.05;
 	let fClear = sun * ( sprayPhaseHG( cosT, 0.8 ) * 1.1 );
-	let col = select( select( select( cSpray, cClear, isClear ), cMist, isMist ), cWater, water );
-	o.vFwd = vec4f( select( select( select( fSpray, fClear, isClear ), fMist, isMist ), vec3f( 0.0 ), water ), halfX / pixel );
+	let col = select( select( select( cSpray, cClear, isClear ), cMist, isMist ), cWater, water ) * tint;
+	o.vFwd = vec4f( select( select( select( fSpray, fClear, isClear ), fMist, isMist ), vec3f( 0.0 ), water ) * tint, halfX / pixel );
 
 	// opacity over the particle's life
 	let t = age / max( life, 1e-3 );
@@ -650,7 +721,7 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	let baseA = ${ byKind( 'kind', KIND.alpha ) };
 	// far: fade out; near the eye: a soft fade over the last few metres (sheets, clouds and mist would wall
 	// off the screen, and cost a lot of overdraw); clear drops only right at the lens
-	let distFade = smoothstep( mat.maxDistance, mat.maxDistance * 0.55, dist ) * select( smoothstep( 1.2, 6.0, dist - r * 0.5 ), smoothstep( 0.3, 1.2, dist ), water );
+	let distFade = smoothstep( maxD, maxD * 0.55, dist ) * select( smoothstep( 1.2, 6.0, dist - r * 0.5 ), smoothstep( 0.3, 1.2, dist ), water );
 	// the rider the camera follows: spray between the eye and her, in a cone closing on the eye, thins to a veil,
 	// so she always reads through her own plume in the chase view. Side-on and wide views have nothing of the
 	// plume on that line: they keep all of it.
@@ -667,12 +738,13 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 		let before = smoothstep( fd + 1.2, fd - 0.4, along );
 		focusFade = 1.0 - inCone * before * select( 0.88, 0.6, water );
 	}
-	let a = baseA * fadeIn * fadeOut * cover * distFade * focusFade * mat.intensity;
+	let a = baseA * fadeIn * fadeOut * cover * distFade * focusFade * mat.intensity * select( 1.0, mat.floodMist, flood && isMist );
 
 	o.vUV = corner;
 	o.vCol = vec4f( col, a );
 	// x: kind + 0.45 * life fraction (the kind tests below have 0.5 of margin)
 	o.vMisc = vec4f( kind + sat( t ) * 0.45, info.z, size, fract( info.w ) );
+	o.vFlood = select( 0.0, 1.0, flood );
 
 	// dead particles collapse off-screen
 	v.useWorld = true;
@@ -692,6 +764,11 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	let t = sat( fract( kind ) / 0.45 ); // life fraction
 	let r2 = dot( uv, uv );
 	let sd = vec2f( vMisc.w, vMisc.w * 1.7 );
+	// A flood's sprites are metres across and hundreds of pixels wide. With the noise at the surf's scale (one or two
+	// tears across a sprite a hand wide) each drew as one flat white petal; their noise is sampled finer by the size
+	// on screen, so a big sprite is a ragged mass of many tears and drops. Every other particle: 1, the same lookups.
+	let detail = mix( 1.0, clamp( in.vs.vFwd.w / 30.0, 1.0, 10.0 ), in.vs.vFlood );
+	let nuv = uv * detail;
 	// drop: gaussian streak; ligament: a slightly sharper, beaded blob
 	let drop = max( exp( r2 * - 3.5 ) - 0.03, 0.0 );
 	let lig = max( exp( r2 * - 4.5 ) * ( sin( uv.y * 5.0 + vMisc.w * 40.0 ) * 0.2 + 0.9 ) - 0.03, 0.0 );
@@ -699,12 +776,12 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	// more as it ages, so it tears into strands and fragments instead of shrinking. Thick parts are
 	// dense white water, the torn edges thin and translucent.
 	let env = sat( 1.0 - r2 );
-	let fib = textureSample( sprayPuff, smpLinearRepeat, vec2f( uv.x * 0.5, uv.y * 0.36 ) + sd ).x;
-	let fine = textureSample( sprayPuff, smpLinearRepeat, vec2f( uv.x * 1.2, uv.y * 0.6 ) + sd * 2.3 ).x;
+	let fib = textureSample( sprayPuff, smpLinearRepeat, vec2f( nuv.x * 0.5, nuv.y * 0.36 ) + sd ).x;
+	let fine = textureSample( sprayPuff, smpLinearRepeat, vec2f( nuv.x * 1.2, nuv.y * 0.6 ) + sd * 2.3 ).x;
 	// dense spray (a cloud of drops, kind 3): streaked finer, and the envelope counts for less, so its
 	// outline is torn water and never a round puff (clusters of them read as cotton wool or cumulus)
 	let isCloud = isSheet && ! isClear;
-	let rip = textureSample( sprayPuff, smpLinearRepeat, vec2f( uv.x * 2.1, uv.y * 0.5 ) + sd * 4.1 ).x;
+	let rip = textureSample( sprayPuff, smpLinearRepeat, vec2f( nuv.x * 2.1, nuv.y * 0.5 ) + sd * 4.1 ).x;
 	let field = select( fib * 0.6 + fine * 0.4 + ( env - 0.55 ) * 0.75, fib * 0.45 + fine * 0.25 + rip * 0.3 + ( env - 0.55 ) * 0.45, isCloud ) - smoothstep( 0.8, 1.0, r2 );
 	// a torn sheet only a few pixels across can't show its tears: a solid white dot, and a cluster of
 	// them reads as cauliflower puffs. Small on screen, it is drawn thinner and more torn: a far
@@ -718,17 +795,17 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 	// out as it ages (sub-pixel drops average out through the mipmaps: never a solid blob)
 	// (a small particle can't resolve its drops: they alias into stair-stepped edges at half resolution, so under
 	// ~40 px across it takes the smooth fibre noise in their place)
-	let dots = mix( fib * 0.85, textureSample( sprayDots, smpLinearRepeat, uv * vec2f( 0.5, 0.32 ) + sd * 3.7 ).x, smoothstep( 20.0, 60.0, in.vs.vFwd.w ) );
+	let dots = mix( fib * 0.85, textureSample( sprayDots, smpLinearRepeat, nuv * vec2f( 0.5, 0.32 ) + sd * 3.7 ).x, smoothstep( 20.0, 60.0, in.vs.vFwd.w ) );
 	// (a round envelope: the noise alone ran out to the quad's square edge, a blocky outline at half resolution)
 	let swarm = dots * smoothstep( 0.25, 0.55, fib + env * 0.45 - t * 0.2 ) * ( 1.0 - t * 0.5 ) * smoothstep( 1.0, 0.55, r2 );
 	// (the sheet is gone into drops by half its life: a cloud of spray, not a painted stroke)
 	// (a cloud of drops is mostly drops by a third of its life)
 	let sheet = max( torn * ( 1.0 - smoothstep( select( 0.08, 0.04, isCloud ), select( 0.5, 0.34, isCloud ), t ) ), swarm );
 	// mist: a soft veil of low-frequency noise that drifts and thins, never a disc
-	let m1 = textureSample( sprayPuff, smpLinearRepeat, uv * 0.2 + sd ).x;
-	let m2 = textureSample( sprayPuff, smpLinearRepeat, uv * 0.55 + sd * 3.1 ).x;
+	let m1 = textureSample( sprayPuff, smpLinearRepeat, nuv * 0.2 + sd ).x;
+	let m2 = textureSample( sprayPuff, smpLinearRepeat, nuv * 0.55 + sd * 3.1 ).x;
 	// (grainy and thin at its edges: fine drops in the air, where a smooth lumpy outline read as cumulus)
-	let m3 = textureSample( sprayPuff, smpLinearRepeat, uv * vec2f( 1.6, 0.9 ) + sd * 5.3 ).x;
+	let m3 = textureSample( sprayPuff, smpLinearRepeat, nuv * vec2f( 1.6, 0.9 ) + sd * 5.3 ).x;
 	let veil = smoothstep( 0.22, 0.95, m1 * 0.62 + m2 * 0.38 + env * 0.18 - 0.08 ) * mix( 0.35, 1.0, m3 ) * env * ( 1.0 - t * 0.4 );
 	let shape = select( select( select( veil, sheet, isSheet ), lig, isLig ), drop, isDrop );
 	// self-shadowing inside thick sheets; the forward-scattered sun lights up the thin parts
@@ -771,11 +848,14 @@ ${ deposit ? /* wgsl */`				// fell into the water (not onto the sand): its bubb
 		this.params = {
 			intensity: mat.uniforms.intensity,
 			maxDistance: mat.uniforms.maxDistance,
+			floodMaxDistance: mat.uniforms.floodMaxDistance,
+			floodTint: mat.uniforms.floodTint,
+			floodMist: mat.uniforms.floodMist,
 			focus: mat.uniforms.focus,
 		};
 
 		const mesh = this.mesh = new Mesh( geo, mat );
-		mesh.count = this.N;
+		mesh.count = this.NG + this.NC;
 		mesh.frustumCulled = false;
 		mesh.castShadow = false;
 		mesh.receiveShadow = false;
