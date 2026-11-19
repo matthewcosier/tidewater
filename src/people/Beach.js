@@ -18,11 +18,13 @@ import { loadGLB } from '../engine/loaders/GLTF.js';
 import { loadModel } from '../rally/VehicleModel.js';
 import { rootMotion } from '../ferry/Crowd.js';
 import { pose } from './Pose.js';
+import { room, onLine } from './Room.js';
 import { pickArchetype } from './Brain.js';
 import { SmartObject } from './SmartObjects.js';
 import { line } from './Lines.js';
 import { fadeOptions, fadeCustomize } from './Fade.js';
-import { JETSKI_HIRE } from '../world/JetskiHire.js';
+import { JETSKI_HIRE, HireDesk } from '../world/JetskiHire.js';
+import { SPOTS } from '../jetski/spots.js';
 import { WORLD } from '../world/WorldLayout.js';
 
 const CAST = [ 'f01', 'm01', 'f03', 'm04', 'f06', 'm07', 'f09', 'm10' ];
@@ -54,11 +56,48 @@ const CAMPS = [
 ];
 const TOWEL_KIND = { towel: 'towel', reader: 'reader', phoner: 'phoner', sand: 'sand' };
 const CRICKET = { x: - 8, back: 13 }, FRISBEE = { x: 66, x2: 75, back: 5 };
-const SHELLS = [ [ 2, 33 ], [ 64, 104 ] ], SWIM = [ 16, 23, 30 ], WADE = [ 10.2, 11.1 ];
+// the shell hunters' stretches of tideline (x, m): the east one stops 1.2 m short of the wreck on the sand (x 101.2)
+const SHELLS = [ [ 2, 33 ], [ 64, 100 ] ], SWIM = [ 16, 23, 30 ], WADE = [ 10.2, 11.1 ];
 // Clear of the real bench and fish-cleaning table, including capsule radius.
 const FISH = [ [ 54.1, 39.0 ], [ 57.0, 39.0 ] ];
-const _v = new Vector3(), _w = new Vector3(), _m = new Matrix4();
+const _v = new Vector3(), _w = new Vector3(), _m = new Matrix4(), _s = new Vector3(), _t = new Vector3();
 const rand = ( a, b ) => a + Math.random() * ( b - a );
+
+// The tideline at x: the first z (from the dunes out, every 0.5 m) where the sand goes under the sea, on the
+// terrain's own heights. One function for the places laid out here and for test/walker-routes.mjs.
+export function shoreAt( terrain, x ) {
+
+	for ( let z = - 95; z < 20; z += 0.5 ) if ( terrain.heightAt( x, z ) < 0 ) return z;
+	return - 42;
+
+}
+
+// Every route the beach walkers walk, as world points (feet, y on the sand), built from the same tables
+// they walk by: the shell hunters' tideline over each range at the nearest and farthest of the 0.8 to
+// 1.6 m they keep up the sand (shells()), the bowler's run-up and walk back (cricket()), and the hire
+// attendant's way from his stool round the stand's open end and out to each ski he pushes off, and home
+// (src/world/JetskiHire.js pay() and home()). For test/walker-routes.mjs: [ name, Vector3[] ].
+export function BEACH_ROUTES( terrain ) {
+
+	const at = ( x, z ) => new Vector3( x, terrain.heightAt( x, z ), z ), routes = [];
+	SHELLS.forEach( ( [ a, b ], i ) => {
+
+		for ( const up of [ 0.8, 1.6 ] ) {
+
+			const pts = [];
+			for ( let x = a; x <= b; x += 1 ) pts.push( at( x, shoreAt( terrain, x ) - up ) );
+			routes.push( [ `shell hunter ${ i } along the tideline ${ up } m up the sand`, pts ] );
+
+		}
+
+	} );
+	const cz = shoreAt( terrain, CRICKET.x ) - CRICKET.back, cx = CRICKET.x;
+	routes.push( [ 'the bowler\'s run-up and walk back', [ at( cx + 7.5, cz ), at( cx + 5.2, cz ), at( cx + 7.5, cz ) ] ] );
+	const H = JETSKI_HIRE.stand, stool = at( H.x + 0.65 - 0.05, H.z - H.half[ 2 ] - 0.7 ), around = HireDesk.prototype.around().map( v => at( v.x, v.z ) );
+	for ( const s of SPOTS.slice( 0, 3 ) ) routes.push( [ `the hire attendant out to ${ s.name } and home`, [ stool, ...around, at( s.x - 0.6, s.z - 1.9 ), ...[ ...around ].reverse(), stool ] ] );
+	return routes;
+
+}
 const pick = a => a[ Math.floor( Math.random() * a.length ) ];
 const NEIGHBOUR = 6;   // m: people closer than this never share a body (fill)
 const wrap = a => Math.atan2( Math.sin( a ), Math.cos( a ) );
@@ -104,13 +143,7 @@ export class Beach {
 	}
 
 	// the tideline: the first z (from the dunes out) where the sand goes under the sea
-	shore( x ) {
-
-		const t = this.app.terrainData;
-		for ( let z = - 95; z < 20; z += 0.5 ) if ( t.heightAt( x, z ) < 0 ) return z;
-		return - 42;
-
-	}
+	shore( x ) { return shoreAt( this.app.terrainData, x ); }
 
 	ground( x, z ) { return Math.max( 0, this.app.terrainData.heightAt( x, z ) ); }
 
@@ -278,6 +311,7 @@ export class Beach {
 			look: 0, pitch: 0, acc: Math.random() * 0.1, lie: 0, sit: 0, path: null, pace: rand( 1.1, 1.4 ), mode: 'stand', beat: null, off: null };
 		p.posture = 'stand'; p.head = new Vector3(); p.can = key => p.model.clipSet.has( CLIP[ key ] ); p.clipOf = key => CLIP[ key ];   // clip keys for bumps (Contact.js)
 		p.base = new Vector3(); p.based = false; p.clipOf = key => CLIP[ key ];
+		onLine( p );   // on the line of any route they are given, not held, not walking (Room.js)
 		// a knock's step: on the pier's planks or the stand's deck, the boards (clamped at the rail); on the sand, the sand
 		p.canStand = ( w, base ) => p.evacuation ? this.hub.evacuation.walker.canStand( w, base ) : s.kind !== 'swim' && ( s.deck ? this.hub.contact.boards( w, base ) : this.app.terrainData.heightAt( w.x, w.z ) > - 0.4 && Math.abs( this.app.terrainData.heightAt( w.x, w.z ) - base.y ) < 0.5 );
 		p.footing = () => LOW.has( p.mode ) ? 'seat' : s.deck || s.role === 'attendant' ? 'narrow' : 'open';
@@ -309,7 +343,20 @@ export class Beach {
 	}
 
 	// walk someone along points (world, feet; y from the sand), then call `then`
-	send( p, points, then = null ) { p.beat = null; p.gesture = null; p.path = [ p.world.clone(), ...points.map( v => v.clone() ) ]; p.s = 0; p.then = then; p.mode = 'stand'; }
+	send( p, points, then = null ) { p.beat = null; p.gesture = null; p.path = [ p.world.clone(), ...points.map( v => v.clone() ) ]; p.s = 0; onLine( p ); p.then = then; p.mode = 'stand'; }
+
+	// For Room.js: may p's body stand at ( x, z ), a side step off their route? Their own footing (canStand) and clear
+	// of the island's solids (the wreck, the hire stand, the pier's piles).
+	clear( p, x, z ) {
+
+		_s.set( x, p.world.y, z );
+		if ( p.canStand && ! p.canStand( _s, p.world ) ) return false;
+		const C = this.app.colliders;
+		if ( ! C ) return true;
+		C.resolveWalker( _t.copy( _s ), 0.27, 1.7, 0.4 );
+		return Math.hypot( _t.x - _s.x, _t.z - _s.z ) < 0.01;
+
+	}
 
 	// a scripted clip for a while (a push, tying up, a crouch for a shell), then `then`
 	beat( p, key, secs, then = null ) { p.beat = { key, until: this.hub.t + secs, then }; const clip = CLIP[ key ]; if ( p.model.clipSet.has( clip ) ) p.model.play( clip, { fade: 0.3, loop: key !== 'crouchIn' } ); }
@@ -329,6 +376,20 @@ export class Beach {
 
 	// put someone somewhere at once (their place and their knock base both)
 	moveTo( p, v ) { p.world.copy( v ); p.base.copy( v ); }
+
+	place( id, x, z ) {
+
+		const p = this.people.find( q => q.id === id );
+		if ( ! p ) return null;
+		p.path = null;
+		p.then = null;
+		p.beat = null;
+		p.gesture = null;
+		p.home.set( x, this.floor( x, z ), z );
+		this.moveTo( p, p.home );
+		return { x: p.world.x, y: p.world.y, z: p.world.z };
+
+	}
 
 	say( p, key, urgent = false ) { const text = line( key, p.brain.type, p.brain.said ); if ( text ) this.hub.say( p, text, key, urgent ); }
 
@@ -350,6 +411,7 @@ export class Beach {
 
 		const m = p.model, b = p.brain, t = this.hub.t, knocked = !! p.knock;
 		if ( p.based ) p.world.copy( p.base );
+		p.walkV = 0; p.room = false;   // m/s this frame and stepped through the room: set by it while they walk (others read both, Room.js)
 		const evacuating = this.hub.evacuation.step( p, dt );
 		const standing = ! LOW.has( p.mode ) && p.mode !== 'tread';
 		if ( ! evacuating && b.gesture && ! p.gesture && ! knocked && ! p.beat && ! p.path ) {   // on the beach a walker keeps walking (an errand, a shell hunt)
@@ -363,14 +425,21 @@ export class Beach {
 		// walking (the shell hunters, the bowler's run-up, the attendant)
 		if ( ! evacuating && p.path && ! p.gesture && ! knocked ) {
 
-			const P = p.path, a = P[ 0 ], c = P[ 1 ], seg = Math.hypot( c.x - a.x, c.z - a.z );
-			p.s += p.pace * dt;
-			if ( p.s >= seg ) { p.s -= seg; P.shift(); }
-			if ( P.length < 2 ) { p.world.copy( P[ 0 ] ); p.path = null; p.world.y = this.floor( p.world.x, p.world.z ); const then = p.then; p.then = null; then?.(); }
+			const P = p.path;
+			let a = P[ 0 ], c = P[ 1 ], seg = Math.hypot( c.x - a.x, c.z - a.z );
+			// room between people (Room.js): the pace they may walk among the others and their side step
+			if ( seg > 0.05 ) room( this.hub, p, ( c.x - a.x ) / seg, ( c.z - a.z ) / seg, seg - p.s, c.x, c.z, P.length === 2, dt, this );
+			else p.walkV = Math.min( p.pace, Math.max( 0, seg - p.s ) / Math.max( dt, 1e-6 ) );   // too short to steer along (a route sent from where they stand): to its end at most, so the next leg's room check sees the rest of the step
+			p.s += p.walkV * dt;
+			if ( p.s >= seg && Math.abs( p.lat || 0 ) > 0.005 ) p.s = seg;   // a side step in hand: back on the line before the turn or the end (Room.js)
+			else if ( p.s >= seg ) { p.s -= seg; P.shift(); a = P[ 0 ]; c = P[ 1 ]; seg = c ? Math.hypot( c.x - a.x, c.z - a.z ) : 0; }
+			if ( P.length < 2 ) { p.world.copy( P[ 0 ] ); p.path = null; onLine( p ); p.world.y = this.floor( p.world.x, p.world.z ); const then = p.then; p.then = null; then?.(); }
 			else {
 
 				const f = seg > 1e-4 ? Math.min( 1, p.s / seg ) : 1;
-				p.world.copy( a ).lerp( c, f ); p.world.y = this.floor( p.world.x, p.world.z );
+				p.world.copy( a ).lerp( c, f );
+				if ( p.lat && seg > 0.05 ) { p.world.x += ( c.z - a.z ) / seg * p.lat; p.world.z -= ( c.x - a.x ) / seg * p.lat; }   // their side step, along the leg's left normal
+				p.world.y = this.floor( p.world.x, p.world.z );
 				if ( seg > 0.05 ) p.heading = Math.atan2( c.x - a.x, c.z - a.z );
 				if ( m.current !== CLIP.walk ) m.play( CLIP.walk, { fade: 0.3, speed: Math.min( 1.7, Math.max( 0.6, p.pace / p.walk ) ) } );
 

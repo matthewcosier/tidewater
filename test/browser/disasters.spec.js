@@ -30,13 +30,12 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
  // Budgets are game seconds on the disaster clock (test/browser/gameTime.js): the same numbers as the old wall-clock polls.
  const within=async(check,budget,what)=>{const r=await untilGameTimeCheck(page,check,budget);expect(r.value,`${what} within ${budget} game s (waited ${r.elapsed.toFixed(1)} s)`).toBeTruthy();};
  const errors=[];let original;page.on('pageerror', e=>errors.push(e.message));
- // WebGPU reports a WGSL compile or pipeline failure on the console, not as a page error: the disasterFar
- // far-field shader failing to compile would otherwise pass this scenario with no water drawn.
  page.on('console', m=>{if(/WGSL|shader|pipeline|GPUValidation/i.test(m.text())&&m.type()!=='debug')errors.push(m.text());});
  await test.step('Given a fresh island and the disaster controls',async()=>{
   await ready(page);
   await page.getByLabel('Disaster type').selectOption(kind.toLowerCase());
   await page.getByLabel('Target location').selectOption('village');
+  { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
   if(kind==='Tsunami')await page.getByLabel('Warning lead time (s)').fill('6');
   await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill(kind==='Earthquake'?'1.4':kind==='Tsunami'?'2':'100');
   await page.getByLabel('Radius (m)').fill('180');
@@ -49,21 +48,16 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
   await page.getByRole('button',{name:'Start disaster',exact:true}).click();
   // Test-side reader, not a driver: the peak water depth over each footprint base and the peak load ratio
   // the structures model saw, every frame of the run.
-  if(kind==='Tsunami')await page.evaluate(()=>{const d=window.__app.disasters,f=d.field,rs=d.structures.records,s={};const peak=window.__tsunamiPeaks=rs.map(r=>({base:r.center.y-r.half.y,depth:0,util:0}));const ts=d.bodies.trees,treePeak=window.__treePeaks=ts.map(()=>0);const tick=()=>{for(let i=0;i<rs.length;i++){const r=rs[i],p=r.center;f.sample(p.x,p.y,p.z,s);const depth=s.height>.1?s.height-peak[i].base:0;if(depth>peak[i].depth)peak[i].depth=depth;if(!r.broken&&(r.utilization??0)>peak[i].util)peak[i].util=r.utilization;}for(let i=0;i<ts.length;i++){if((ts[i].load??0)>treePeak[i])treePeak[i]=ts[i].load;}if(window.__tsunamiPeaks===peak)requestAnimationFrame(tick);};requestAnimationFrame(tick);});
+  if(kind==='Tsunami')await page.evaluate(()=>{const d=window.__app.disasters,f=d.field,rs=d.structures.records,s={};const peak=window.__tsunamiPeaks=rs.map(r=>({base:r.center.y-r.half.y,depth:0,util:0,before:0}));const ts=d.bodies.trees,treePeak=window.__treePeaks=ts.map(()=>0);const tick=()=>{for(let i=0;i<rs.length;i++){const r=rs[i],p=r.center;f.sample(p.x,p.y,p.z,s);const depth=s.height>.1?s.height-peak[i].base:0;if(depth>peak[i].depth)peak[i].depth=depth;if((r.utilization??0)>peak[i].util)peak[i].util=r.utilization;if(!r.broken&&(r.utilization??0)>peak[i].before)peak[i].before=r.utilization;}for(let i=0;i<ts.length;i++){if((ts[i].load??0)>treePeak[i])treePeak[i]=ts[i].load;}if(window.__tsunamiPeaks===peak)requestAnimationFrame(tick);};requestAnimationFrame(tick);});
  });
  if(kind==='Tsunami')await test.step('Then the surge comes ashore: furniture moves, houses above the run-up stand, damage only where the flow passes the material threshold',async()=>{
   const event=()=>page.evaluate(()=>{const e=window.__app.disasters.field.events.get('tsunami');return e&&{seed:e.seed,time:e.time,arrival:e.arrival,launched:!!e.launched,coast:!!e.coastReached};});
   const first=await event();
   expect(first.seed,'the hook fixed the event seed').toBe(TSUNAMI_SEED);
   await within(async()=>(await event()).launched,first.arrival,'the crest launched into the ring');
-  // the surge regression: the banner said "Coastal flooding detected" at launch (the source mound on Joey Island's
-  // north beach counted). Just after launch the crest is still far out: the banner gives the countdown only.
   const banner=page.getByRole('status',{name:'Tsunami warning'});
   await expect(banner).toContainText('Estimated crest arrival');
   await expect(banner).not.toContainText('Coastal flooding detected');
-  // Staged review view (not the action): over the village's shoulder, 45 m up, looking out along the approach
-  // ray past the shoreline, so the incoming crest and the beach share the frame (the approach regression: "View
-  // target" framed the village with the sea out of shot, and both frames were taken 1 s after launch).
   await page.evaluate(()=>{const A=window.__app,e=A.disasters.field.events.get('tsunami'),a=e.direction*Math.PI/180,cx=Math.cos(a),cz=Math.sin(a);const eye={x:e.x+cx*60-cz*70,z:e.z+cz*60+cx*70},look={x:e.x-cx*160,z:e.z-cz*160};const y=A.terrainData.heightAt(eye.x,eye.z)+45;A.setFreeCam(true);A.camera.position.set(eye.x,y,eye.z);const dx=look.x-eye.x,dy=2-y,dz=look.z-eye.z;A.camera.lookAt(look.x,2,look.z);A.fly.setPose(A.camera.position,Math.atan2(-dx,-dz),Math.asin(dy/Math.hypot(dx,dy,dz)));A.fly.velocity.set(0,0,0);A.cameraCut();});
   await within(async()=>{const e=await event();return e.time>=e.arrival-10;},first.arrival,'10 s before the crest estimate');
   await page.screenshot({path:test.info().outputPath('tsunami-surge-approach.png')});
@@ -75,7 +69,7 @@ for (const kind of ['Earthquake','Tsunami','Tornado']) test(`${kind}: control, p
   await page.screenshot({path:test.info().outputPath('tsunami-surge-flooded.png')});
   const peaks=await page.evaluate(()=>window.__tsunamiPeaks),current=await geometry(page);
   const wetted=peaks.filter(p=>p.depth>WETTED),runUp=Math.max(...wetted.map(p=>p.base+p.depth));
-  console.log(`tsunami surge seed ${TSUNAMI_SEED}: run-up ${runUp.toFixed(2)} m, ${wetted.length}/${peaks.length} footprints wetted, ${current.filter(r=>r.broken).length} broken, peak load ratio ${Math.max(...peaks.map(p=>p.util)).toFixed(2)}`);
+  console.log(`tsunami surge seed ${TSUNAMI_SEED}: run-up ${runUp.toFixed(2)} m, ${wetted.length}/${peaks.length} footprints wetted, ${current.filter(r=>r.broken).length} broken, peak load ratio ${Math.max(...peaks.map(p=>p.util)).toFixed(2)}; broken at load/standing peak: ${current.map((r,i)=>r.broken?`${r.name} ${peaks[i].util.toFixed(2)}/${peaks[i].before.toFixed(2)}`:null).filter(Boolean).join(", ")}`);
   expect(wetted.length,'the surge reached some footprints').toBeGreaterThan(0);
   for(let i=0;i<peaks.length;i++){
    if(peaks[i].depth<=WETTED)expect(current[i],`${original[i].name} above the run-up stands untouched`).toEqual(original[i]);
@@ -164,7 +158,7 @@ test('Disaster controls validate parameters and support repeat runs', async({pag
 
 test('Tsunami early warning has physical lead time and gesture-created audio respects mute, volume and lifecycle',async({page})=>{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await test.step('Given a fresh island with audio enabled and no warning source before a gesture',async()=>{await ready(page,true);await expect(status(page)).toHaveAttribute('data-audio-sources','0');await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('pier');await page.getByLabel('Warning lead time (s)').fill('6');await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('8');});
+ await test.step('Given a fresh island with audio enabled and no warning source before a gesture',async()=>{await ready(page,true);await expect(status(page)).toHaveAttribute('data-audio-sources','0');await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('pier');{ const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }await page.getByLabel('Warning lead time (s)').fill('6');await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('8');});
  await test.step('When I start a tsunami then a directional warning leads the wave and actual audio starts',async()=>{await page.getByRole('button',{name:'Start disaster',exact:true}).click();const warning=page.getByRole('status',{name:'Tsunami warning'});await expect(warning).toContainText('Estimated crest arrival');const heading=await page.evaluate(()=>{const e=window.__app.disasters.field.events.get('tsunami');return {drawn:e.direction,asked:e.requestedDirection};});/* The heading is drawn per event within Field.js AZIMUTH_SPREAD (8 deg) of the requested -90; the banner prints it in whole degrees (it printed the raw float, -82.9...). */expect(heading.asked).toBe(-90);expect(Math.abs(heading.drawn-heading.asked)).toBeLessThanOrEqual(8);await expect(warning).toContainText(`direction ${Math.round(heading.drawn)}°`);expect(Number(await warning.getAttribute('data-countdown'))).toBeGreaterThan(6);await expect(status(page)).toHaveAttribute('data-audio-context','running');await expect(status(page)).toHaveAttribute('data-audio-sources','2');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.01);const wave=await page.evaluate(()=>({launched:window.__app.disasters.field.events.get('tsunami').launched,seconds:window.__app.disasters.field.events.get('tsunami').time}));expect(wave.seconds).toBeLessThan(6);expect(wave.launched).toBe(false);});
  await test.step('When I change volume and mute then the actual gain changes',async()=>{await page.getByLabel('Siren volume').fill('70');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);await page.getByLabel('Mute siren').check();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??1)).toBeLessThan(.001);await page.getByLabel('Mute siren').uncheck();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);});
  await test.step('When I use global M then the warning also mutes',async()=>{await page.getByRole('button',{name:'Close disaster controls'}).click();await page.keyboard.press('m');await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??1)).toBeLessThan(.001);await page.keyboard.press('m');await page.getByRole('button',{name:'Disasters',exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.__app.disasters.siren.gain?.gain.value??0)).toBeGreaterThan(.1);});

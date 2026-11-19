@@ -35,7 +35,7 @@ fn terrainNormalRock( xz: vec2f ) -> vec4f { return vec4f( 0.0, ${ SLOPE }, 0.0,
 fn terrainUvOf( xz: vec2f ) -> vec2f { return ( xz + 400.0 ) / 800.0; }
 `,
 	} );
-	return { module, origin, size, shoreRes: res, shoreField: { data, res }, heightAt: ( xz ) => null, cpu: { heightAt } };
+	return { module, origin, size, shoreRes: res, shoreField: { data, resX: res, resZ: res, cellSize: size / res, originX: origin, originZ: origin, sizeX: size, sizeZ: size }, heightAt: ( xz ) => null, cpu: { heightAt } };
 
 }
 

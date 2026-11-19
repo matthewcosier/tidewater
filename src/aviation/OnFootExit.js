@@ -13,7 +13,8 @@ export function localAircraftExit(app,flight,{sideOffset=2,provider=null,waterAt
   const water=waterAt?.(p.x,p.z)??app.disasters?.field?.waterAt(p.x,p.z)??0;
   let ground=app.player.groundAt(p.x,p.z,origin[1]+2);
   if(ground>water-1.1&&origin[1]-ground<=5&&ground<=origin[1]+2){
-   p.y=ground;app.colliders?.resolveCapsule?.(p,.3,1.75,.4);for(const d of providers)d.resolveCapsule?.(p,.3,1.75,.4);
+   // the island's boxes, cylinders and trunks, as walking meets them (Colliders.place), then the decks
+   p.y=ground;app.colliders?.place?.(p,.3,1.75,.4);for(const d of providers)d.resolveCapsule?.(p,.3,1.75,.4);
    ground=app.player.groundAt(p.x,p.z,origin[1]+2);if(!Number.isFinite(ground)||Math.abs(p.y-ground)>2||Math.hypot(p.x-origin[0],p.z-origin[2])>sideOffset+4)continue;
    p.y=ground;let support=null;for(const d of providers){const hit=d.supportAt?.(p,{maxRise:.1,maxDrop:.1});if(hit){support=d;break;}}
    // A planted foot starts at rest relative to its support. Player stores

@@ -927,15 +927,18 @@ rail('Tower', STAINLESS, [(11.8, -17.2, WALK + 1.0), (13.3, -17.2, WALK + 1.0), 
 for k in range(13): cyl('Tower', FRAME, (11.8 + k * 0.12, -17.2, WALK), (11.8 + k * 0.12, -17.2, WALK + 1.0), 0.011, 4)
 for cx in (TX0, TX1):
     for cy in (TY0, TY1): aabb('Tower', STRUCT, cx - 0.15, cx + 0.15, cy - 0.15, cy + 0.15, JETTY, 11.3)
+# The door into the tower (x 13.3 to TX1 in its TY0 wall) is DOOR_H high: a person walks in under its header. It was
+# 1.1 m (its wall and header started at JETTY + 1.1), so every foot passenger walked through the header beam.
+DOOR_H = 2.1                                                                      # m: a door's clear height (Australia's building code asks 1.98 m at least)
 for zr in (5.3, WALK - 0.35, 11.0):
-    aabb('Tower', STRUCT, TX0 - 0.12, TX1 + 0.12, TY0 - 0.12, TY0 + 0.12, zr, zr + 0.3)
+    aabb('Tower', STRUCT, TX0 - 0.12, 13.2 if zr == 5.3 else TX1 + 0.12, TY0 - 0.12, TY0 + 0.12, zr, zr + 0.3)   # the low ring stops at the door's jamb
     aabb('Tower', STRUCT, TX1 - 0.12, TX1 + 0.12, TY0, TY1, zr, zr + 0.3)
     aabb('Tower', STRUCT, TX0 - 0.12, TX0 + 0.12, TY0, TY1, zr, zr + 0.3)
 for k in range(14):
     t = TY0 + 0.15 + k * 0.3; u = TX0 + 0.15 + k * 0.3
     aabb('Tower', GALV, TX1 + 0.05, TX1 + 0.35, t - 0.025, t + 0.025, JETTY + 0.1, 10.95)
     aabb('Tower', GALV, TX0 - 0.35, TX0 - 0.05, t - 0.025, t + 0.025, JETTY + 0.1, 10.95)
-    aabb('Tower', GALV, u - 0.025, u + 0.025, TY0 - 0.35, TY0 - 0.05, 5.65 if u > 13.2 else JETTY + 0.1, 10.95)
+    aabb('Tower', GALV, u - 0.025, u + 0.025, TY0 - 0.35, TY0 - 0.05, JETTY + DOOR_H + 0.35 if u > 13.2 else JETTY + 0.1, 10.95)
 aabb('Tower', STEEL, TX0, TX1, TY1 - 0.05, TY1 + 0.05, JETTY + 0.1, WALK - 0.35)
 aabb('Tower', STEEL, TX0, 12.0, TY1 - 0.05, TY1 + 0.05, WALK, 11.0)
 aabb('Tower', ROOF, TX0 - 0.45, TX1 + 0.45, TY0 - 0.45, TY1 + 0.45, 11.3, 11.5)
@@ -945,13 +948,13 @@ aabb('Tower', NAVY, TX0 - 0.5, TX0 - 0.36, TY0 + 0.2, TY1 - 0.2, 9.75, 10.75)
 text('Tower', 'TIDEWATER', (TX0 - 0.525, (TY0 + TY1) / 2, 10.25), 0.6, WHITE, FACE_NEG_X)
 aabb('Tower', NAVY, TX0 + 0.2, 13.2, TY0 - 0.5, TY0 - 0.36, 9.5, 10.9)
 logo('Tower', (11.85, TY0 - 0.5, 9.95), (1, 0, 0), (0, 0, 1), 0.62)
-aabb('Tower', STRUCT, 13.2, TX1 + 0.1, TY0 - 0.36, TY0 + 0.1, 5.3, 5.65)
-aabb('Tower', NAVY, 13.35, 14.55, TY0 - 0.42, TY0 - 0.36, 4.75, 5.2)
-text('Tower', 'TO FERRY', (13.95, TY0 - 0.44, 4.975), 0.24, WHITE, FACE_NEG_Y, FONT_B, 0.01)
+aabb('Tower', STRUCT, 13.2, TX1 + 0.1, TY0 - 0.36, TY0 + 0.1, JETTY + DOOR_H, JETTY + DOOR_H + 0.35)   # the door's header
+aabb('Tower', NAVY, 13.35, 14.55, TY0 - 0.42, TY0 - 0.36, JETTY + DOOR_H + 0.45, JETTY + DOOR_H + 0.9)   # its sign, over the header
+text('Tower', 'TO FERRY', (13.95, TY0 - 0.44, JETTY + DOOR_H + 0.675), 0.24, WHITE, FACE_NEG_Y, FONT_B, 0.01)
 colbox('solid', TX1 - 0.05, TX1 + 0.35, TY0, TY1, JETTY, 11.3)
 colbox('solid', TX0 - 0.35, TX0 + 0.05, TY0, TY1, JETTY, 11.3)
 colbox('solid', TX0, 13.3, TY0 - 0.35, TY0 + 0.05, JETTY, 11.3)
-colbox('solid', 13.3, TX1, TY0 - 0.35, TY0 + 0.05, 5.3, 11.3)
+colbox('solid', 13.3, TX1, TY0 - 0.35, TY0 + 0.05, JETTY + DOOR_H, 11.3)
 colbox('solid', TX0, TX1, TY1 - 0.05, TY1 + 0.05, JETTY, WALK - 0.3)
 colbox('solid', TX0, 12.0, TY1 - 0.05, TY1 + 0.05, WALK - 0.3, 11.3)
 LX0, LX1, LY0, LY1 = 10.2, 11.9, TY1 + 0.05, -13.9                                  # glass lift shaft

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Aviation} from '../src/aviation/Aviation.js';
+import {WING} from '../src/glider/GliderPhysics.js';
 import {Glider} from '../src/glider/Glider.js';
 import {Player} from '../src/player/Player.js';
 import {Colliders} from '../src/world/Colliders.js';
@@ -18,13 +19,14 @@ function fixture(height=2,water=0){
  const app={input,camera,player,terrainData,colliders,query,freeCam:false,cameraCut(){},disasters:{field:{waterAt:()=>water,sample:()=>({})}}};
  app.setFreeCam=value=>{app.freeCam=value;};return app;
 }
+const EXIT_SIDE=WING.span/2+.4,beside=(d,what)=>assert.ok(d>WING.span/2&&d<EXIT_SIDE+.5,`${what}: ${d.toFixed(2)} m from the keel, want beside the tip (${(WING.span/2).toFixed(1)}-${(EXIT_SIDE+.5).toFixed(1)} m)`);
 test('leaving a landed glider returns walking control beside its actual touchdown',()=>{
  const app=fixture(),g=new Glider(app);g.takeControl();g.pilot=true;g.flight.phase='landed';g.flight.position=[-90,3.45,-78];
- g.leave();assert.equal(g.active,false);assert.equal(app.player.mode,'walk');assert.ok(Math.hypot(app.player.position.x+90,app.player.position.z+78)<5,'exit must stay beside the wing');near(app.player.position.y,2);assert.equal(app.player.grounded,true);
+ g.leave();assert.equal(g.active,false);assert.equal(app.player.mode,'walk');beside(Math.hypot(app.player.position.x+90,app.player.position.z+78),'exit must stay beside the wing');near(app.player.position.y,2);assert.equal(app.player.grounded,true);
 });
 test('leaving a ditched glider restores local swimming and water sampling',()=>{
  const app=fixture(-80,2.5),g=new Glider(app);g.takeControl();g.pilot=true;g.flight.phase='ditched';g.flight.position=[600,2.4,-800];
- g.leave();assert.equal(app.player.mode,'swim');assert.ok(Math.hypot(app.player.position.x-600,app.player.position.z+800)<5);near(app.player.waterH,2.5);assert.equal(app.player.grounded,false);assert.equal(g.active,false);
+ g.leave();assert.equal(app.player.mode,'swim');beside(Math.hypot(app.player.position.x-600,app.player.position.z+800),'swim exit beside the floating wing');near(app.player.waterH,2.5);assert.equal(app.player.grounded,false);assert.equal(g.active,false);
 });
 test('a rejected terminal glider launch cannot seize ordinary player control',()=>{
  const app=fixture(),g=new Glider(app);g.station={launchRecord:{broken:false}};g.flight.phase='crashed';const before=app.player.position.clone();

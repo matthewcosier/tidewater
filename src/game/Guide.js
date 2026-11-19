@@ -357,8 +357,7 @@ export class Guide {
 		prev.fight = !! g.fight;
 		prev.lastCatch = lc;
 
-		// the coach card: one tip at a time, ~7 s each (not over the catch card or a panel)
-		const busy = g.hud && ( g.hud.catchOpen || g.hud.invOpen || g.hud.standOpen );
+		const busy = ( g.hud && ( g.hud.catchOpen || g.hud.invOpen || g.hud.standOpen ) ) || !! app.reviewPose;
 		if ( this._current ) {
 
 			this._coachT -= dt;

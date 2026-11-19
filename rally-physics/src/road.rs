@@ -66,12 +66,13 @@ impl RoadSurfaces {
 /// Texel-centred terrain material codes (0 dry sand, 1 soil/grass, 2 rock, 7 wet sand),
 /// on the same grid as the heightfield.
 #[derive(Resource,Default)]
-pub struct TerrainMaterials { pub codes:Vec<u8>, pub res:usize, pub origin:f32, pub texel:f32 }
+/// Row-major like the heights: codes[j * res_x + i], res_x along x, res_z rows along z.
+pub struct TerrainMaterials { pub codes:Vec<u8>, pub res_x:usize, pub res_z:usize, pub origin_x:f32, pub origin_z:f32, pub texel:f32 }
 impl TerrainMaterials {
     pub fn at(&self,x:f32,z:f32)->Surface {
-        if self.res==0 || self.codes.len()!=self.res*self.res { return Surface::Sand; }
-        let cell=|v:f32| (((v-self.origin)/self.texel).floor() as i64).clamp(0,self.res as i64-1) as usize;
-        Surface::from_code(self.codes[cell(z)*self.res+cell(x)])
+        if self.res_x==0 || self.codes.len()!=self.res_x*self.res_z { return Surface::Sand; }
+        let cell=|v:f32,origin:f32,res:usize| (((v-origin)/self.texel).floor() as i64).clamp(0,res as i64-1) as usize;
+        Surface::from_code(self.codes[cell(z,self.origin_z,self.res_z)*self.res_x+cell(x,self.origin_x,self.res_x)])
     }
 }
 

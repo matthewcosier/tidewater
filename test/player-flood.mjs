@@ -6,6 +6,9 @@ import { Colliders } from '../src/world/Colliders.js';
 import { DisasterField } from '../src/disasters/Field.js';
 import { WaterGrid } from '../src/disasters/WaterGrid.js';
 import { Disasters } from '../src/disasters/Disasters.js';
+import { FerryShip } from '../src/ferry/FerryShip.js';
+import { FerryDeck } from '../src/ferry/FerryDeck.js';
+import { readFileSync } from 'node:fs';
 
 // Actual Player.update -> DisasterField loads, with only keyboard and GPU readback
 // transports replaced. The synthetic uniform fluid gives independent known limits.
@@ -157,4 +160,38 @@ test('A 2 m/s current at 0.6 m still knocks the standing walker into the articul
   assert.ok(at>=0,`a 2 m/s current over 0.6 m must trip him inside 1 s (mode ${f.player.mode})`);
   assert.equal(f.player.ragFrom,'walk');assert.equal(f.player.rag.disasterField,f.field);
  }finally{StorageBuffer.prototype.write=write;}
+});
+
+// A player standing still on his feet in a breeze stays where he stands. The walking motor ran before the shared
+// field each frame, so the field's push on his body was left in his velocity every frame: in the game's default
+// 8 m/s breeze he crept downwind at about 0.6 cm/s at 60 frames a second and twice that at 30 (0.32 m/s² times
+// the frame), 1.5 m in three minutes of standing on the terminal walkway. His feet hold any push below the one that
+// trips him (TRIP_PUSH, 3.2 m/s²); a push that trips him still does, and holding W he still walks into the wind.
+test('A player standing still on his feet in a breeze stays where he stands, at any frame rate',()=>{
+ const bad=[];
+ for(const [speed,label] of [[8,'the default 8 m/s breeze'],[20,'a 20 m/s gale (2.5 m/s² on him, under the trip line)']])for(const dt of [1/60,1/30,.1]){
+  const r=210*Math.PI/180,f=fixture({ground:2,water:0,wind:[speed*Math.cos(r),speed*Math.sin(r)]}),start=f.player.position.clone();
+  f.run(30,dt);
+  const moved=Math.hypot(f.player.position.x-start.x,f.player.position.z-start.z);
+  if(f.player.mode!=='walk'||moved>.01)bad.push(`${label} at ${(1/dt).toFixed(0)} frames a second: ${f.player.mode}, moved ${moved.toFixed(3)} m in 30 s standing still`);
+ }
+ assert.deepEqual(bad,[],'a player standing on his feet was moved by a push his feet hold');
+ // holding W into the breeze he still walks, at his pace less the wind's drag
+ const w=fixture({ground:2,water:0,wind:[0,8]});w.keys.add('KeyW');const s=w.player.position.clone();w.run(5,1/60);
+ assert.ok(s.z-w.player.position.z>12,`walking into an 8 m/s breeze for 5 s he covered ${(s.z-w.player.position.z).toFixed(2)} m`);
+});
+
+// The same on her deck (FerryDeck.walk: her own walker, in her frame). Its motor eased him toward the speed he wanted
+// and the field's push was added after it, so standing still on her open deck in the default breeze he slid
+// downwind at about the push over the motor's rate (0.4 m/s² over 12 per second, 3 cm/s), a metre in 30 s.
+test('A player standing still on her deck in a breeze stays where he stands, at any frame rate',()=>{
+ const data=JSON.parse(readFileSync(new URL('../public/ferry/ferry_colliders.json',import.meta.url),'utf8')),bad=[];
+ for(const dt of [1/60,1/30,.1]){
+  const r=210*Math.PI/180,f=fixture({ground:-100,water:0,wind:[8*Math.cos(r),8*Math.sin(r)]}),ship=new FerryShip({x:0,z:0,yaw:0}),deck=new FerryDeck({ship},data);
+  deck.board(f.player,ship.toWorld(new Vector3(7.7,7,-1),new Vector3()));const start=deck.local.clone();
+  f.run(30,dt);
+  const moved=Math.hypot(deck.local.x-start.x,deck.local.z-start.z);
+  if(f.player.mode!=='ferry'||moved>.01)bad.push(`at ${(1/dt).toFixed(0)} frames a second: ${f.player.mode}, moved ${moved.toFixed(3)} m along her deck in 30 s standing still`);
+ }
+ assert.deepEqual(bad,[],'a player standing on her deck was moved by a push his feet hold');
 });

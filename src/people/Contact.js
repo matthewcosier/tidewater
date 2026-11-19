@@ -41,13 +41,14 @@ const MASS = { player: 75, adult: 72, kid: 35 }, BOUNCE = 0.2, DECEL = 2.6;   //
 const DROP = 0.42;                                  // m: the sit clip's seat down to the ground
 const CAR = { slow: 20, w: 1.05, l: 2.45, warn: 1.3 };   // km/h a jump turns to a dive; half width, half length; s of warning
 const FETCH = 1.0, BACK = 0.9, AWAY = 2.4;          // m/s to a dropped thing, m/s back to their place; m the wary keep
+const ASIDE_V = 1.2, ASIDE_WAIT = 30;              // m/s off a waiting car's road (an unhurried walk); s at most they stand aside for it
 const EVENT = { nudge: 'nudged', stagger: 'bumped', fall: 'fell', tumble: 'fell', flinch: 'flinch', jump: 'car-near', dive: 'car-near' };
 
 const ease = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * ( 3 - 2 * x );
 const out1 = x => x <= 0 ? 0 : x >= 1 ? 1 : 1 - ( 1 - x ) * ( 1 - x );
 const hump = ( x, a, b ) => x <= a || x >= b ? 0 : Math.sin( Math.PI * ( x - a ) / ( b - a ) );
 const dur = ( p, key, def ) => { const c = p.clipOf?.( key ); return c && p.model.clipSet.has( c ) ? p.model.clipDuration( c ) : def; };
-const _near = [], _l = new Vector3(), _q = new Vector3(), _w = new Vector3(), _want = new Vector3(), _ro = new Vector3(), _rd = new Vector3(), _sp = new Vector3(), _sv = new Vector3();
+const _near = [], _l = new Vector3(), _q = new Vector3(), _w = new Vector3(), _want = new Vector3(), _out = new Vector3(), _ro = new Vector3(), _rd = new Vector3(), _sp = new Vector3(), _sv = new Vector3();
 
 export class Contact {
 
@@ -58,7 +59,7 @@ export class Contact {
 		this.out = { hold: false, drop: 0, tilt: 0, arms: 0, legs: 0, face: null, walk: false, lockYaw: false };
 		this.log = [];
 		this.stains = [];
-		this.count = { nudge: 0, stagger: 0, fall: 0, tumble: 0, flinch: 0, jump: 0, dive: 0, pickup: 0 };
+		this.count = { nudge: 0, stagger: 0, fall: 0, tumble: 0, flinch: 0, jump: 0, dive: 0, pickup: 0, aside: 0 };
 		this.tumbles = new Tumbles( hub );
 		this.wet = new Set();
 
@@ -186,14 +187,24 @@ export class Contact {
 			const inside = Math.abs( along ) < CAR.l + 0.3 && Math.abs( across ) < CAR.w + 0.3;
 			const coming = sp > 0.8 && along > 0 && along < CAR.l + 1 + sp * CAR.warn && Math.abs( across ) < CAR.w + 0.9;
 			if ( ! inside && ! coming ) continue;
-			const side = across >= 0 ? 1 : - 1, nx = uz * side, nz = - ux * side;
+			const side = across >= 0 ? 1 : - 1;
+			let nx = uz * side, nz = - ux * side;
+			if ( inside && ! p.off && p.base ) p.off = new Vector3();   // (once a person: the knock below would make it a frame late)
 			if ( inside && p.off ) {
 
-				// never under it: out past its side now, where they can stand (else past its end)
-				const need = CAR.w + 0.35 - Math.abs( across );
-				_w.copy( p.world ).addScaledVector( _want.set( nx, 0, nz ), need );
-				if ( ! p.canStand || p.canStand( _w, p.base ) ) p.off.addScaledVector( _want, need );
-				else p.off.addScaledVector( _want.set( ux * dir, 0, uz * dir ), CAR.l + 0.35 - along );
+				// never under it: out past its near side now, where they can stand, else past its far side, else past
+				// its end ahead or behind, and never into the player (intoPlayer); before this the push looked only at
+				// where they could stand, and with the player at the car's nose where it put them it put a townsperson
+				// into his body (0.03 m from his centre) and shoved him half a metre. The car's body comes first: with
+				// no way out both standable and clear of him, past an end clear of him, else as before (the near side
+				// where they can stand, else past its end ahead), so nobody is left under it.
+				const a = Math.abs( across );
+				let k = - 1;
+				for ( let i = 0; i < 6 && k < 0; i ++ ) if ( this.outOf( p, i < 4 ? i : i - 2, nx, nz, ux * dir, uz * dir, a, along, i < 4, true ) ) k = i < 4 ? i : i - 2;
+				if ( k < 0 ) k = this.outOf( p, 0, nx, nz, ux * dir, uz * dir, a, along, true, false ) ? 0 : 2;
+				this.outOf( p, k, nx, nz, ux * dir, uz * dir, a, along, false, false );
+				p.off.add( _out );
+				if ( k === 1 ) { nx = - nx; nz = - nz; }   // they go off that side: the knock (a jump or a dive aside) too
 
 			}
 			if ( ! p.knock || p.knock.kind === 'nudge' || p.knock.kind === 'stagger' ) {
@@ -204,6 +215,19 @@ export class Contact {
 			}
 
 		}
+
+	}
+
+	// A way out from under the rally car for p (cars()), into _out (m, world): i 0 past its near side (n, toward the
+	// side they are on), 1 past its far side, 2 past its end ahead the way it goes (f), 3 past its end behind; a is
+	// how far across its centre line they are, along how far ahead of its centre (m). True when it is where they can
+	// stand (footing) and does not take them into the player (him).
+	outOf( p, i, nx, nz, fx, fz, a, along, footing, him ) {
+
+		const d = i === 0 ? CAR.w + 0.35 - a : i === 1 ? - ( CAR.w + 0.35 + a ) : i === 2 ? CAR.l + 0.35 - along : - ( CAR.l + 0.35 + along );
+		if ( i < 2 ) _out.set( nx * d, 0, nz * d ); else _out.set( fx * d, 0, fz * d );
+		if ( footing && p.canStand && ! p.canStand( _w.copy( p.world ).add( _out ), p.base ) ) return false;
+		return ! him || ! this.intoPlayer( p, p.off, _w.copy( p.off ).add( _out ) );
 
 	}
 
@@ -278,7 +302,7 @@ export class Contact {
 			const floor=walker?walker.ground(b.position.x,b.position.z,Math.max(oldY,b.position.y)+.35):P.groundAt(b.position.x,b.position.z,Math.max(oldY,b.position.y)+.35);
 			b.supported=b.position.y<=floor+.001;
 			if(b.supported){b.position.y=floor;b.velocity.y=Math.max(0,b.velocity.y);const speed=Math.hypot(b.velocity.x,b.velocity.z),friction=Math.max(0,1-.6*9.81*h/Math.max(1e-6,speed));b.velocity.x*=friction;b.velocity.z*=friction;}
-			const x=b.position.x,z=b.position.z;if(local.resolveCapsule(b.position,.27,1.7,.35)){if(Math.abs(b.position.x-x)>.0001)b.velocity.x=0;if(Math.abs(b.position.z-z)>.0001)b.velocity.z=0;}
+			const x=b.position.x,z=b.position.z;if(local.resolveWalker(b.position,.27,1.7,.35)){if(Math.abs(b.position.x-x)>.0001)b.velocity.x=0;if(Math.abs(b.position.z-z)>.0001)b.velocity.z=0;}
 		}
 		_want.copy(b.position).sub(p.base);O.free=true;
 	}
@@ -414,7 +438,7 @@ export class Contact {
 			S.velocity.y += Math.max( - 9.81, Math.min( 9.81, ( targetY - S.at.y ) * 16 - S.velocity.y * 8 ) ) * dt;
 			S.at.addScaledVector( S.velocity, dt );
 			if ( S.at.y < g ) { S.at.y = g; S.velocity.y = Math.max( 0, S.velocity.y ); }
-			this.hub.app.colliders?.resolveCapsule( S.at, BODY_R, 1.7, 0.3 );
+			this.hub.app.colliders?.resolveWalker( S.at, BODY_R, 1.7, 0.3 );
 		} else S.at.y = g;
 		_want.set( S.at.x - p.base.x, S.at.y - p.base.y, S.at.z - p.base.z );
 
@@ -484,10 +508,26 @@ export class Contact {
 		_want.copy( o );
 		if ( k ) { this.knock( p, k, t - k.t0, O, dt ); this.environmentBody(p,k,dt,O); }
 		else this.settle( p, dt, O );
-		// every step onto walkable ground only (the gangway, the walkway's edge, her rail)
-		if ( O.free || ! p.canStand || _want.distanceToSquared( o ) < 1e-8 || p.canStand( _w.copy( p.base ).add( _want ), p.base ) ) o.copy( _want );
+		// every step onto walkable ground only (the gangway, the walkway's edge, her rail), and never into the player
+		// (a physical fall, O.free, meets him through the rig's own contacts instead)
+		if ( O.free || ( ( ! p.canStand || _want.distanceToSquared( o ) < 1e-8 || p.canStand( _w.copy( p.base ).add( _want ), p.base ) ) && ! this.intoPlayer( p, o, _want ) ) ) o.copy( _want );
 		p.world.add( o );
 		return O;
+
+	}
+
+	// Would a knock's step from base + o to base + want take p into the player's body (two bodies, PLAYER_R + BODY_R)
+	// closer to him than they are? Room.js keeps walkers out of him; this keeps a knocked person's own steps out of him
+	// (stepping off a car's road, back to their place, fetching what they dropped): before this a townsperson asked
+	// to step off a car's road toward the player beside them walked through him and shoved him 1.2 m off his spot.
+	// The whole step is checked, so a step held back at his body never jumps through it once the next one lands clear.
+	intoPlayer( p, o, want ) {
+
+		const P = this.hub.player, pl = this.hub.app.player, b = p.base;
+		if ( ! P?.on || ! pl || ( pl.mode !== 'walk' && pl.mode !== 'ferry' && pl.mode !== 'deck' ) || Math.abs( pl.position.y - b.y ) > 1 ) return false;
+		const ax = b.x + o.x - pl.position.x, az = b.z + o.z - pl.position.z, dx = want.x - o.x, dz = want.z - o.z, l2 = dx * dx + dz * dz;
+		const f = l2 > 1e-12 ? Math.max( 0, Math.min( 1, - ( ax * dx + az * dz ) / l2 ) ) : 0, near = Math.hypot( ax + dx * f, az + dz * f );
+		return near < PLAYER_R + BODY_R + 0.01 && near < Math.hypot( ax, az ) - 1e-6;
 
 	}
 
@@ -501,6 +541,19 @@ export class Contact {
 				if ( p.posture === 'walk' || a < 0.1 ) this.play( p, 'idle', { fade: 0.25 } );
 				if ( a > 0.8 ) p.knock = null;
 				return;
+			case 'aside': {
+
+				// off a waiting car's road at a walk (aside), then standing there until it has gone by: its middle 6 m
+				// past their place along its way, or gone from its road; ASIDE_WAIT at most
+				const go = k.far / ASIDE_V, c = k.car;
+				_want.copy( k.off0 ).addScaledVector( n, k.far * Math.min( 1, a / go ) );
+				if ( a < go ) { O.walk = true; O.face = Math.atan2( k.nx, k.nz ); this.play( p, 'walk', { fade: 0.25 } ); return; }
+				if ( ! k.still ) { k.still = true; this.play( p, 'idle', { fade: 0.4 } ); }
+				const gone = ! c?.world || ! c.path || c.state === 'gone' || ( c.dir && ( p.base.x - c.world.x ) * c.dir.x + ( p.base.z - c.world.z ) * c.dir.z < - 6 );
+				if ( gone || a > ASIDE_WAIT ) p.knock = null;
+				return;
+
+			}
 			case 'flinch':
 				O.tilt = 0.22 * hump( a, 0, 0.9 ); O.arms = 0.35 * hump( a, 0, 0.9 ); O.hold = false;
 				b.tuckUntil = this.hub.t + 0.3;
@@ -582,6 +635,31 @@ export class Contact {
 			}
 
 		}
+
+	}
+
+	// A car has waited for them in its road (Traffic.stepAside): up first if they are down (a fall or a dive goes
+	// straight to its get-up through a crouch; a tumble gets up in its own time), then a walk of `far` m along n,
+	// off its road, and they stand there until it has gone by (settle then takes them home). Whatever they dropped
+	// stays where it fell. Returns true once they are stepping.
+	aside( p, nx, nz, far, car ) {
+
+		const k = p.knock;
+		if ( k?.kind === 'aside' ) return true;
+		if ( p.posture === 'sit' || ! p.base ) return false;
+		if ( k && ! k.up && ( k.kind === 'fall' || k.kind === 'dive' || k.kind === 'tumble' ) ) {
+
+			if ( k.kind !== 'tumble' ) k.t0 = Math.min( k.t0, this.hub.t - 2.6 );
+			return false;
+
+		}
+		if ( k?.sw ) return false;   // in the sea: the swimmer's own way out
+		if ( ! p.off ) p.off = new Vector3();
+		p.knock = { kind: 'aside', t0: this.hub.t, nx, nz, far, car, off0: p.off.clone(), up: true, still: false, fetch: null, stage: 0 };
+		this.count.aside ++;
+		this.log.push( { t: + this.hub.t.toFixed( 2 ), id: p.id, kind: 'aside', s: + far.toFixed( 2 ) } );
+		if ( this.log.length > 12 ) this.log.shift();
+		return true;
 
 	}
 

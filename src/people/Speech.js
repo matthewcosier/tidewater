@@ -19,10 +19,38 @@ const CSS = `
 `;
 const MAX = 2, GAP = 2.2, RANGE = 24, CLEAR = 8, NUDGE = 150;   // px: the gap kept from a panel, the farthest a bubble moves off its head
 const _v = new Vector3(), _d = new Vector3();
+const LINE_NEAR = 15;   // m
+const LINE_WINDOW = 4;   // s
+const STACK = 4;   // px between two bubbles stacked one over the other
+const BOXES = 8;   // the most bubbles stacked in one frame (MAX, plus urgent lines past the cap)
+const _boxes = new Float32Array( BOXES * 4 );   // [ left, top, right, bottom ] px of the bubbles placed so far this frame
+
+export function stackClear( boxes, n, bx, by, w, h ) {
+
+	for ( let k = 0; k <= n; k ++ ) {
+
+		let moved = false;
+		for ( let j = 0; j < n; j ++ ) {
+
+			const l = boxes[ j * 4 ], t = boxes[ j * 4 + 1 ], r = boxes[ j * 4 + 2 ], b = boxes[ j * 4 + 3 ];
+			if ( bx - w / 2 < r && bx + w / 2 > l && by - 8 - h < b && by - 8 > t - STACK ) {
+
+				by = t - STACK + 8;
+				moved = true;
+
+			}
+
+		}
+		if ( ! moved ) break;
+
+	}
+	return by;
+
+}
 
 export class Speech {
 
-	constructor( app ) { this.app = app; this.live = []; this.log = []; this.nextAt = 0; this.el = null; }
+	constructor( app ) { this.app = app; this.live = []; this.log = []; this.heard = []; this.nextAt = 0; this.el = null; }
 
 	mount() {
 
@@ -40,6 +68,10 @@ export class Speech {
 	// `range` (m): how far from the camera the line is still shown (a call across the beach carries further)
 	say( person, text, key, t, urgent = false, range = RANGE ) {
 
+		// one voice per line within LINE_NEAR and LINE_WINDOW (urgent lines too: a warning is urgent)
+		while ( this.heard.length && t - this.heard[ 0 ].t >= LINE_WINDOW ) this.heard.shift();
+		const at = person.world;
+		if ( at && this.heard.some( h => h.text === text && Math.hypot( h.x - at.x, h.z - at.z ) < LINE_NEAR ) ) return false;
 		const own = this.live.find( b => b.who === person );
 		if ( ! urgent && ( this.live.length >= MAX || t < this.nextAt || own ) ) return false;
 		if ( own ) own.until = t;
@@ -55,6 +87,7 @@ export class Speech {
 		this.rectAt = 0;   // a fresh look at the panels (a prompt may have come up since)
 		this.nextAt = t + GAP;
 		this.log.push( { t: + t.toFixed( 2 ), id: person.id, key, text } );
+		this.heard.push( { text, x: at.x, z: at.z, t } );
 		if ( this.log.length > 30 ) this.log.shift();
 		return true;
 
@@ -78,6 +111,7 @@ export class Speech {
 		}
 		const r = this.rect;
 		const dir = camera.getWorldDirection( _d );
+		let n = 0;
 		for ( const b of [ ...this.live ] ) {
 
 			if ( t > b.until + 0.3 || ! b.who.world ) { b.el.remove(); this.live.splice( this.live.indexOf( b ), 1 ); continue; }
@@ -92,8 +126,16 @@ export class Speech {
 			const show = ahead > 0.3 && Math.abs( _v.x ) < 1.05 && _v.y > - 1.05;
 			const x = r.left + ( _v.x + 1 ) / 2 * r.width, y = Math.max( r.top + TOP, r.top + ( 1 - _v.y ) / 2 * r.height );
 			const at = show && this.place( b, x, y, r );
-			b.el.style.visibility = at ? '' : 'hidden';
-			if ( ! at ) continue;
+			// stacked over the bubbles already placed this frame; hidden if that would leave the canvas
+			if ( at ) at[ 1 ] = stackClear( _boxes, n, at[ 0 ], at[ 1 ], b.w || 160, b.h || 30 );
+			const fits = at && at[ 1 ] - 8 - ( b.h || 30 ) >= r.top && n < BOXES;
+			b.el.style.visibility = fits ? '' : 'hidden';
+			if ( ! fits ) continue;
+			_boxes[ n * 4 ] = at[ 0 ] - ( b.w || 160 ) / 2;
+			_boxes[ n * 4 + 1 ] = at[ 1 ] - 8 - ( b.h || 30 );
+			_boxes[ n * 4 + 2 ] = at[ 0 ] + ( b.w || 160 ) / 2;
+			_boxes[ n * 4 + 3 ] = at[ 1 ] - 8;
+			n ++;
 			b.el.style.setProperty( '--pp-tail', `${ Math.max( 14 - b.w / 2, Math.min( b.w / 2 - 14, x - at[ 0 ] ) ).toFixed( 1 ) }px` );
 			b.el.style.transform = `translate(${ at[ 0 ].toFixed( 1 ) }px, ${ at[ 1 ].toFixed( 1 ) }px) translate(-50%, calc(-100% - 8px))`;
 

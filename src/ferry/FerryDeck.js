@@ -13,6 +13,9 @@ const LEVER_RATE = 0.45;      // throttle lever travel per second while W/S is h
 const _v = new Vector3(), _w = new Vector3(), _q = new Quaternion(), _qa = new Quaternion(), _qb = new Quaternion();
 const _e = new Euler( 0, 0, 0, 'YXZ' ), _up = new Vector3( 0, 1, 0 );
 const _bo = new Vector3(), _bd = new Vector3(), AXES = [ 'x', 'y', 'z' ];
+const _feet = new Vector3(), _carrier = new Vector3(), _wv = new Vector3(), _acc = new Vector3(), _la = new Vector3(), _chest = new Vector3();
+// m/s²: the grip of a walker's feet on her deck, the island walker's grounded motor (Player.js updateWalk, accel)
+const GRIP = 35;
 
 export class FerryDeck {
 
@@ -156,19 +159,27 @@ export class FerryDeck {
 		if ( wish.lengthSq() > 0 ) wish.normalize();
 		// the island walker's pace (Player.js): 3 m/s, 6.2 sprinting
 		const speed = inp.down( 'ShiftLeft' ) || inp.down( 'ShiftRight' ) ? 6.2 : 3.0, k = 1 - Math.exp( - 12 * dt ), v = this.vel;
-		v.x += ( wish.x * speed - v.x ) * k;
-		v.z += ( wish.z * speed - v.z ) * k;
+		const mx = ( wish.x * speed - v.x ) * k, mz = ( wish.z * speed - v.z ) * k;
+		v.x += mx;
+		v.z += mz;
 		if ( player.environment ) {
-			const feet = ship.toWorld( this.local, new Vector3() ), carrier = ship.velocityAt( feet, new Vector3() );
-			const worldVelocity = ship.toWorld( this.local.clone().add( v ), new Vector3() ).sub( feet ).add( carrier );
-			const load = player.walkLoad = player.environment.acceleration( feet.clone().add( new Vector3( 0, 0.9, 0 ) ), worldVelocity,
+			const feet = ship.toWorld( this.local, _feet ), carrier = ship.velocityAt( feet, _carrier );
+			const worldVelocity = ship.toWorld( _wv.copy( this.local ).add( v ), _wv ).sub( feet ).add( carrier );
+			const load = player.walkLoad = player.environment.acceleration( _chest.copy( feet ).add( _v.set( 0, 0.9, 0 ) ), worldVelocity,
 				{ mass: 75, area: 0.7, volume: 0.075, height: 1.8, supported: this.grounded, dt }, {} );
-			const acceleration = new Vector3( load.ax, load.ay, load.az );
+			// On his feet his legs hold the push, as on the island (Player.updateWalk): the grip this frame's easing toward
+			// the speed he wants did not spend holds the load across her deck, and only a push past it moves him. Before
+			// this the load was added after the easing every frame, so a player standing still on her open deck in the
+			// default 8 m/s breeze slid downwind at 3 cm/s (0.4 m/s² over the easing's 12 per second).
+			let ax = load.ax, az = load.az;
+			const held = this.grounded ? Math.max( 0, GRIP * dt - Math.hypot( mx, mz ) ) : 0, across = Math.hypot( ax, az ) * dt;
+			if ( held > 0 && across > 0 ) { const f = Math.max( 0, across - held ) / across; ax *= f; az *= f; }
+			const acceleration = _acc.set( ax, load.ay, az );
 			worldVelocity.addScaledVector( acceleration, dt ); player.velocity.copy( worldVelocity );
 			if ( ( this.grounded && Math.hypot( load.ax, load.az ) > 3.2 ) || load.wy > 18 || load.height - feet.y > 1.75 ) {
-				if ( player.ragdoll( null, null, { velocity: worldVelocity, spin: { x: 0, y: 0, z: 0 } } ) ) { player.rag.disasterField = player.environment; player.rag.waterY = load.height; return; }
+				if ( player.ragdoll( null, null, { velocity: worldVelocity.clone(), spin: { x: 0, y: 0, z: 0 } } ) ) { player.rag.disasterField = player.environment; player.rag.waterY = load.height; return; }
 			}
-			const localAcceleration = ship.toLocal( feet.clone().add( acceleration ), new Vector3() ).sub( this.local );
+			const localAcceleration = ship.toLocal( _la.copy( feet ).add( acceleration ), _la ).sub( this.local );
 			v.addScaledVector( localAcceleration, dt );
 		}
 		if ( this.grounded && inp.hit( 'Space' ) ) { v.y = 3.2; this.grounded = false; }
@@ -333,6 +344,9 @@ export class FerryDeck {
 		ship.lever = Math.max( - 1, Math.min( 1, ship.lever + lever * LEVER_RATE * dt ) );
 		if ( inp.hit( 'KeyX' ) ) ship.lever = 0;
 		if ( inp.hit( 'KeyC' ) ) ship.wheel = 0;
+		// G runs the engines up to boost rating or back to service (FerryShip BOOST_POWER). Not B:
+		// B whistles the cockatoo in every mode (Cockatoo.js), so it would do two things here.
+		if ( inp.hit( 'KeyG' ) ) ship.boost = ! ship.boost;
 		if ( inp.hit( 'KeyH' ) ) this.ferry.horn( 'long' );
 		// Berth work: R lowers or raises the stern ramp, L casts off or makes fast.
 		if ( inp.hit( 'KeyR' ) ) this.ferry.toggleRamp();

@@ -12,15 +12,30 @@ const WATERPLANE = 190; // assumed effective total waterplane of both demi-hulls
 const HEAVE_K = SEA_WATER_DENSITY * GRAVITY * WATERPLANE / MASS; // restoring acceleration per metre
 const HEAVE_C = 1.4 * Math.sqrt(HEAVE_K); // damping ratio0.7, assumed
 const YAW_INERTIA = MASS * ( 50 * 50 + 16 * 16 ) / 12;
-const THRUST = 220000;                   // N ahead, both engines; astern gives 60 %
-const TOP_SPEED = 8.2;                   // m/s, about 16 knots
+const THRUST = 220000;                   // N: the old engines' thrust, which set the low-speed drag below
+const TOP_SPEED = 8.2;                   // m/s, about 16 knots: where that thrust met that drag
 const SURGE_DRAG = THRUST / ( TOP_SPEED * TOP_SPEED );
+const LENGTH = 50;                       // m, waterline (ferry_build.py: 50.4 m)
+const FN_KNEE = 0.3;                     // Froude number where the table takes over from the quadratic
+const SPEED_KNEE = FN_KNEE * Math.sqrt( GRAVITY * LENGTH ); // m/s, 6.6
+const WEIGHT = MASS * GRAVITY;           // N
+// [ Froude number, resistance / weight ]; the first row is the quadratic's value at the knee
+const RESIST = [ [ FN_KNEE, ( SURGE_DRAG * SPEED_KNEE * SPEED_KNEE + 900 * SPEED_KNEE ) / WEIGHT ], [ 0.4, 0.064 ], [ 0.5, 0.086 ], [ 0.6, 0.086 ], [ 0.8, 0.087 ], [ 1.0, 0.092 ], [ 1.2, 0.100 ], [ 1.4, 0.110 ] ];
+// The engines: full thrust off the line (the jets' bollard pull) until the rated power runs out,
+// then thrust = power / speed. Service rating gives about 25 knots, a fast cat's cruise (Austal's
+// 40-50 m cats run 25-30 kn). Boost is a declared game choice: the engines run up to three times
+// service power over BOOST_SPOOL seconds and she makes about 56 knots, a gas-turbine racer's pace,
+// so the crossing halves (test/ferry-speed.mjs).
+const BOLLARD = 440000;                  // N ahead at service rating, both jets; astern gives 60 %
+const POWER = 4.75e6;                    // W of thrust power at service rating (top about 12.5 m/s)
+const BOOST_POWER = 14e6;                // W of thrust power on boost (top about 29 m/s)
+const BOOST_SPOOL = 3;                   // s for the engines to run up to boost or back down
 const SWAY_DRAG = SURGE_DRAG * 40;
 const RUDDER_MAX = 35 * Math.PI / 180;
 const RUDDER_RATE = 12 * Math.PI / 180;  // rad/s, hydraulic steering gear
 const LEVER_LAG = 1.8;                   // s for the engines to answer the levers
 const RUDDER_ARM = 23;                   // m from the centre to the rudders
-const THRUSTER = 40000;                  // N, each of the bow and stern thrusters, for creeping onto a berth
+const THRUSTER = 100000;
 const THRUSTER_ARM = 20;                 // m from the centre to each
 const KEEL = - 2.5;                      // draught below the waterline
 const WINCH_SPEED = 0.3;                 // m/s, the most the mooring winches haul her
@@ -30,7 +45,34 @@ const WINCH_TIME = 1.2;                  // s, how they ease off as she comes on
 const KEELS = [];
 for ( const x of [ - 6.7, 6.7 ] ) for ( let k = 0; k <= 8; k ++ ) KEELS.push( new Vector3( x, KEEL, - 24 + k * 5.5 ) );
 // Her figures, for the autopilot's feed forward (FerryService.js).
-export const HULL = { MASS, WATERPLANE, YAW_INERTIA, THRUST, SURGE_DRAG, SWAY_DRAG, THRUSTER, THRUSTER_ARM };
+export const HULL = { MASS, WATERPLANE, YAW_INERTIA, THRUST, SURGE_DRAG, SWAY_DRAG, THRUSTER, THRUSTER_ARM, BOLLARD };
+
+// Calm-water surge resistance in N at a speed `u` through the water (m/s, signed): the old
+// quadratic up to the knee, then the resistance-to-weight table, linear between its rows and
+// carried on past the last. One curve for the hull and for the autopilot's feed-forward.
+export function surgeResistance( u ) {
+
+	const a = Math.abs( u );
+	if ( a <= SPEED_KNEE ) return SURGE_DRAG * u * a + 900 * u;
+	const fn = a / Math.sqrt( GRAVITY * LENGTH );
+	let i = 1;
+	while ( i < RESIST.length - 1 && RESIST[ i ][ 0 ] < fn ) i ++;
+	const [ f0, r0 ] = RESIST[ i - 1 ], [ f1, r1 ] = RESIST[ i ];
+	return Math.sign( u ) * WEIGHT * ( r0 + ( r1 - r0 ) * ( fn - f0 ) / ( f1 - f0 ) );
+
+}
+
+// Full-lever thrust in N at speed `u` (m/s) with the engines `boost` (0 .. 1) of the way to boost
+// rating; astern (`ahead` false) gives 60 % of the bollard pull and no boost.
+export function fullThrust( u, boost = 0, ahead = true ) {
+
+	if ( ! ahead ) return 0.6 * BOLLARD;
+	const power = POWER + ( BOOST_POWER - POWER ) * boost;
+	// a bigger engine pulls harder off the line too: bollard pull goes as power^(2/3) (actuator disc)
+	const bollard = BOLLARD * Math.pow( power / POWER, 2 / 3 );
+	return Math.min( bollard, power / Math.max( 0.1, u ) );
+
+}
 
 const _v = new Vector3(), _w = new Vector3(), _e = new Euler( 0, 0, 0, 'YXZ' );
 
@@ -43,6 +85,8 @@ export class FerryShip {
 		this.u = 0; this.v = 0; this.r = 0;          // surge, sway (m/s), yaw rate (rad/s)
 		this.lever = 0;                              // -1 full astern .. 1 full ahead (the driver's)
 		this.power = 0;                              // what the engines deliver, lagging the lever
+		this.boost = false;                          // the helm's boost switch (G, FerryDeck.helm)
+		this.boostLevel = 0;                         // 0 service .. 1 boost rating, spooling after the switch
 		this.wheel = 0;                              // -1 .. 1 (the helm wheel)
 		this.rudder = 0;                             // rad
 		this.thruster = 0;                           // -1 .. 1, bow to port .. starboard
@@ -73,6 +117,7 @@ export class FerryShip {
 		this.moored = true;
 		this.settled = false;
 		this.lever = 0; this.power = 0; this.thruster = 0; this.stern = 0;
+		this.boost = false; this.boostLevel = 0;
 
 	}
 
@@ -110,7 +155,7 @@ export class FerryShip {
         const waterU=env?env.ux*f0.x+env.uz*f0.z:0,waterV=env?env.ux*side.x+env.uz*side.z:0;
         const ur=this.u-waterU,vr=this.v-waterV;
         const windX=env?windForce*(env.wx-this.velocity.x):0,windZ=env?windForce*(env.wz-this.velocity.z):0;
-        const resistU=SURGE_DRAG*ur*Math.abs(ur)+900*ur,resistV=SWAY_DRAG*vr*Math.abs(vr)+40000*vr;
+        const resistU=surgeResistance(ur),resistV=SWAY_DRAG*vr*Math.abs(vr)+40000*vr;
         this.environmentLoad = Math.hypot(windX-resistU*f0.x-resistV*side.x,windZ-resistU*f0.z-resistV*side.z);
         if(this.moored && (this.environmentLoad>350000 || (env?.height??0)>2)){this.castOff();this.mooringFailed=true;}
         if ( this.moored ) { this.hold( dt ); this.waterPose(dt,env); return; }
@@ -118,7 +163,8 @@ export class FerryShip {
 		this.power += ( this.lever - this.power ) * ( 1 - Math.exp( - dt / LEVER_LAG ) );
 		const target = this.wheel * RUDDER_MAX;
 		this.rudder += Math.max( - RUDDER_RATE * dt, Math.min( RUDDER_RATE * dt, target - this.rudder ) );
-		const thrust = this.power * THRUST * ( this.power < 0 ? 0.6 : 1 );
+		this.boostLevel += ( ( this.boost ? 1 : 0 ) - this.boostLevel ) * ( 1 - Math.exp( - dt / BOOST_SPOOL ) );
+		const thrust = Math.abs( this.power ) * fullThrust( ur, this.boostLevel, this.power >= 0 ) * Math.sign( this.power );
 		// Water flowing past the rudders: the ship's own way plus the propeller wash.
 		const wash = ur * Math.abs( ur ) + Math.max( 0, this.power ) * 30;
 		// Frame: +Z bow, +X port. A positive wheel (starboard) swings the bow to -X (yaw falls):
@@ -181,6 +227,7 @@ export class FerryShip {
 		this.r = ( this.yaw - yaw ) / dt;
 		this.u = 0; this.v = 0;
 		this.lever = 0; this.power = 0; this.thruster = 0; this.stern = 0;
+		this.boost = false; this.boostLevel = 0;
 		this.pose();
 
 	}

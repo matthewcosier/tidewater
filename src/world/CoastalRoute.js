@@ -1,4 +1,5 @@
 import { WORLD } from './WorldLayout.js';
+import { joeyAt } from '../joey/JoeyFrame.js';
 import { TERMINAL_SITE } from '../ferry/terminalSite.js';
 import { shapeDistance, CUT_SHOULDER } from './TerrainData.js';
 
@@ -56,13 +57,14 @@ const FERRY = [ [ 176, - 176 ], [ 182, - 155 ], [ 186, - 125 ], [ 189, - 90 ], [
 // T, level for JOEY_LEVEL metres either side. Its bell mouth: on each side of the link a
 // turning lane of JOEY_MOUTH metres radius, whose outer edge is the kerb line. Bends keep a radius of about 35 m or more, so a
 // car takes every one at 40 to 60 km/h. The ring's seam (its first point) sits mid south coast.
+// Written in Joey's layout frame and placed where WORLD.joeyTerminal stands (src/joey/JoeyFrame.js).
 const JOEY_LOOP = [ [ - 151, 796.1 ], [ - 154.6, 814.7 ], [ - 149.7, 832.9 ], [ - 137.3, 847.2 ], [ - 117, 862 ], [ - 95, 873 ], [ - 72, 874 ],
 	[ - 50, 866 ], [ - 25, 865 ], [ 0, 870 ], [ 25, 874 ], [ 50, 875 ], [ 75, 877 ], [ 100, 876 ], [ 125, 875 ], [ 150, 873 ], [ 175, 875 ], [ 200, 876 ], [ 225, 876 ],
 	[ 250, 872 ], [ 272, 864 ], [ 290, 850 ], [ 300, 830 ], [ 304, 808 ], [ 312, 788 ], [ 320, 772 ], [ 322, 750 ], [ 317.3, 732.5 ], [ 304.5, 719.7 ], [ 287, 715 ],
 	[ 265, 719 ], [ 240, 721 ], [ 215, 718 ], [ 190, 712 ], [ 165, 709 ], [ 140, 707 ], [ 120, 703 ], [ 100, 703 ], [ 75, 704 ], [ 50, 704 ], [ 25, 704 ], [ 0, 707 ],
 	// behind the flat, 12 m back from its edge (grading never touches the flat itself)
-	[ - 25, 710 ], [ - 48, 712 ], [ - 63.9, 717.3 ], [ - 81.5, 732 ], [ - 96.8, 744.9 ], [ - 112.1, 757.8 ], [ - 125.2, 768.7 ] ];
-const JOEY_GRADE = 0.1, JOEY_STUB = 6, JOEY_LEVEL = 12, JOEY_MOUTH = 9, JOEY_FLAT = 3.1, JOEY_SEAM = [ 150, 873 ], JOEY_START = [ 25, 874 ];
+	[ - 25, 710 ], [ - 48, 712 ], [ - 63.9, 717.3 ], [ - 81.5, 732 ], [ - 96.8, 744.9 ], [ - 112.1, 757.8 ], [ - 125.2, 768.7 ] ].map( ( [ x, z ] ) => joeyAt( x, z ) );
+const JOEY_GRADE = 0.1, JOEY_STUB = 6, JOEY_LEVEL = 12, JOEY_MOUTH = 9, JOEY_FLAT = 3.1, JOEY_SEAM = joeyAt( 150, 873 ), JOEY_START = joeyAt( 25, 874 );
 const clamp = ( x, a, b ) => Math.max( a, Math.min( b, x ) );
 const smooth = x => { const t = clamp( x, 0, 1 ); return t * t * ( 3 - 2 * t ); };
 const distance = ( a, b ) => Math.hypot( a.x - b.x, a.z - b.z );
@@ -388,18 +390,20 @@ export class CoastalRoute {
 		}
 		let earthwork = 0;
 		// (plus room for cut slopes to run out beyond the batters)
-		const texel = v => Math.floor( ( v - terrain.origin ) / terrain.texel ), room = 24;
-		const x0 = Math.max( 1, texel( bounds.x0 ) - room ), x1 = Math.min( terrain.res - 2, texel( bounds.x1 ) + 1 + room );
-		const z0 = Math.max( 1, texel( bounds.z0 ) - room ), z1 = Math.min( terrain.res - 2, texel( bounds.z1 ) + 1 + room );
+		// Per axis: the terrain domain is a rectangle (resX columns along x, resZ rows along z),
+		// and the window keeps one texel clear of every edge for the four-neighbour stencils.
+		const texelX = v => Math.floor( ( v - terrain.originX ) / terrain.texel ), texelZ = v => Math.floor( ( v - terrain.originZ ) / terrain.texel ), room = 24;
+		const x0 = Math.max( 1, texelX( bounds.x0 ) - room ), x1 = Math.min( terrain.resX - 2, texelX( bounds.x1 ) + 1 + room );
+		const z0 = Math.max( 1, texelZ( bounds.z0 ) - room ), z1 = Math.min( terrain.resZ - 2, texelZ( bounds.z1 ) + 1 + room );
 		const w = x1 - x0 + 1, graded = new Uint8Array( w * ( z1 - z0 + 1 ) ); // 1 graded ground, 2 road surface
 		const original = Float32Array.from( terrain.heights );
 		for ( let z = z0; z <= z1; z ++ ) {
 			for ( let x = x0; x <= x1; x ++ ) {
-				const wx = terrain.origin + ( x + 0.5 ) * terrain.texel, wz = terrain.origin + ( z + 0.5 ) * terrain.texel;
+				const wx = terrain.originX + ( x + 0.5 ) * terrain.texel, wz = terrain.originZ + ( z + 0.5 ) * terrain.texel;
 				if ( keep && keep( wx, wz ) ) { graded[ ( z - z0 ) * w + x - x0 ] = 3; continue; }
 				const g = this.gradeAt( wx, wz ); if ( ! g ) continue;
 				const p = g.nearest, { a } = p.segment, asphalt = p.path.kind === 'asphalt', width = p.path.halfWidth;
-				const index = z * terrain.res + x;
+				const index = z * terrain.resX + x;
 				terrain.heights[ index ] = original[ index ] + ( g.target - original[ index ] ) * g.blend;
 				graded[ ( z - z0 ) * w + x - x0 ] = g.road ? 2 : 1;
 				// Paint the terrain's brown worn-path layer only under opaque road, so the
@@ -416,16 +420,17 @@ export class CoastalRoute {
 		// surface) until no neighbour pair steps more than a metre per texel. Ground that
 		// moves hands the constraint on to its neighbours, so a deep cutting's slope runs out
 		// into the hillside as far as it needs; untouched natural ground stays as it was.
-		const limit = terrain.texel, h = terrain.heights, res = terrain.res, zn = z1 - z0 + 1;
+		// stride: one row of the row-major heights is resX texels (neighbours are i +/- 1 and i +/- stride)
+		const limit = terrain.texel, h = terrain.heights, stride = terrain.resX, zn = z1 - z0 + 1;
 		for ( let pass = 0; pass < 300; pass ++ ) {
 			let moved = 0;
 			for ( let z = z0; z <= z1; z ++ ) for ( let x = x0; x <= x1; x ++ ) {
 				const k = ( z - z0 ) * w + x - x0;
 				if ( graded[ k ] !== 1 ) continue;
-				const i = z * res + x;
+				const i = z * stride + x;
 				// Each pair may be as steep as 1:1 or as steep as nature made it, never steeper.
 				let lo = - Infinity, hi = Infinity;
-				for ( const j of [ i - 1, i + 1, i - res, i + res ] ) {
+				for ( const j of [ i - 1, i + 1, i - stride, i + stride ] ) {
 					const allowed = Math.max( limit, Math.abs( original[ i ] - original[ j ] ) );
 					lo = Math.max( lo, h[ j ] - allowed ); hi = Math.min( hi, h[ j ] + allowed );
 				}
@@ -446,7 +451,7 @@ export class CoastalRoute {
 		// of kept ground (the road mesh sits on those heights).
 		const mv = new Uint8Array( graded.length );
 		for ( let z = z0; z <= z1; z ++ ) for ( let x = x0; x <= x1; x ++ ) {
-			const k = ( z - z0 ) * w + x - x0, i = z * res + x;
+			const k = ( z - z0 ) * w + x - x0, i = z * stride + x;
 			mv[ k ] = graded[ k ] === 1 && Math.abs( h[ i ] - original[ i ] ) > 0.02 ? 1 : 0;
 		}
 		const soft = [];
@@ -458,20 +463,20 @@ export class CoastalRoute {
 				if ( graded[ n ] >= 2 ) blocked = true;
 				near |= mv[ n ];
 			}
-			if ( near && ! blocked ) soft.push( z * res + x );
+			if ( near && ! blocked ) soft.push( z * stride + x );
 		}
 		const next = new Float32Array( soft.length );
 		for ( let pass = 0; pass < 3; pass ++ ) {
 			for ( let s = 0; s < soft.length; s ++ ) {
 				const i = soft[ s ];
-				next[ s ] = ( 4 * h[ i ] + 2 * ( h[ i - 1 ] + h[ i + 1 ] + h[ i - res ] + h[ i + res ] ) + h[ i - res - 1 ] + h[ i - res + 1 ] + h[ i + res - 1 ] + h[ i + res + 1 ] ) / 16;
+				next[ s ] = ( 4 * h[ i ] + 2 * ( h[ i - 1 ] + h[ i + 1 ] + h[ i - stride ] + h[ i + stride ] ) + h[ i - stride - 1 ] + h[ i - stride + 1 ] + h[ i + stride - 1 ] + h[ i + stride + 1 ] ) / 16;
 			}
 			// written in turn and held to the same 1:1 (or natural) limit against the neighbours as
 			// they stand, so the rounding never opens a step the relaxation had closed
 			for ( let s = 0; s < soft.length; s ++ ) {
 				const i = soft[ s ];
 				let lo = - Infinity, hi = Infinity;
-				for ( const j of [ i - 1, i + 1, i - res, i + res ] ) {
+				for ( const j of [ i - 1, i + 1, i - stride, i + stride ] ) {
 					const allowed = Math.max( limit, Math.abs( original[ i ] - original[ j ] ) );
 					lo = Math.max( lo, h[ j ] - allowed ); hi = Math.min( hi, h[ j ] + allowed );
 				}
@@ -479,7 +484,7 @@ export class CoastalRoute {
 			}
 		}
 		for ( let z = z0; z <= z1; z ++ ) for ( let x = x0; x <= x1; x ++ ) {
-			const i = z * res + x;
+			const i = z * stride + x;
 			earthwork = Math.max( earthwork, Math.abs( h[ i ] - original[ i ] ) );
 		}
 		terrain.buildMinMax();
