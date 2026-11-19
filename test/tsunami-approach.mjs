@@ -1,4 +1,3 @@
-// Measure the approach from the offshore source to the shore using game time.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TerrainData } from '../src/world/TerrainData.js';
@@ -35,10 +34,14 @@ function shoreFor( e ) {
 	return along( e, 0 );
 }
 
-// 'bore' theory for a crest as tall as the shelf is deep. Until it breaks (H < 0.78 d, McCowan) the crest is a
-// right-going simple wave and its top moves on the C+ characteristic, u + c = 3 sqrt( g ( d + H ) ) - 2 sqrt( g d )
-// (the source launches it with u = 2 ( sqrt( g ( d + H ) ) - sqrt( g d ) )); once broken it is a Stoker (1957)
-// bore. Stoker alone timed a 10 m crest at a gauge in 30-40 m of water 15% late (seeds 1 and 9).
+function wetShoreFor( e, H ) {
+	for ( let s = 0; s < e.launchDistance; s += 2 ) {
+		const p = along( e, s );
+		if ( - ground( p.x, p.z ) >= e.drawdown * H + 0.5 ) return { ...p, s };
+	}
+	return shoreFor( e );
+}
+
 function boreTheory( d, H ) {
 	if ( H < 0.78 * d ) return 3 * Math.sqrt( G * ( d + H ) ) - 2 * Math.sqrt( G * d );
 	return Math.sqrt( G * ( d + H ) * ( 2 * d + H ) / ( 2 * d ) );
@@ -57,7 +60,6 @@ function predictedTravel( e, H, gauge, theory = 'long' ) {
 
 // Highest water surface (m above datum) over dry land in each run, by direction and H, one entry per seed.
 const runUp = new Map();
-// Measure the approach from the offshore source to the shore using game time.
 for ( const [ name, H, direction, theory, seeds ] of [ [ 'Surge', 2, - 60, 'long', [ 3 ] ], [ 'Severe', 10, - 60, 'bore', [ 1, 9 ] ], [ 'Surge', 2, DEFAULTS.tsunami.direction, null, [ 4 ] ] ] ) for ( const seed of seeds ) {
 	test( `${ name } ${ H } m tsunami from ${ direction } deg (seed ${ seed }) on the real island: drawdown first, a 60-120 s approach, arrival on time`, () => {
 		const warning = 3; // s
@@ -71,7 +73,7 @@ for ( const [ name, H, direction, theory, seeds ] of [ [ 'Surge', 2, - 60, 'long
 		// crest passes as a clean pulse. Inside that the initial crest already stands 0.3 H high at t 0 (a 2 m
 		// crest "arrived" in 25 s against 34 s), and at the near-shore gauge the beach's reflection and set-up merge
 		// with it (81 s there against 68 s at the shore). A source too close for that is timed at the shoreline.
-		const shore = shoreFor( e );
+		const shore = shoreFor( e ), wetShore = wetShoreFor( e, H );
 		let timing = null;
 		for ( let s = Math.min( e.launchDistance / 2, e.launchDistance - 3 * e.crestWidth ); s >= gauge.s; s -= 2 ) {
 			const p = along( e, s );
@@ -79,11 +81,11 @@ for ( const [ name, H, direction, theory, seeds ] of [ [ 'Surge', 2, - 60, 'long
 		}
 		timing ??= shore;
 		const predicted = predictedTravel( e, H, timing, theory ?? 'long' );
-		// Measure the approach from the offshore source to the shore using game time.
 		assert.ok( e.approach >= 60 && e.approach <= 120, `the crest must be seen coming for 60-120 s, countdown ${ e.approach.toFixed( 1 ) } s over ${ e.launchDistance.toFixed( 0 ) } m` );
 
-		let land = 0, crestAt = - 1, crestMax = 0, shoreCrestAt = - 1, shoreCrestMax = 0, low = 0, lowAt = - 1, firstHigh = - 1, peak = - Infinity, peakAt = - 1, shorePeak = - Infinity, shorePeakAt = - 1, shoreRise = - 1;
+		let land = 0, crestAt = - 1, crestMax = 0, shoreTopAt = - 1, shoreCrestMax = 0, low = 0, lowAt = - 1, firstHigh = - 1, peak = - Infinity, peakAt = - 1, shorePeak = - Infinity, shorePeakAt = - 1, shoreRise = - 1;
 		const end = warning + Math.max( predicted, e.approach ) * 1.3 + 15;
+		const shoreSeries = []; // [ t, m above datum ] at the wet shoreline gauge
 		while ( field.time < end && field.events.has( 'tsunami' ) ) {
 			field.advance( STEP );
 			if ( ! field.water ) break; // the event ended inside this step
@@ -99,13 +101,16 @@ for ( const [ name, H, direction, theory, seeds ] of [ [ 'Surge', 2, - 60, 'long
 			if ( passing > 0.3 * H && ( crestAt < 0 || t - crestAt < 2 ) && passing > crestMax ) { crestMax = passing; crestAt = t; }
 			const run = field.water.sample( shore.x, shore.z ).height;
 			if ( run > shorePeak ) { shorePeak = run; shorePeakAt = t; }
-			if ( run > 0.3 * H && ( shoreCrestAt < 0 || t - shoreCrestAt < 2 ) && run > shoreCrestMax ) { shoreCrestMax = run; shoreCrestAt = t; }
+			const wet = field.water.sample( wetShore.x, wetShore.z ).height; // m above datum
+			if ( wet > 0.3 * H && ( shoreTopAt < 0 || t - shoreTopAt < 2 ) && wet > shoreCrestMax ) { shoreCrestMax = wet; shoreTopAt = t; }
+			shoreSeries.push( [ t, wet ] );
 			// The front reaches the shore when the water there first rises 0.1 H above datum.
 			if ( shoreRise < 0 && run > 0.1 * H ) shoreRise = t;
 			const w = field.water;
 			for ( let k = 0; k < w.h.length; k ++ ) if ( w.bed[ k ] > 0 && w.h[ k ] > 0.05 && w.bed[ k ] + w.h[ k ] > land ) land = w.bed[ k ] + w.h[ k ];
 		}
-		const report = JSON.stringify( { H, seed, heading: e.direction, drawdown: e.drawdown, land, approach: e.approach, D: e.launchDistance, gaugeDepth: - ground( gauge.x, gauge.z ), timingAt: timing.s, troughLead: e.troughLead, low, lowAt, firstHigh, peak, peakAt, crestAt, shoreCrestAt, predicted, countdown: e.arrival - warning, shorePeak, shorePeakAt, shoreRise } );
+		const shoreCrestAt = shoreSeries.find( ( [ , v ] ) => v >= Math.min( H, shoreCrestMax ) )?.[ 0 ] ?? - 1;
+		const report = JSON.stringify( { H, seed, heading: e.direction, drawdown: e.drawdown, land, approach: e.approach, D: e.launchDistance, gaugeDepth: - ground( gauge.x, gauge.z ), timingAt: timing.s, troughLead: e.troughLead, low, lowAt, firstHigh, peak, peakAt, crestAt, shoreCrestAt, shoreTopAt, shoreCrestMax, wetShoreAt: wetShore.s, predicted, countdown: e.arrival - warning, shorePeak, shorePeakAt, shoreRise } );
 		console.log( report );
 		runUp.set( `${ direction }:${ H }`, [ ...( runUp.get( `${ direction }:${ H }` ) ?? [] ), land ] );
 		// First order left 0.13 H (2 m) and 0.065 H (10 m) of the 0.5 H source trough at this gauge.

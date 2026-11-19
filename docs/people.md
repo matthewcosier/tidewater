@@ -38,7 +38,7 @@ The owner (Crowd.js) moves bodies and plays clips. The brain decides and never t
 
 ## The brain
 
-- **Archetypes** (`ARCHETYPES`): friendly, grumpy, shy, larrikin, kid, elderly. Their traits are warmth, chat, bold, patience, energy, curiosity, humour and wave. `weight` sets how common each one is. Kids have weight 0 until there are child avatars.
+- **Archetypes** (`ARCHETYPES`): friendly, grumpy, shy, larrikin, kid, elderly. Their traits are warmth, chat, bold, patience, energy, curiosity, humour and wave. `weight` sets how common each one is. Kids have weight 0 until there are child avatars (the beach lane).
 - **Moods**: energy, sociability, curiosity, patience and annoyance. They start from the traits plus some noise. Energy runs down and dozing restores it. Annoyance decays faster in patient people.
 - **Memory of the player**: `friendly` (you stayed for their chat), `ignored` (they spoke and you walked straight off), `annoyed` (squeezing past an impatient person, or twice within a minute), `bumped` (hook: `brain.bump( t, strength )`). Two ignores and they stop talking to you. A friendly memory makes them greet you with `greet-again`.
 - **Thinking**: the hub runs `think()` at 2 to 5 Hz within 25 m, with staggered times. Each think does three things. First it senses the player directly: close by and looking at them, or squeezing past their seat. Then it takes the most telling event from its inbox (salience × curiosity, plus noise; a dozer cares less). Finally, when the activity's hold runs out, it re-chooses. The decider scores every activity the slot offers, adds noise and a small penalty for repeating, and takes the best one.
@@ -69,7 +69,7 @@ A `SmartObject` has a `kind`, a `tag` and `slots` (each with `mates`, the neighb
 | `seat` | Her saloon: benches of two, 12 per side | sit, sitLook, phone, read, doze, yawn, sitChat (needs a neighbour) |
 | `queue` | The gangway gate at each terminal: 12 spots in pairs | wait, lookAround, phoneCall, talk / listen / laugh / shrug (need a neighbour) |
 | `rail` | Her sun deck rail, per side | lookOut, wait, lookAround, phoneCall, and the chat set with the next place along |
-| `spot` | Hook: standing chat spots | the standing set |
+| `spot` | Hook: standing chat spots (the beach lane) | the standing set |
 
 Chats need turn-taking: `talk` scores low when the mate is talking, and `listen` scores high. People in a chat look at their mate's head.
 
@@ -80,11 +80,6 @@ Chats need turn-taking: `talk` scores low when the mate is talking, and `listen`
 ## Lines and bubbles
 
 `Lines.js` has these contexts: `greet`, `greet-again`, `chat`, `squeeze`, `squeeze-again`, `bird-shoulder`, `bird`, `horn`, `jetski`, `running`, `car`. Each context has lines per archetype, and `any` as the fallback. `line()` avoids the person's last four lines.
-
-Keeping it rare:
-- Per person: a line only when the reaction's dice allow it, then a cool-down of 14 to 28 s × (1.4 − chat).
-- Global: at most 2 bubbles on screen, a 2.2 s gap between any two, and only people within 24 m of the camera.
-- A bubble stays 2.4 s plus 45 ms per character, then fades out over 220 ms.
 
 ## Detail by distance
 
@@ -99,17 +94,6 @@ The hub sets `p.lod` from the camera distance:
 `app.people.state().cpu` gives `ms` (the average per frame: the hub plus what owners `charge()`, which for Crowd.update means routes, animation and pose), `peak` (the last 2 s) and `hub` (the hub alone).
 
 ## Bumps (step 2)
-
-- **Bodies**: `Player.update` calls `app.people.contact.player( player, dt, deck )` after the walker moves (walk mode, and her decks through FerryDeck, where `deck.local` is pushed too). The walker is pushed out of each person's capsule (0.3 + 0.27 m; seated, 0.28 m round their knees). The player's own boat deck (`deck` mode) is not wired: nobody boards it, and it keeps its own deck-local position.
-- **Grades** (approach speed, measured in her frame aboard; bumps round 2026-09-27): under 1 m/s a nudge (sidestep, turn, "oh, sorry"); from 1 m/s a shove, the `stagger` (a 1D knock along the normal, player 75 kg against 72, a kid 35, restitution 0.2: they carry `vOut` off and stop it at 2.6 m/s2 over one or two steps back, 0.25 to 1.3 m, arms out, the upper body rocking, Pose.js `stepL` / `stepR`; your walker keeps only `vKeep` along the normal, so you stop against them); from 4 m/s on open ground a `tumble`, a real ragdoll (Tumble.js) with inherited body velocity and a contact-point impulse, then the keyed get-up, a laugh, a glare or a shrug and a `getup` line, and the fetch of whatever flew. Elderly go down only from a jog, 3.6 m/s (-0.4; a walk into them is a stagger, bumps round 2 2026-09-27), shy sooner (-0.3), larrikins later (+0.6). The ordinary bump policy still gives a kid the animated sit-down `fall`. Environmental reactions use a 35 kg articulated rig if that archetype is instantiated. A missing rig or a future population above 64 uses an explicitly counted capsule/animation fallback; it is not called an articulated ragdoll. Seated people flinch when you run past within 1.75 m (the benches keep you off their knees).
-- **Overboard** (the owner's scope change, 2026-09-27): a tumble on narrow footing where a step or two along the push is off their footing (`canStand` says no) and the sea is under it (her rail, a pier's edge) sends an adult over as a ragdoll with the deck's own velocity (a splash: `contact.splash` throws droplets, spray and mist on the island's `app.spray` and plays `app.audio.splash`, the big splash sample), then `k.sw`: tread water with a `dunked` line ("Oi!", "Ya drongo!", "Cold!"), swim at 1 m/s for the nearest dry land or low ramp (`groundAt( x, z, SEA + 0.6 )`, 24 bearings, 120 m), wade from 1.1 m deep, an `ashore` line and a glare or a shrug, then remain at the reached shore. There is no offscreen return across water. The ordinary bump policy permits at most `WET` (2) voluntary overboard reactions and excludes kids; that does not limit physical disaster exposure.
-- **Swimmer hook** (lifebuoy, liferaft): `contact.swimmers()` lists `{ p, at, target, state }` (`tread`, `swim`, `wade`, `out`); `contact.rescue( p, target )` sends one to a world point, where they tread water (`waiting`) until sent on again.
-- **Footing** (`p.footing()` from the owner): `narrow` (the gate queue, over the gangway, her rail) turns a fall or a tumble into a stagger unless it is overboard. Every step of a knock goes through the owner's `p.canStand( w, base )` (the sand: the same floor; the pier, the terminal and the hire stand: `contact.boards( w, base )`, a walkable plank within 0.35 m of theirs and no solid box across the way at knee height, so a shove moves them along the planks and stops them short of a rail, a bench or crates; aboard, never past her rail). Before round 2 the pier's fishers refused every step (0 of 8), so a shove there moved them 0 m.
-- **A fall**: the sit clip lowered 0.42 m with the knees up (Pose.js knock layer), up through `crouch_idle` and `crouch_out`, then a glare (`idle_angry_01`) if they keep away, a laugh if they are funny, else a shrug, and a `getup` or `spill` line. What they held flies off (Props.js) and they walk over, crouch and pick it up. Walkers wait rather than walk through someone on the ground.
-- **Memory**: `brain.bump( t, strength, event, at )` counts real bumps in `memory.bumped` and raises annoyance. The cooler sorts (warmth under 0.6) get `keepAway`: they step back from you within 2.4 m and greet you with `wary`.
-- **Cars**: every frame the rally car (driving or coasting) is checked against people near its line. Under 20 km/h they jump back, or fall if it is already on them; faster, an early dive from its speed and heading (1.3 s warning). Anyone still inside its footprint is put outside it at once. A line (`oi`), then `oi-after`.
-- **Clips**: the crowd build adds `idle_angry_01`, `crouch_idle`, and `crouch_in` / `crouch_out` (men only in Rocketbox; the women blend to the crouch).
-- **Bubbles**: a bump's line is urgent (past the cool-down, the gap and the two-on-screen cap). A bubble rides the owner's `head` point and stays in the frame under the HUD row for someone right in front of you.
 
 ## Articulated reactions and moving support
 
@@ -135,11 +119,23 @@ Swimmers query registered physical obstacles with their actual feet and a reduce
 
 Ordinary physical proof includes 144 actual animated contacts across eight crowd casts, three clips, three clip times and both 1/60 s and 0.1 s cadence. They require zero emergency interventions, connected anchors, transient joint-coordinate error below 5°, bounded complete energy and natural recovery. A separate eight-person fixture records 160 inter-person contacts and completes all get-ups with zero interventions; its maximum frame-split overlap is 0.069 m. Maintained tests are `test/articulated-contact.mjs`, `test/articulated-solver.mjs`, `test/articulated-mass.mjs`, `test/articulated-neighbors.mjs` and the existing `test/gameplay-people.mjs`. The normal simulation runner includes them. Actual-input vortex, sprint-contact and separated-gangway scenarios are in `test/browser/gameplay-people.spec.js`.
 
-`node test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with skeleton pose work and upload-copy transport. In the Node benchmark, the final three-second 120 m/s vortex workload averaged 13.28 ms per 1/60 s frame (p95 18.52 ms) after 30 warm-up frames, with zero emergency interventions or nonfinite states. Separate ordinary 3 m/s falls complete all 58 get-ups within 4.367 s; the inactive contact manager averages 0.000231 ms afterward. The active fixture has no inter-person contacts and excludes rendering, scene walls and normal animation/AI outside physical rigs. It is a bounded CPU fixture, not an FPS claim or a representative prolonged full-scene stress result.
+`node test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with skeleton pose work and upload-copy transport. On Apple M5 Max / Node 22.14.0, the final three-second 120 m/s vortex workload averaged 13.28 ms per 1/60 s frame (p95 18.52 ms) after 30 warm-up frames, with zero emergency interventions or nonfinite states. Separate ordinary 3 m/s falls complete all 58 get-ups within 4.367 s; the inactive contact manager averages 0.000231 ms afterward. The active fixture has no inter-person contacts and excludes rendering, scene walls and normal animation/AI outside physical rigs. It is a bounded CPU fixture, not an FPS claim or a representative prolonged full-scene stress result.
 
 The full-scene stress captures show substantially worse cost and reduced fidelity. A retained 120 m/s vortex UI run advanced 13.1 simulation seconds and recorded maximum segment spin 93.2685 rad/s plus nine protective interventions removing 129,946.54 J; the video remains visibly choppy. The latest 3,000 m wave capture advanced 13.0332 simulation seconds with 45 loaded people and at most 26 simultaneously physical. It recorded 1,285 interventions removing 306,910,367.67 J and maximum segment spin 275.5467 rad/s. The recording averaged only 1.073 engine frames/s (185 frames over 172.38 wall seconds).
 
 That 3,000 m run recorded zero nonfinite states, omitted accepted simulation time or physical-advance bound violations. Those checks establish bounded execution, not real-time performance or faithful extreme trajectories. The protected velocity reductions materially alter motion, and consuming each accepted simulation interval does not mean keeping pace with wall time. Severe stress therefore remains limited in both performance and physical accuracy; the ordinary-contact and sparse CPU proofs must not be presented as resolving those limits.
+
+## Hooks for the next lanes
+
+- **After a bump**: a shy or elderly person sitting on a nearby bench after a fall needs bench smart objects ashore (the beach lane). Ordinary upright NPC avoidance remains authored. Active articulated NPCs now collide through their actual capsule segments; dropped hand props still use their authored arcs.
+- **Beach population**: a new owner registers people with `app.people.add( p, { archetype } )`, keeps `world`, `yaw`, `posture` and `head` current, and adds `spot` and bench smart objects. Kids need child avatars and `weight` > 0.
+- **E to chat**: the brain's memory (`friendly`, `ignored`, `annoyed`) and its mood give the opening line. Use the `chat` context and `bus.on`.
+- **Life moments** (for example "oh no, I missed the ferry"): subscribe with `bus.on( 'horn', ... )` or read the ferry service's phase, set an activity or gesture, and `hub.say()` a new context.
+
+## Forks and known gaps
+
+- Drivers' `path` and `out` are still one array, as before, so a driver vanishes from their seat at the far berth instead of walking back down (Crowd.js `spawnDriver`). This is kept on purpose; fixing it changes the service's timing.
+- Perception has no sight lines: a bird over the saloon roof is "near" people inside.
 
 ## The beach (step 3)
 
@@ -175,13 +171,11 @@ That 3,000 m run recorded zero nonfinite states, omitted accepted simulation tim
 - The reader at the x = 29 camp has put her book down: the `book` GLB lies open on the sand beside her
   (`bookDown`), so she holds nothing.
 
-## Beach behaviour
-
 - Bodies: `Beach.plan()` runs once after `layout()` and promises each crowd slot a cast (three bodies a cast) that no slot within `NEIGHBOUR` (6 m) already has; `fill()` places a body only in a slot promised its cast, so the casts can load in any order without twins side by side. `fill( true )` after the last cast takes whatever is left, still preferring a body no neighbour wears.
 - Speech bubbles fade in over 90 ms (readable at once) and out over 220 ms, with a soft text shadow for bright sand behind the glass.
 - See-through people (Fade.js) verified in game: `people.occlude( a, b )` with a line through a standing person eases their fade to 0.85 in about 0.3 s and the dither shows. A prop held in the hand (the batter's bat) does not fade with its holder yet.
 
-## Bubbles, sitters, fades and the tin
+## Bubbles, sitters, fades and the tin (people-fix round)
 
 - **Bubbles keep clear of the HUD** (Speech.js `place`). Every visible `.tw-glass` box (the minimap `gm-map`, the icon rail `tw-rail`, the purse `gm-purse`, the prompts and keys `tw-prompt`) is read from the DOM twice a second and on each new bubble; boxes over 30% of the screen (menus) are skipped. A bubble whose head sits under a panel is hidden; one that would overlap a panel moves the smallest way clear (left, right or up, 8 px gap, at most 150 px) and its tail (`--pp-tail`) still points at the head. The top pills are not `.tw-glass`: the `TOP` clamp (110 px) keeps bubbles under them.
 - **Sand sitters sit on the sand** (Beach.js `seat`). The chair-sit clips hold the pelvis at chair height, and a fixed 0.42 m drop left the casts with higher hips (the women, about 0.19 m pelvis bone to sand) sitting on air. The drop now puts the pelvis bone `SAND.seat` (0.15 m) above the floor sampled under the pelvis itself, from last frame's pose; mid-blend or with no pelvis bone the fixed drop stands. Clamped to 0.3 to 0.6 m.

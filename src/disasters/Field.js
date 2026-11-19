@@ -1,8 +1,10 @@
 import { GRAVITY, AIR_DENSITY, SEA_WATER_DENSITY, quadraticDrag, buoyancy as lift } from '../physics/Loads.js';
 import { WaterGrid, nWaveEta, nWaveSpeed } from './WaterGrid.js';
+import { WaterGridGPU } from './WaterGridGPU.js';
 import { mulberry32 } from '../util/Noise.js';
 import { freshSeed } from './EventRandom.js';
-import { tornadoMotion } from './TornadoMotion.js'; // tornado motion block only
+import { tornadoMotion } from './TornadoMotion.js';
+import { HU_CHILD } from '../people/FloodHazard.js';
 export const DEFAULTS = Object.freeze({earthquake:{intensity:0.7,radius:160,duration:25,speed:180,frequency:2,width:55,direction:0,x:40,z:-115},tsunami:{warningLead:90,intensity:10,radius:220,duration:60,speed:18,frequency:2,width:55,direction:-90,x:40,z:-25},tornado:{intensity:65,radius:100,duration:60,speed:3,frequency:2,width:55,direction:0,x:40,z:-115}});
 export const LIMITS = {intensity:{earthquake:[0.05,2],tsunami:[0.5,3000],tornado:[5,120]},warningLead:[3,300],radius:[20,400],duration:[3,180],speed:{earthquake:[60,600],tsunami:[3,50],tornado:[0,15]},frequency:[0.2,8],width:[15,160],direction:[-180,180],x:[-950,950],z:[-950,950]};
 export const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -55,7 +57,7 @@ function sweepsSea(terrain,c) {
 // Crest celerity c = sqrt( g ( d + H ) ) over still depth d. The warning countdown is that travel
 // time from the source to the shoreline, integrated along the approach ray.
 const G=9.81; // m/s^2
-const APPROACH_TIME=75; // s: game choice inside the 60–120 s approach band
+const APPROACH_TIME=75;
 const APPROACH_STEP=4; // m: half a grid cell
 const MIN_LAUNCH=120; // m: the old fixed distance, kept as the floor near the grid edge
 const SPONGE=8*OUTER_GRID.dx; // m: the outer grid's absorbing edge band (8 cells)
@@ -67,23 +69,9 @@ function distanceToEdge(x,z,dx,dz,half=OUTER_HALF) {
  const tz=dz>0?(half-z)/dz:dz<0?(-half-z)/dz:Infinity;
  return Math.max(0,Math.min(tx,tz));
 }
-// Crest speed (m/s) of height H over still depth d, in two regimes, both checked against the solver on the
-// real island (test/tsunami-approach.mjs):
-// - Below the breaking limit, H < 0.78 d (McCowan 1894), the crest is a long wave: c = sqrt( g ( d + H ) ).
-//   The 2 m surge crest reached the 3 m gauges 2.5-10% inside that prediction.
-// - At or above it the front is a bore of the full height (the solver keeps it: 6.4 m of crest over the
-//   6.3 m gauge for the 10 m wave): Stoker's (1957) bore celerity sqrt( g ( d + H ) ( 2 d + H ) / ( 2 d ) ),
-//   held to the dam-break front 2 sqrt( g ( d + H ) ) (Ritter 1892) as d goes to 0. Both are at least
-//   sqrt( g H ), so a wall far taller than the water (the 3000 m preset) is never slower than that.
-// Was: Stoker with a depth-limited height min( H, 0.78 d ) everywhere. The 10 m countdown ran 20% late on
-// the -60 shelf and the 2 m ones 11-14% early.
-// - A wall fed from beyond the ring (sustained, e.farField) is a bore with its supply behind it, so it keeps
-//   Stoker's speed at any height: the dam-break cap is the front of a reservoir at rest, which a hump launched
-//   at rest becomes. Capped, the 3000 m wall (348 m/s over 90 m of sea, Stoker 732 m/s) carried too little
-//   momentum for its height and slumped to 1430 m within 3 s of the hand-off.
 const BREAKING=0.78; // McCowan breaking limit, H / d
 function crestCelerity(d,H,sustained=false) {
- if(H<BREAKING*d)return Math.sqrt(G*(d+H));
+ if(H<BREAKING*d)return 3*Math.sqrt(G*(d+H))-2*Math.sqrt(G*d);
  const stoker=Math.sqrt(G*(d+H)*(2*d+H)/(2*d));
  return sustained?stoker:Math.min(stoker,2*Math.sqrt(G*(d+H)));
 }
@@ -159,9 +147,9 @@ function arrivalField(terrain,H,tx,tz,sustained=false) {
  return time;
 }
 const AZIMUTH_SPREAD=8; // deg either side of the chosen direction: a source region, not a point
-const APPROACH_BAND=Object.freeze([60,90]); // s of long-wave travel to the source, inside the 60–120 s approach band
+const APPROACH_BAND=Object.freeze([60,90]);
 const CREST_WIDTH_BAND=Object.freeze([1,1.4]); // x the crest width (wavelength); 1 keeps the 6-cell floor
-const DRAWDOWN_BAND=Object.freeze([0.45,0.6]); // trough depth / H: approximately half the crest height
+const DRAWDOWN_BAND=Object.freeze([0.45,0.6]);
 const TROUGH_LEAD_BAND=Object.freeze([2,2.5]); // crest widths from crest to trough centre (was 2.2 fixed)
 const FAR_FIELD_BAND=Object.freeze([25,30]); // s of approach from beyond the ring before the hand-off
 // The wall's crest is a long wave: it stays at H for LONG_WAVE x its water depth behind the front, then falls
@@ -171,6 +159,49 @@ const FAR_FIELD_BAND=Object.freeze([25,30]); // s of approach from beyond the ri
 // 3000 m over 90 m of sea, 62 km at Stoker's 732 m/s, 84 s; 320 m, 8.2 km at 106 m/s, 77 s.
 const LONG_WAVE=20;
 const EARTH_RADIUS=6.371e6; // m, mean
+// How a tsunami ends (docs/disasters.md "How a tsunami ends"). Never on a timer and never by deleting water: after the
+// incoming train (Duration s from the first crest, plan.trainEnd) the event runs until the land is safe and the open sea
+// has settled, judged on the solver's own state (WaterGrid.drainStats, both grids): no land water outside a pond carries
+// a discharge h |u| at or over the child knock line (FloodHazard HU_CHILD 0.4 m2/s, the lowest line the game knocks
+// anyone at), and no wet cell of the open sea stands SEA_SETTLED or more off datum, so its swash cannot either. Pond
+// water (at or under its hollow's spill level, WaterGrid spillLevels) cannot reach the sea, so its slosh never holds the
+// drain open. Held for DRAIN_HOLD so one quiet frame between two surges does not end it: the bay rings for ten to twenty
+// minutes after a large wave, and its reflection puts water back on land minutes after the first backwash. Then the calm
+// hand-back: standing water on land soaks in, paced from the deepest water left, and every cell at or under datum
+// returns to its still level with its surface moving at most CALM_FALL (WaterGrid.calmCell), until no land cell holds
+// water (the 2 mm packed wet line) and no cell at or under datum is CALM_SEA off datum; then the grids drop and nothing
+// the player sees or a hull feels moves by more than that.
+const DRAIN_HOLD=2; // s
+// m: the open sea has settled when no wet cell of it stands this far off datum. A swash of amplitude a runs up a beach
+// about a deep at its bore speed sqrt( g a ), so it carries q = a sqrt( g a ) per metre of shore, under HU_CHILD while
+// a < ( HU_CHILD^2 / g )^( 1 / 3 ) = 0.254 m (the critical depth of a 0.4 m2/s flow). The island's own rows agree
+// (docs/disasters.md "How a tsunami ends": the land flow outside ponds stays under the line once the open sea is under it).
+const SEA_SETTLED=0.25;
+// s after the train: the drain's only bound, so a solver that never settles cannot keep an event alive for ever. A
+// capped drain is not cut: the hand-back starts and runs as it would. Measured on the island (no drain, no hand-back):
+// the drain holds 610-612 s after the train for 2 m (seeds 1 and 7), 882-888 s for 5 m (seeds 1-3) and 962 s for 10 m
+// (seed 1, 1,022 s after arrival); 1,200 s is four minutes past the slowest. Reaching it at 2 m or 10 m is a defect
+// (test/tsunami-drain.mjs); at 25 m a lake left perched on land drains over its rim for longer (docs/disasters.md).
+const DRAIN_LIMIT=1200;
+// The hand-back. Land water soaks in at a rate set each frame from the deepest water left (Field.tsunamiOver), so it is
+// gone CALM_TIME after the hand-back began: the deepest depth over the time left, never under CALM_SOAK or over
+// SOAK_MAX, and SOAK_MAX once the time is up (water that runs in late). The ratio stays the first frame's to the end, so
+// a pond up to SOAK_MAX x CALM_TIME = 12 m deep is gone on time. (With a 20 s floor on the time left, the last 20 s
+// decayed instead of closing: a 6.5 m pond took 126 s and an 8.2 m one 131 s.)
+const CALM_TIME=120; // s
+// m/s: about 700 x the saturated conductivity of sand (5.8e-5 m/s, Rawls, Brakensiek and Saxton 1982), a declared
+// compression, as real ponds behind a tsunami stand for hours. The floor: a 0.6 m pond soaks in within 15 s.
+const CALM_SOAK=0.04;
+// m/s: the fastest the hand-back lowers any surface. 2.4 cm per 0.24 s ring step, 1 cm per 0.1 s village step: under the
+// 5 cm a player may see the water move between two frames (test/tsunami-drain.mjs). A 6.5 m pond paces at 0.054 m/s.
+const SOAK_MAX=0.1;
+const CALM_FALL=SOAK_MAX; // m/s: the cap on a sea or basin cell's change per second in the hand-back (WaterGrid.calmCell)
+const CALM_RATE=0.5; // 1/s: the sea's leftover slosh decays e-fold in 2 s (declared)
+// s: a hand-back still running this long after it began is late, a defect (e.endedBy 'limit'): 20 s past the soak's plan,
+// time for the sea's last settle (seconds at CALM_RATE) and a basin left high draining at CALM_FALL. It is never cut:
+// the soak floor empties the land in finite time once the sea is at rest.
+const CALM_LIMIT=CALM_TIME+20;
+const CALM_SEA=0.01; // m: the departure from datum the hand-back leaves on any cell at or under datum when the grids drop
 // A fresh 32-bit seed: EventRandom.freshSeed, the one draw every event uses (re-exported for old callers).
 export { freshSeed };
 // The tsunami's start-up plan, without building any water grid (the panel's arrival readout uses it).
@@ -184,7 +215,7 @@ export function planApproach(terrain,config={}) {
  const random=mulberry32(seed),band=range=>range[0]+(range[1]-range[0])*random();
  const direction=c.direction+(2*random()-1)*AZIMUTH_SPREAD; // deg: the wave's actual heading
  const approachTime=band(APPROACH_BAND),widthScale=band(CREST_WIDTH_BAND);
- const drawdown=band(DRAWDOWN_BAND),troughLead=band(TROUGH_LEAD_BAND),farTime=band(FAR_FIELD_BAND); // preserve draw order for deterministic seeded replays
+ const drawdown=band(DRAWDOWN_BAND),troughLead=band(TROUGH_LEAD_BAND),farTime=band(FAR_FIELD_BAND);
  const plan={seed,requestedDirection:c.direction,direction,warning:c.warningLead};
  const H=c.intensity,a=direction*Math.PI/180,cx=Math.cos(a),cz=Math.sin(a);
  // Crest Gaussian width (m) of the front. The Advanced width is the floor; very high walls get a front at least
@@ -203,6 +234,7 @@ export function planApproach(terrain,config={}) {
  const cell=v=>Math.round((v+OUTER_HALF)/OUTER_GRID.dx)*OUTER_GRID.dx-OUTER_HALF; // m: nearest cell centre
  let shore=0;
  while(shore<room&&(terrain(c.x-cx*shore,c.z-cz*shore)>-MIN_TRAVEL_DEPTH||terrain(cell(c.x-cx*shore),cell(c.z-cz*shore))>=0))shore+=APPROACH_STEP;
+ plan.shoreDistance=shore; // m out from the target: the village shoreline, the coast watch's seaward edge
  let time=arrivalField(terrain,H,c.x-cx*shore,c.z-cz*shore);
  // Least arrival time over each source line, binned by its distance s back from the target (m). A line
  // holds the cells within half a cell of s, as the solver's plane crest does.
@@ -228,13 +260,6 @@ export function planApproach(terrain,config={}) {
  const rayTime=s=>time[Math.round((c.z-cz*s+OUTER_HALF)/dx)*n+Math.round((c.x-cx*s+OUTER_HALF)/dx)]??Infinity;
  let s=shore;
  while(s+APPROACH_STEP<=room&&!(rayTime(s)>=approachTime&&rayTime(s)<Infinity&&lineTime(s)>=approachTime&&lineTime(s)<Infinity))s+=APPROACH_STEP;
- // Land behind the sea approach (Joey Island behind the village bay) is crossed: the front is far
- // wider than the island and wraps round it, so the source sits in the open sea beyond.
- // The crest may not start on a shoal or the far side of a beach: it moves on into open water.
- // Only the crest must: a real trough is tens of km long and a bay far smaller than it drains as a whole,
- // so the trough may start in the bay. Moving it beyond Joey Island left 0.165 H of drawdown in the lee.
- // A sea shallower than that all the way to the grid edge keeps the spot where the travel time was met:
- // walking on to the edge gave a flat 2 m sea a 154 s countdown, outside the 60–120 s approach band.
  let deep=s;
  while(deep+APPROACH_STEP<=room&&terrain(c.x-cx*deep,c.z-cz*deep)>-MIN_SOURCE_DEPTH)deep+=APPROACH_STEP;
  if(terrain(c.x-cx*deep,c.z-cz*deep)<=-MIN_SOURCE_DEPTH)s=deep;
@@ -281,6 +306,8 @@ export function planApproach(terrain,config={}) {
  }
  plan.troughLead=Math.max(plan.troughLead,Math.min((overrun+2*plan.crestWidth)/plan.crestWidth,(plan.launchDistance-shore)/plan.crestWidth-2));
  plan.arrival=plan.warning+plan.approach;
+ // The incoming train lasts Duration from the first crest; the drain is judged from then on (DisasterField.tsunamiOver).
+ plan.trainEnd=plan.arrival+c.duration;
  return plan;
 }
 // Scratch for DisasterField.acceleration: it runs per body per frame (305 bodies made 13-16 minor GCs per 1500
@@ -307,17 +334,74 @@ export class DisasterField {
   // A tsunami also runs the outer ring, and the inner grid nests in it.
   if(kind==='tsunami'&&!this.outer){this.outer=new WaterGrid(this.terrain,OUTER_GRID);this.water?.nestIn(this.outer);}
   if(needsWater&&!this.water)this.water=new WaterGrid(this.terrain,{...WATER_GRID,parent:this.outer??null});
-  if(kind==='tsunami'){const e=this.events.get(kind);e.launched=false;Object.assign(e,planApproach(this.terrain,c));}return this.events.get(kind);}
- // A tsunami runs its warning, its approach to the shore, then `duration` of flooding.
- endTime(e){return e.kind==='tsunami'?e.warning+(e.approach??0)+e.duration:e.duration;}
- stop(){this.events.clear();this.water=null;this.outer=null;}
+  if(kind==='tornado')this.detachGPU();else this.attachGPU();
+  if(kind==='tsunami'){const e=this.events.get(kind);e.launched=false;Object.assign(e,planApproach(this.terrain,c));
+   // The hand-back's settings, one object per event shared by both grids (tsunamiOver paces calm.soak each frame). A
+   // tsunami started over another's hand-back takes the grids as they are, with nothing calming them until its own.
+   // (Only a grid that is calming is written: the panel's planner runs start() on frozen stand-in grids, TsunamiPanel.)
+   e.calm={rate:CALM_RATE,soak:CALM_SOAK,fall:CALM_FALL};if(this.water.calm)this.water.calm=null;if(this.outer.calm)this.outer.calm=null;}
+  return this.events.get(kind);}
+ // The latest a tsunami that settles lasts (s): DRAIN_LIMIT after its train and CALM_LIMIT of hand-back (tsunamiOver; it
+ // is not a cut, and a late one ends with endedBy 'limit'). The earthquake and the tornado last `duration`.
+ endTime(e){return e.kind==='tsunami'?(e.trainEnd??e.warning+(e.approach??0)+e.duration)+DRAIN_LIMIT+CALM_LIMIT:e.duration;}
+ stop(){this.detachGPU();this.events.clear();this.water=null;this.outer=null;}
+ attachGPU(){
+  const device=this.device;if(this.gpuWater||!device||this.gpuLost||!this.water||this.events.has('tornado'))return;
+  if(!this.lostHooked){this.lostHooked=true;device.lost?.then(()=>{this.gpuLost=true;this.detachGPU();});}
+  this.gpuOuter=this.outer?new WaterGridGPU(device,this.outer):null;
+  this.gpuWater=new WaterGridGPU(device,this.water,{parent:this.gpuOuter});
+ }
+ detachGPU(){this.gpuWater?.destroy();this.gpuOuter?.destroy();this.gpuWater=null;this.gpuOuter=null;}
+ // A host write (launch, impulse) goes up to the GPU state. After a launch the wrapper's unspent lag is dropped as
+ // the host's is (WaterGrid.launch: the calm sea's lag replayed on the launched wave moved the 3000 m face 97-161 m).
+ uploadGPU(launched){for(const g of [this.gpuOuter,this.gpuWater]){if(!g)continue;if(launched){g.grid.time+=g.lag;g.lag=0;}g.upload();}}
  reset(){this.stop();this.time=0;this.paused=false;}
- // e.coastReached ("Coastal flooding detected", the evacuation route) means the bore is ashore at the coast the
- // warning names: land within the event's radius (m) of the target (coastWatch, WaterGrid.landWithin, built at launch).
- // Was any wet land in the grid: the plane crest's source line lies off other shores (Surge 2 m seed 7: the north
- // bay mouth, 900 m from the village) and their 0.1-0.3 m of run-up 0.2 s after launch flagged the coast with the
- // crest 97 s out (the surge regression, test/tsunami-coast.mjs). A target with no land in its radius watches the grid.
- advance(dt){if(this.paused||!this.events.size||!Number.isFinite(dt)||dt<=0)return;dt=Math.min(dt,0.1);this.time+=dt;for(const [k,e] of this.events){e.time+=dt;if(k==='tsunami'&&e.time>=(e.launchTime??e.warning)&&!e.launched){this.outer?.launch(e);this.water.launch(e);this.coastWatch=this.water.landWithin(e.x,e.z,e.radius);e.launched=true;}if(e.time>=this.endTime(e)){this.events.delete(k);}}if(this.water){if(!this.events.has('tsunami')&&!this.events.has('tornado')){this.water=null;this.outer=null;return;}this.applySurfaceWind();this.outer?.advance(dt);this.water.advance(dt);const e=this.events.get('tsunami');if(e?.launched&&!e.coastReached&&(this.coastWatch.length?this.water.floods(this.coastWatch):this.water.stats.inundatedArea>0)){e.coastReached=true;e.firstImpact=e.time;}}}
+ // True when the tsunami is over (see DRAIN_HOLD above). Sets e.drainEnd (s: the drain held, or DRAIN_LIMIT came),
+ // e.drainCapped (the limit, not the water, ended the drain: a defect at 2 m and 10 m), e.heldOpen (what held a capped
+ // drain open), e.calmFrom (s) and, at the end, e.endedBy: 'drained' when the drain held on the water and the hand-back
+ // finished within CALM_LIMIT, 'limit' when the drain was capped or the hand-back ran late. Neither bound cuts anything:
+ // a capped drain starts the hand-back, and the hand-back runs until its water is gone. A tornado on the same grid
+ // changes none of it (its wind acts on the CPU grid through the hand-back, and the grid stays for it after). With the
+ // GPU solver the stats are the last readback (one or two frames old): the hand-back only removes water, so a late read
+ // never ends it early. No allocation per frame: the grids' stats are read in place and e.calm is the event's own.
+ tsunamiOver(e,dt){
+  const w=this.water,o=this.outer;
+  if(!w)return true;
+  const a=w.stats,b=o?o.stats:a;
+  if(e.calmFrom===undefined){
+   if(!e.launched||e.time<e.trainEnd)return false;
+   const safe=a.landFlow<HU_CHILD&&b.landFlow<HU_CHILD&&a.seaOff<SEA_SETTLED&&b.seaOff<SEA_SETTLED;
+   e.drainedFor=safe?(e.drainedFor??0)+dt:0;
+   if(e.drainedFor<DRAIN_HOLD&&e.time<e.trainEnd+DRAIN_LIMIT)return false;
+   e.drainEnd=e.time;
+   e.drainCapped=e.drainedFor<DRAIN_HOLD;
+   if(e.drainCapped)e.heldOpen=this.heldOpen();
+   e.calmFrom=e.time;
+   w.calm=e.calm;
+   if(o)o.calm=e.calm;
+  }
+  // The hand-back: the soak is paced so the deepest water left is gone CALM_TIME after it began.
+  const left=e.calmFrom+CALM_TIME-e.time;
+  e.calm.soak=left>0?Math.min(SOAK_MAX,Math.max(CALM_SOAK,Math.max(a.landDeep,b.landDeep)/left)):SOAK_MAX;
+  if(a.landWet>0||b.landWet>0||a.restOff>CALM_SEA||b.restOff>CALM_SEA)return false;
+  w.calm=null;
+  if(o)o.calm=null;
+  e.endedBy=e.drainCapped||e.time>e.calmFrom+CALM_LIMIT?'limit':'drained';
+  return true;
+ }
+ // What held a capped drain open (e.heldOpen, test/tsunami-drain.mjs logs it), per grid: the open sea's largest
+ // departure from datum (m), the largest land discharge outside ponds (m2/s) and the cell carrying it (x, z m; depth,
+ // ground and spill level m). Built once, when the bound fires.
+ heldOpen(){
+  const out=[];
+  for(const g of [this.water,this.outer]){
+   if(!g)continue;
+   const s=g.stats,k=s.landFlowCell;
+   out.push({grid:g===this.water?'village':'ring',sea:s.seaOff,flow:s.landFlow,cell:k<0?null:{x:g.x+(k%g.n)*g.dx,z:g.z+Math.floor(k/g.n)*g.dx,depth:g.h[k],ground:g.bed[k],spill:g.spill[k]}});
+  }
+  return out;
+ }
+ advance(dt){if(this.paused||!this.events.size||!Number.isFinite(dt)||dt<=0)return;dt=Math.min(dt,0.1);this.time+=dt;for(const [k,e] of this.events){e.time+=dt;if(k==='tsunami'&&e.time>=(e.launchTime??e.warning)&&!e.launched){this.outer?.launch(e);this.water.launch(e);this.uploadGPU(true);this.coastWatch=this.water.landWithin(e.x,e.z,e.radius,e.direction,(e.shoreDistance??Infinity)+this.water.dx);e.launched=true;}if(k==='tsunami'?this.tsunamiOver(e,dt):e.time>=this.endTime(e)){this.events.delete(k);}}if(this.water){if(!this.events.has('tsunami')&&!this.events.has('tornado')){this.detachGPU();this.water=null;this.outer=null;return;}if(this.gpuWater){this.gpuOuter?.advance(dt);this.gpuWater.advance(dt);}else{this.applySurfaceWind();this.outer?.advance(dt);this.water.advance(dt);}const e=this.events.get('tsunami');if(e?.launched&&!e.coastReached&&(this.coastWatch.length?this.water.floods(this.coastWatch):this.water.stats.inundatedArea>0)){e.coastReached=true;e.firstImpact=e.time;}}}
  applySurfaceWind(){
   const grid=this.water;if(!grid)return;const n=grid.n,ambient=this.ambient?.()??{x:0,z:0};grid.wind??={x:new Float32Array(n*n),z:new Float32Array(n*n)};grid.wind.x.fill(ambient.x);grid.wind.z.fill(ambient.z);
   const e=this.events.get('tornado');if(e){const c=this.center(e),env=this.envelope(e),core=e.radius*.18,I=this.tornadoIntensity(e);
@@ -332,10 +416,6 @@ export class DisasterField {
  }
  envelope(e){return smooth(e.time/1.2)*smooth((this.endTime(e)-e.time)/2);}
  center(e){const a=e.direction*Math.PI/180,travel=e.kind==='tornado'?e.time*e.speed:0;if(e.kind==='tornado'){const m=this.tornadoMotion(e);return {x:e.x+Math.cos(a)*travel+m.cx,z:e.z+Math.sin(a)*travel+m.cz};}return {x:e.x+Math.cos(a)*travel,z:e.z+Math.sin(a)*travel};}
- // ---- Tornado track, intensity pulses and gusts (lane 2026-10-05) ----
- // The only tornado-motion code in this file; the rest of Field.js belongs to the water lane.
- // Each tornado takes a fresh seed, so its track wanders, its speed changes and its wind
- // pulses and gusts differently every run; the model and its sources are in TornadoMotion.js.
  tornadoMotion(e){return tornadoMotion(e);}
  tornadoIntensity(e){const m=this.tornadoMotion(e);return e.intensity*m.factor;}
  // ---- end of the tornado motion block ----
@@ -364,7 +444,7 @@ export class DisasterField {
  farCrest(e){return e.launchDistance+e.farField.speed*(e.launchTime-e.time);}
  // The inner grid where it covers (x, z), else the outer ring (the approach), else none.
  gridAt(x,z){const w=this.water;return w&&this.outer&&!w.contains(x,z)?this.outer:w;}
- addImpulse(x,z,radius,strength){return this.water?.addImpulse(x,z,radius,strength)??false;}
+ addImpulse(x,z,radius,strength){const ok=this.water?.addImpulse(x,z,radius,strength)??false;if(ok)this.uploadGPU(false);return ok;}
  sampleRaw(x,y,z,out={}) {
   out.ax=out.ay=out.az=out.wx=out.wy=out.wz=out.ux=out.uz=out.height=out.shake=0;
   if(!Number.isFinite(x+y+z))return out;
@@ -385,7 +465,6 @@ export class DisasterField {
   }
   const grid=this.gridAt(x,z);
   if(grid){const w=grid.sample(x,z,this.waterScratch??={});out.height=w.height;out.ux=w.ux;out.uz=w.uz;}
-  // The wall coming in from beyond the ring: its water over the solver's still sea.
   if(this.farFieldAt(x,z,this.farScratch??={})){out.height+=this.farScratch.height;out.ux+=this.farScratch.ux;out.uz+=this.farScratch.uz;}
   return out;
  }

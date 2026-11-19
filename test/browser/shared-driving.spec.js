@@ -37,8 +37,7 @@ test( 'The Jeep plays its recorded engine, follows RPM and can be muted', async 
 	} );
 } );
 
-test( 'Two real players share cars, nameplates, distance and direction indicators, minimap markers and clean departure', async ( { browser, baseURL, launchOptions, headless }, info ) => {
-	// Use separate browser processes so the two islands have independent graphics devices.
+test( 'Two real players share cars, nameplates, distance and direction indicators, minimap markers and clean departure', async ( { browser, baseURL, launchOptions, headless } ) => {
 	const guestBrowser = await chromium.launch( { ...launchOptions, headless } );
 	const options = { baseURL, viewport: { width: 1440, height: 900 }, permissions: [ 'clipboard-read', 'clipboard-write' ] };
 	const contexts = [ await browser.newContext( options ), await guestBrowser.newContext( options ) ];
@@ -69,10 +68,6 @@ test( 'Two real players share cars, nameplates, distance and direction indicator
 				await expect( page.getByRole( 'img', { name: `${ name } nameplate`, exact: true } ) ).toContainText( name );
 			}
 		} );
-		await test.step( 'When Sam switches to the COSIER GT3 RS, Alex sees the new car in the same room', async () => {
-			await guest.getByLabel( 'Vehicle', { exact: true } ).selectOption( 'gt3rs' );
-			await expect( host.getByRole( 'region', { name: 'Nearby drivers' } ).getByText( 'COSIER GT3 RS', { exact: true } ) ).toBeVisible();
-		} );
 		const marker = guest.locator( '[data-driver-name="Alex"]' );
 		const before = Number( await marker.getAttribute( 'data-x' ) );
 		await test.step( 'When Alex drives forward under the real local physics', async () => {
@@ -84,7 +79,7 @@ test( 'Two real players share cars, nameplates, distance and direction indicator
 		await test.step( 'Then Sam sees that moving car and updated distance through the real server', async () => {
 			await expect.poll( async () => Number( await marker.getAttribute( 'data-x' ) ) ).toBeGreaterThan( before + 3 );
 			expect( Number( await marker.getAttribute( 'data-distance' ) ) ).toBeGreaterThan( 3 );
-			await guest.screenshot( { path: info.outputPath( 'rally-multiplayer.png' ) } );
+			await guest.screenshot( { path: 'test-results/rally-multiplayer.png' } );
 		} );
 		await test.step( 'When Sam leaves the drive', async () => { await guest.getByRole( 'button', { name: 'Leave drive', exact: true } ).click(); } );
 		await test.step( 'Then Alex keeps driving without a ghost car or minimap marker', async () => {

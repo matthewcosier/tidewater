@@ -254,10 +254,11 @@ export class FishSchools {
 		const F = this.shoreField;
 		if ( F ) {
 
-			const i = Math.floor( ( x - F.origin ) / F.cellSize ), j = Math.floor( ( z - F.origin ) / F.cellSize );
-			if ( i >= 0 && j >= 0 && i < F.res && j < F.res ) {
+			// the field is a resX x resZ rectangle (ShoreField.js): origin and bound per axis, stride resX
+			const i = Math.floor( ( x - F.originX ) / F.cellSize ), j = Math.floor( ( z - F.originZ ) / F.cellSize );
+			if ( i >= 0 && j >= 0 && i < F.resX && j < F.resZ ) {
 
-				const k = ( j * F.res + i ) * 4;
+				const k = ( j * F.resX + i ) * 4;
 				e = Math.min( 1, Math.hypot( F.data[ k + 1 ], F.data[ k + 2 ] ) );
 
 			}

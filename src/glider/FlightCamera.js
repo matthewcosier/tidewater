@@ -5,6 +5,10 @@ const origin=new Vector3(),direction=new Vector3();
 const SUBJECT=[[0,0,0],[0,-.9,0],[-4.8,0,-1],[4.8,0,-1]];
 const limit=(value,max)=>Math.max(-max,Math.min(max,value));
 const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const CATCH_UP_SPEED = 40; // m/s: the bounded glide speed camera test 4 allows (< 45 m/s)
+const CATCH_UP_FREE = 8; // m: within this of the boom only the speed bound applies
+const CARRY_MAX = 50; // m per frame: more than any wing moves in one frame (a respawn)
+const CATCH_UP_RATE = 3; // 1/s: share of the remaining gap closed per second beyond CATCH_UP_FREE
 
 // Every candidate starts from the nominal 15 m chase boom. Corrections from the
 // preceding frame are never added again. Side views keep the suspended pilot
@@ -27,6 +31,13 @@ export function clearFlightCamera(eye,subject,terrain,colliders=null,quaternion=
  };
  const candidate=(angle,height,radius=15)=>new Vector3(subject[0]+Math.sin(nominal+angle)*radius,subject[1]+height,subject[2]+Math.cos(nominal+angle)*radius);
  if(options.reset){state.angle=home;state.height=5;state.radius=15;state.nominalClear=0;}
+ const last=state.subject;
+ if(last&&!options.reset&&dt>0){
+  const dx=subject[0]-last[0],dy=subject[1]-last[1],dz=subject[2]-last[2];
+  if(Number.isFinite(dx+dy+dz)&&Math.hypot(dx,dy,dz)<CARRY_MAX)eye.set(eye.x+dx,eye.y+dy,eye.z+dz);
+ }
+ state.subject=last||[0,0,0];
+ state.subject[0]=subject[0];state.subject[1]=subject[1];state.subject[2]=subject[2];
  const straight=candidate(home,5);
  state.nominalClear=clear(straight)&&clear(straight,true)?(state.nominalClear||0)+dt:0;
  const preferred=state.nominalClear>1.2?home:(state.angle??home),preferredHeight=state.nominalClear>1.2?5:(state.height??5);
@@ -58,14 +69,25 @@ export function clearFlightCamera(eye,subject,terrain,colliders=null,quaternion=
   if(chosen)break;
  }
  if(!chosen&&!options.reset&&dt>0){
-  // Search a local continuation when a narrow wall invalidates the straight
-  // interpolation. A safety correction may never jump across the aircraft.
-  const goal=goals[0]?.goal||candidate(preferred,5),limit=Math.min(1.1,Math.max(.12,dt*40)),near=[];
+  const goal=goals[0]?.goal||candidate(preferred,5),near=[];
+  const gap=eye.distanceTo( goal );
+  const limit=Math.max( .12, dt*CATCH_UP_SPEED, Math.max( 0, gap-CATCH_UP_FREE )*( 1-Math.exp( -dt*CATCH_UP_RATE ) ) );
   for(const scale of [0,.35,.7,1])for(const elevation of [-1,0,1])for(let k=0;k<12;k++){
    const theta=k*Math.PI/6,r=limit*scale/Math.sqrt(1+elevation*elevation),p=eye.clone().add(new Vector3(Math.sin(theta)*r,elevation*r,Math.cos(theta)*r));
    if(p.distanceTo(new Vector3(...subject))<23&&clear(p))near.push({p,cost:p.distanceToSquared(goal)+(clear(p,true)?0:100)});
   }
   near.sort((a,b)=>a.cost-b.cost);if(near.length)chosen=near[0].p;
+  if(!chosen){
+   // No clear continuation this frame: a stalled wing drifting back over the
+   // deck in a 7 m/s headwind hides its probes from every boom. Glide toward
+   // the best boom at the local-search step (40 m/s near the boom) instead of
+   // cutting across the aircraft (camera test 4 measured a 23 m cut in one
+   // 120 Hz frame, 2769 m/s, swinging side to side for 20 frames).
+   const toward=goal.clone().sub( eye );
+   const distance=toward.length();
+   chosen=distance>limit ? eye.clone().add( toward.multiplyScalar( limit/distance ) ) : goal.clone();
+   chosen.y=Math.max( chosen.y, terrain.heightAt( chosen.x, chosen.z )+2 );
+  }
  }
  if(!chosen){
   // Embedded terminal wrecks may have no view of every probe. Keep a finite

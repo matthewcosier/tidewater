@@ -20,20 +20,21 @@ async function capture(page,testInfo,name){
 function expectVisibleSwimmer(visual){
  expect(visual.avatar).toMatchObject({visible:true,view:'third',headHidden:false});
  const joints=visual.joints.filter(j=>/(Head|Neck|Spine2)$/.test(j.name));expect(joints).toHaveLength(3);
+ const seen=v=>v.blocked?visual.wingFade:1;
  for(const joint of joints){
-  expect(joint.blocked,`${joint.name} hidden by the actual sail`).toBe(false);
+  expect(seen(joint),`${joint.name} hidden by the actual sail (wing fade ${visual.wingFade})`).toBeGreaterThan(.7);
   expect(joint.screen.front).toBe(true);expect(Math.abs(joint.screen.x)).toBeLessThan(.85);expect(Math.abs(joint.screen.y)).toBeLessThan(.85);
   expect(joint.distance).toBeGreaterThan(2.3);expect(joint.distance).toBeLessThan(8.5);
  }
  for(const surface of visual.surfaces){
   expect(surface.samples.length).toBeGreaterThan(12);
-  const visible=surface.samples.filter(v=>!v.blocked&&v.screen.front&&Math.abs(v.screen.x)<.95&&Math.abs(v.screen.y)<.95);
-  expect(visible.length/surface.samples.length,`${surface.region} rendered surface obscured/cropped`).toBeGreaterThan(.7);
+  const visible=surface.samples.reduce((sum,v)=>sum+(v.screen.front&&Math.abs(v.screen.x)<.95&&Math.abs(v.screen.y)<.95?seen(v):0),0);
+  expect(visible/surface.samples.length,`${surface.region} rendered surface obscured/cropped (wing fade ${visual.wingFade})`).toBeGreaterThan(.7);
  }
 }
 
 test('Glider water recovery: a real banked ditch releases local swimming, the swim camera and reusable launch controls',async({page},testInfo)=>{
- const rows=[],errors=[];let ditched,swimming,entryFrames,continuousExposure;
+ const rows=[],errors=[];let ditched,floating,swimming,entryFrames,continuousExposure;
  page.on('pageerror',error=>errors.push(error.message));
  try{
   await test.step('Given a fresh real beach approach in a 7 m/s prevailing wind',async()=>{
@@ -63,8 +64,9 @@ test('Glider water recovery: a real banked ditch releases local swimming, the sw
    await expect(hud(page)).toContainText('Water contact');
    await capture(page,testInfo,'actual-water-contact');
   });
-  await test.step('When I leave the floating glider with X',async()=>{
-   const entry=watchSwimEntry(page);await page.keyboard.press('x');entryFrames=await entry;rows.push({entryFrames});
+  await test.step('When I leave the floating glider with E',async()=>{
+   floating=await observe(page);rows.push(floating);
+   const entry=watchSwimEntry(page);await page.keyboard.press('e');entryFrames=await entry;rows.push({entryFrames});
   });
   await test.step('Then I swim beside the actual ditch with an ordinary water-level camera',async()=>{
    expect(entryFrames).toHaveLength(8);
@@ -81,7 +83,9 @@ test('Glider water recovery: a real banked ditch releases local swimming, the sw
    await expect(page.locator('.tw-mode-text')).toHaveText('Swimming');
    swimming=await observe(page);rows.push(swimming);
    expect(swimming.active).toBe(false);expect(swimming.pilot).toBe(false);expect(swimming.grounded).toBe(false);
-   expect(Math.hypot(swimming.player[0]-ditched.aircraft[0],swimming.player[2]-ditched.aircraft[2])).toBeLessThan(6);
+   const fromWing=Math.hypot(swimming.player[0]-floating.aircraft[0],swimming.player[2]-floating.aircraft[2]);
+   expect(fromWing,'swimmer beside the floating wing tip').toBeGreaterThan(5.1);expect(fromWing).toBeLessThan(6);
+   expect(Math.hypot(floating.aircraft[0]-ditched.aircraft[0],floating.aircraft[2]-ditched.aircraft[2]),'the wing floats where it ditched').toBeLessThan(6);
    expect(swimming.water-swimming.bed).toBeGreaterThan(1.35);
    expect(swimming.thirdPerson).toBe(true);
    expect(Math.hypot(...swimming.camera.map((n,i)=>n-swimming.player[i]))).toBeLessThan(9);
@@ -136,14 +140,14 @@ test('Glider water recovery: a real banked ditch releases local swimming, the sw
    expect(longest,'the emerged head remained mostly obscured during the continuous swim/contact journey').toBeLessThan(.25);
    expect(longestWall,'the emerged head remained mostly obscured in real display time').toBeLessThan(.25);
   });
-  await test.step('Then the visible reset permits another normal launch and leaving that flight rescues to the swimming entry point',async()=>{
+  await test.step('Then the visible reset permits another normal launch and E on the run bails the pilot out beside the ramp',async()=>{
    await click(page,'Hang glider');await click(page,'Reset glider');await click(page,'Launch glider');
    await expect(hud(page)).toHaveAttribute('data-phase','running');
    const launched=await observe(page);expect(launched.aircraft[1]).toBeGreaterThan(300);expect(launched.mode).toBe('glider');
-   await page.keyboard.press('x');await expect(hud(page)).toBeHidden();
-   await expect.poll(async()=>(await observe(page)).mode).toBe('swim');
+   await page.keyboard.press('e');await expect(hud(page)).toBeHidden();
+   await expect.poll(async()=>(await observe(page)).mode).not.toBe('glider');
    const reused=await observe(page);rows.push(reused);
-   expect(Math.hypot(reused.player[0]-swimming.player[0],reused.player[2]-swimming.player[2])).toBeLessThan(3);
+   expect(Math.hypot(reused.player[0]-reused.aircraft[0],reused.player[2]-reused.aircraft[2])).toBeLessThan(6);
    expect(reused.active).toBe(false);expect(reused.pilot).toBe(false);expect(reused.thirdPerson).toBe(true);
    expect(errors).toEqual([]);
   });

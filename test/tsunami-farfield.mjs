@@ -1,4 +1,3 @@
-// The far-field solution approaches the nearshore simulation at the speed of a long wave.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TerrainData } from '../src/world/TerrainData.js';
@@ -21,8 +20,6 @@ test( 'Walls the ring cannot hold come in from beyond it for 25-30 s at their bo
 		const p = planApproach( ground, { ...DEFAULTS.tsunami, intensity: H, warningLead: 3, seed } );
 		const a = p.direction * Math.PI / 180, cx = Math.cos( a ), cz = Math.sin( a );
 		const sx = DEFAULTS.tsunami.x - cx * p.launchDistance, sz = DEFAULTS.tsunami.z - cz * p.launchDistance;
-		// The wall moves as a bore fed from beyond the ring, Stoker (1957), at any height (no longer held to
-		// the dam-break front of a reservoir at rest): 732 m/s for 3000 m over 90 m of sea, 106 m/s for 320 m.
 		const d = Math.max( 0.5, - ground( sx, sz ) ), dam = Math.sqrt( G * ( d + H ) * ( 2 * d + H ) / ( 2 * d ) );
 		const where = `H ${ H } m, seed ${ seed }`;
 		assert.ok( Math.abs( p.farField.length / ( 20 * ( d + H ) ) - 1 ) < 1e-9, `${ where }: crest ${ p.farField.length } m long, 20 water depths` );
@@ -60,12 +57,19 @@ function wallOnRay( field, e, near, far ) {
 	return { height, distance: at, face };
 }
 
-// Hand-off (seed, height): the last analytic frame against the first solver frame, then the solver's wall.
-// Measured under the initial conditions (seed 2, real island): 3000 m face 368 m/s over 3 s against 348; 320 m 125 m/s against 106,
-// its face slow for the first second while the hump settles. The 25% band holds both. Previously the crest slumped
-// (3000 m to about 1430 m in 3 s); with the current solver the ring's boundary feeds the wall's crest in for its whole length
-// at the bore's own speed and water speed, and test/tsunami-mega.mjs holds it to 85% of H to the coast.
-// Was, with the simple-wave launch: face 408 m/s; with a translating mass flux alone: 464 m/s.
+// The wall's face as the first point out from `near` (m from the target) where the water reaches `level` (m),
+// by the level crossing on 4 m samples: the front itself, whatever stands higher behind it.
+function faceOnRay( field, e, near, far, level ) {
+	const a = e.direction * Math.PI / 180, cx = Math.cos( a ), cz = Math.sin( a );
+	let below = field.waterAt( e.x - cx * near, e.z - cz * near );
+	for ( let s = near + 4; s <= far; s += 4 ) {
+		const h = field.waterAt( e.x - cx * s, e.z - cz * s );
+		if ( h >= level ) return { face: s - 4 + 4 * ( level - below ) / ( h - below ) };
+		below = h;
+	}
+	return { face: NaN };
+}
+
 const HANDOFF_SPEED_BAND = 0.25; // fraction of the wall speed, mean over the first 3 s after the hand-off
 test( 'The wall stands beyond the ring, then the solver takes it at the same height and speed', () => {
 	for ( const [ seed, H ] of [ [ 2, 3000 ], [ 7, 3000 ], [ 4, 320 ] ] ) {
@@ -84,14 +88,9 @@ test( 'The wall stands beyond the ring, then the solver takes it at the same hei
 		const after = wallOnRay( field, e, e.launchDistance - 900, e.launchDistance + 600 ), t1 = field.time;
 		assert.ok( Math.abs( after.height / before.height - 1 ) < 0.03, `${ where }: crest ${ before.height.toFixed( 0 ) } m before the hand-off, ${ after.height.toFixed( 0 ) } m after` );
 		const expected = before.face - far.speed * ( t1 - t0 );
-		// Within two outer cells (64 m) at at 348 m/s (measured 19 m for seed 2 and 41 m for seed 7 at 3000 m).
-		// at the sustained bore's 732 m/s the 3000 m face landed 97 m (seed 2) and 161 m (seed 7) ahead in the
-		// first frame: the fixed-step accumulator kept the calm sea's unspent lag (up to one 0.24 s ring step) and
-		// replayed it on the freshly launched wall, 0.13-0.22 s x 732 m/s. Not the inflow band (same jump with the
-		// inflow off; the band starts 640 m behind the face). Two outer cells, as under the initial conditions.
 		assert.ok( Math.abs( after.face - expected ) <= 64, `${ where }: face ${ before.face.toFixed( 0 ) } m out before, ${ after.face.toFixed( 0 ) } m after ${ ( t1 - t0 ).toFixed( 2 ) } s (expected ${ expected.toFixed( 0 ) } m at ${ far.speed.toFixed( 0 ) } m/s)` );
 		while ( field.time < t1 + 3 - 1e-9 ) field.advance( 0.02 );
-		const later = wallOnRay( field, e, e.launchDistance - 2400, e.launchDistance + 200 );
+		const later = faceOnRay( field, e, 0, e.launchDistance + 200, before.height / 2 );
 		const speed = ( after.face - later.face ) / ( field.time - t1 );
 		assert.ok( Math.abs( speed / far.speed - 1 ) < HANDOFF_SPEED_BAND, `${ where }: the solver's wall face ran ${ speed.toFixed( 0 ) } m/s over 3 s after the hand-off vs the wall's ${ far.speed.toFixed( 0 ) } m/s` );
 		// Beyond the ring's side the solver has no cells: the wall goes on there, it does not vanish.

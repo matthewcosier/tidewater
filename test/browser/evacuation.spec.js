@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { SCENARIO_TIMEOUT_MS, untilGameTimeCheck, untilAshore } from './gameTime.js';
+const within=async(page,check,budget,what)=>{const r=await untilGameTimeCheck(page,check,budget);expect(r.value,`${what} within ${budget} game s (waited ${r.elapsed.toFixed(1)} s)`).toBeTruthy();};
+const ashore=async page=>{const r=await untilAshore(page);expect(r.value,`the bore ashore within ${r.budget.toFixed(0)} game s, ${r.planned.toFixed(0)} s planned (waited ${r.elapsed.toFixed(1)} s)`).toBeTruthy();};
 
 // New browser contexts supply isolated local state. Only the external font
 // stylesheet is replaced; terrain, input, player, water and damage run for real.
@@ -30,7 +33,7 @@ test('The signed boardwalk carries a runner from the village to high ground duri
  });
  await test.step('When I start a tsunami with its normal warning lead and face the signed entrance',async()=>{
   await page.getByRole('button',{name:'Disasters',exact:true}).click();
-  await page.getByLabel('Disaster type').selectOption('tsunami');
+  await page.getByLabel('Disaster type').selectOption('tsunami'); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
   await page.getByLabel('Target location').selectOption('pier');
   await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('18');
   await expect(page.getByLabel('Warning lead time (s)')).toHaveValue('90');
@@ -80,7 +83,7 @@ test('The signed boardwalk carries a runner from the village to high ground duri
 });
 
 test('Exposed boardwalk sections can flood and break, and restoring the island restores their real collision surfaces',async({page})=>{
- test.setTimeout(300000);
+ test.setTimeout(SCENARIO_TIMEOUT_MS);
  let original;
  await test.step('Given the evacuation boardwalk on a fresh physical island',async()=>{
   await ready(page);
@@ -90,20 +93,23 @@ test('Exposed boardwalk sections can flood and break, and restoring the island r
  });
  await test.step('When a severe tsunami reaches the low village entrance',async()=>{
   await page.getByRole('button',{name:'Disasters',exact:true}).click();
-  await page.getByLabel('Disaster type').selectOption('tsunami');
+  await page.getByLabel('Disaster type').selectOption('tsunami'); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
   await page.getByLabel('Target location').selectOption('pier');
   await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('25');
   await page.getByLabel('Warning lead time (s)').fill('3');
-  await page.getByLabel('Duration (s)').fill('90');
+  await page.locator('[data-key="duration"]').fill('90');
   await page.getByRole('button',{name:'Start disaster',exact:true}).click();
  });
  await test.step('Then water loads break exposed timber while the elevated refuge stays above the actual flood',async()=>{
-  await expect.poll(()=>read(page,'broken-sections'),{timeout:130000,intervals:[500]}).toBeGreaterThan(0);
+  await ashore(page);
+  await within(page,async()=>await read(page,'broken-sections')>0,130,'an exposed boardwalk section broken');
   const damage=await page.evaluate(()=>{const a=window.__app,e=a.evacuation;return {broken:e.records.filter(r=>r.broken).map(r=>({utilization:r.utilization,colliders:r.colliders.map(c=>[c.solid,c.walkable])})),water:a.disasters.field.waterAt(e.refuge.x,e.refuge.z),refuge:e.refuge.y};});
   expect(damage.broken.some(r=>r.utilization>1)).toBe(true);
   expect(damage.broken.every(r=>r.colliders.every(c=>!c[0]&&!c[1]))).toBe(true);
   expect(damage.water).toBeLessThan(damage.refuge);
-  await expect(page.getByRole('status',{name:'Evacuation guidance'})).toContainText('Damaged boardwalk');
+  const guidance=page.getByRole('status',{name:'Evacuation guidance'});
+  if(!await guidance.isVisible())await page.getByRole('button',{name:'Evacuation',exact:true}).click();
+  await expect(guidance).toContainText('Damaged boardwalk');
   await page.screenshot({path:test.info().outputPath( 'flood-damage.png' )});
  });
  await test.step('When I restore the island then geometry and walkable collision return together',async()=>{

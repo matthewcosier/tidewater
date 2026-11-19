@@ -2,6 +2,52 @@
 
 `TornadoVisuals(app, field)` adds one cloud mesh and one small-litter mesh to the scene. `update(dt)` reads the active tornado; `clear()` removes emission and drawn instances. `Disasters` owns these calls, so pause, stop and restore share the physical-load lifecycle. This replaces the separate 36-step condensation volume. There is no independent upper optical tube.
 
+## Design note: the cinematic tornado
+
+**Source of truth.** Centre, intensity (with the seeded pulses) and envelope come from `DisasterField.center`, `tornadoIntensity` and `envelope`; ground height from `field.terrain`; the seed from `e.seed` (EventRandom, track stream indices 32+, so the track is unchanged); sun and sky light from the shared frame uniforms, which `App.applyAtmosphereReadback` scales by `stormLight(app.storm)`; cloud cover is the shared `app.clouds.coverage`. No private sun, wind or height.
+
+**Budget.** One draw, one box, no allocation per frame. Per covered pixel: at most 40 funnel steps (only where the ray crosses the funnel's bounding cylinder, about 100-200 m wide) and 24 storm-base steps (rays that cross the base slab inside 3 km), one or two fetches of the shared 64^3 noise each. Target 1 ms GPU at the M5 Pro display size; full resolution, not half (the material path has no half-resolution target yet; recorded as a deviation).
+
+**Detail by distance.** The volume is drawn within the 3 km storm base, which contains every review view; beyond it the shared clouds carry on (coverage raised to 0.85). The funnel is resolved by the cylinder march at any range; the parcel dust and litter only near the ground, as before.
+
+**Controls.** Unchanged: the Disasters panel (Start disaster, Stop all disasters, all reachable with Tab and Enter, which the scenario uses).
+
+**Transitions.** Start: the storm darkens with an 8 s time constant (no snap), cloud cover rises from the player's own value, the wall cloud forms over half the genesis, then the funnel builds down. End or Stop: the funnel lifts away over 1.5 s as the wind stops, the storm clears over a 15 s time constant and the player's cloud cover is handed back exactly. Pause: everything holds.
+
+## The look, round two
+
+| Defect | Cause | Fix |
+|---|---|---|
+| Speckle in the funnel, no shapes in the base | The march read the parcel clouds' 64^3 per-voxel white noise: every 4-7 m step an unrelated value | `TornadoNoise.js`: tiling fractal value noise, shape, detail and billow channels (Schneider and Vos, SIGGRAPH 2015), stretched to full range |
+| Stipple band at the base edge | The step jitter depended on the pixel only (same dither every frame) and the material set the TAA reactive coverage, which caps the history at half the upsampled weight: nothing averaged it | Interleaved gradient noise moved 5.588238 px a frame (Jimenez 2014); no reactive coverage, so the history accumulates it. The root fix was temporal, so no half-resolution target was added |
+| Flat pipe | Constant tint times sky irradiance, no light transport | Three ALU-only light steps through the smooth funnel toward the key light (Beer-Lambert), Henyey-Greenstein phase (g 0.6 and -0.2), skylight reduced with depth into the core, striations from the detail channel in a frame that turns at the core's angular velocity and shears into a helix |
+| Square cap | The Burgers-Rott radius grows without bound toward the base and the bounding cylinder cut it | Soft knee on the radius and the funnel dissolves into the wall cloud over its top 220 m (this march composites in front of the base) |
+| Lavender | Clear-sky blue irradiance used as is | Storm light: the sky irradiance keeps its brightness with 75 % of its colour taken out, a grey-green cast; the key light is the clear horizon beyond the storm |
+| Black void | Base shade 0.18-0.55 x 0.55 x sky | Floor at 0.4 x sky, lighter with height and where the billow is thin, plus horizon light from beyond the deck that brightens the base toward its edge |
+| Flat wall cloud, straight deck edge | Uniform radii | Ragged outlines from the shape channel, lumpy underside (+-90 m) with hanging billow lobes, the wall cloud a quarter darker and turning |
+| Faint debris | 0.02 extinction times a white-noise sample | A brown-grey skirt turning with the vortex, widest and densest at the ground, gone by 1.3 x the seeded debris height (40-150 m, so 50-195 m tall), 0.03 1/m at full load |
+
+**Reference photos (by eye, declared).** NSSL, Union City, Oklahoma, 24 May 1973 (NOAA Photo Library): a grey cone-to-rope funnel, darker than the bright sky under the base and lighter than the base itself, with a dust skirt at the ground about two funnel widths across. VORTEX-95, Dimmitt, Texas, 2 June 1995 (NOAA Photo Library): striated, helically banded edges, a brown debris cloud roughly 100-200 m tall. NWS SKYWARN spotter guide (as cited above): a lowered, ragged wall cloud under a dark base with a brighter band of sky under the base's edge. From these: the base is dark slate, about 15-30 % of the horizon below it, not black; the funnel stands out from the sky under the base by >= 0.3 in luminance; its lit and shadowed sides differ.
+
+**Budget.** Still one draw and one box. Funnel: 40 steps, one fetch each (two inside the debris skirt) and three ALU-only light steps where there is condensate. Base: 32 quadratically spaced steps (short where the ray enters the base, long inside; the dense deck ends most rays within about 12), two fetches each. Noise: 1 MiB rgba8, built once per page in about 0.1-0.45 s of CPU in an idle callback after boot, or on the first storm.
+
+## The look, round three
+
+| Defect | Cause | Fix |
+|---|---|---|
+| Thread funnel, 12 px from 2 km | The density faded out from 40-75 % of the condensation radius, so a funnel the model makes 30-40 m wide drew 15-20 m wide | The condensation radius is the cloud's edge (solid to 0.8 of it, soft to 1.2), drawn at `FUNNEL.drawnWidth` 1.8 x the dry Burgers-Rott estimate (declared: near-saturated, rain-cooled inflow under the wall cloud condenses at a smaller drop, and the skin carries dust and spray). The tip, where the deficit reaches the full rho g H, does not move (`test/tornado-funnel.mjs`, the BDD tip Then) |
+| White rope | The thin-cloud forward phase (up to 7 x) on the horizon key light | A 30-60 m funnel is optically thick: key light 0.35 x horizon + 0.25 x sun, phase capped at 2, skylight into the core 0.22-0.62, slate albedo, browner in the lowest 1.6 debris heights |
+| Symmetric lens, no wall cloud | Wall cloud and deck centred on the funnel; the wall cloud's rim ramped over half its radius under +-90 m of underside noise, so the 150-300 m lowering vanished | The funnel hangs at the rear edge of its wall cloud: wall-cloud and deck centres 0.3 of their radii ahead, opposite the seeded rope trail (`drift` uniform). The wall cloud is an abrupt lowering, rim 0.7-1.15 radii from the shape channel, a side 12 % of the radius wide, a flatter (+-35 m) sharper base, 40 % darker. The deck outline is lobed by an 8 km tile of the shape channel (1-2 km in and out) |
+| No debris from 2 km | Dark brown soil (0.45 x sky) on a dark island | Wider (to 1.2 debris radii at the ground, 1.75 bound), taller (1.5 debris heights), 0.045 1/m, lit like dust (0.58, 0.51, 0.42 x 0.75 sky + horizon) |
+
+**Budget.** Unchanged in kind: one draw, one box (now 1.5 deck radii wide for the offset deck), 40 funnel steps, 32 base steps, one extra fetch per base step (the deck lobes). Bench below.
+
+## The look, round four
+
+## The look, round five
+
+## The look, round six
+
 ## Grain transport
 
 `TornadoParticles` holds a fixed pool of 1,280 aerosol parcels and 64 leaf/wood flecks. An aerosol is a statistical cloud containing many equal spherical mineral grains or water droplets. Its physical grain diameter, in metres, sets aerodynamic response. Its separate metre-scale optical radius describes the cloud, not a giant physical grain.
@@ -77,11 +123,6 @@ Motion history includes world position, cloud radius, rotation and previous came
 The fixed pools use two draws, at most 3,328 triangles, zero volume ray steps and 262,144 bytes of static noise texels. No density grid is rebuilt per frame. Removing the volume reduces one draw and ray marching, while greater cloud radius can increase overdraw. Actual cost requires controlled browser measurement; triangle count alone does not predict it.
 
 `app.disasters.tornadoVisuals.snapshot()` exposes the budget, evaporation count, maximum cloud radius, liquid-cloud count, source/deposition/expiry counts and real poses. A parcel exposes `diameter`, `initialDiameter`, `liquidFraction` (remaining mass fraction per droplet), `grainMass`, `number`, `cloudMass`, `extinctionArea`, `relativeHumidity`, `mixedFraction`, `sourceMoisture`, `sourceHumidity`, `sourceLoading`, `id` and `cycle`. `completedBudget` retains the final accounted natural-expiry balance. These are observations for verification, not user-facing controls.
-
-```sh
-node --test test/tornado-visuals.mjs test/tornado-aerosols.mjs test/tornado-plume.mjs
-PW_PORT=5210 PW_RENDER_SCALE=1 PW_OUT=test-results/local npx playwright test test/browser/disasters.spec.js -g 'Tornado:' --workers=1
-```
 
 The final plume and director selection passes 25/25; the normal simulation suite also includes grain transport and the other aerosol regressions. Exact tests against buildable original particle and volume modules pass 12 unchanged/analytic cases and fail five intended production expectations: liquid evaporation, entrainment spreading, spatially shared eddies, matter budgets and a single optical population. The final source cases also fail against candidate1 behavior and pass unchanged on candidate2: they check actual upper emission geometry and statistical grain population before metadata. Separate cases cover continuous spatial moisture and the real Field.advance → TornadoVisuals.update duration crossing with both mass and area budgets. Candidate3 adds exact concentration-to-mass/extinction injection, the independently calculated constant-source weighting fixture, and actual continuous ground emission over 54 seconds at both 1/60-second and 0.1-second steps. The unchanged production seeding and steady-source tests fail against candidate2 for wrong seeded liquid mass and measured pool starvation, then pass in candidate3. Tests retain size-dependent grain transport, analytical settling, finite-Re convergence, shared wake response, deposition, pause, reset and submitted motion history.
 

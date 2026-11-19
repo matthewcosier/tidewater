@@ -13,14 +13,17 @@ for(const kind of ['earthquake','tornado'])test(`${kind}: exposed people physica
   await ready(page);target=await page.evaluate(()=>{const A=window.__app,p=A.beach.people.find(p=>p.world.y>.8&&p.world.y<5&&!p.path&&p.posture!=='sit');return {id:p.id,x:p.world.x,y:p.world.y,z:p.world.z};});
   await page.getByRole('button',{name:'Disasters',exact:true}).click();await page.getByLabel('Disaster type').selectOption(kind);await page.getByLabel('Target location').selectOption('custom');
   await page.getByLabel('Target X (m)').fill(String(target.x-(kind==='tornado'?18:0)));await page.getByLabel('Target Z (m)').fill(String(target.z));
-  await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill(kind==='tornado'?'120':'2');await page.getByLabel('Radius (m)').fill('110');await page.getByLabel('Duration (s)').fill('90');
+  await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill(kind==='tornado'?'120':'2');await page.getByLabel('Radius (m)').fill('110');await page.locator('[data-key="duration"]').fill('90');
   if(kind==='tornado')await page.getByRole('spinbutton',{name:'Speed (m/s)',exact:true}).fill('0');
   await page.getByRole('button',{name:'View target',exact:true}).click();
  });
  await test.step('When I start the event through its controls',async()=>{await page.getByRole('button',{name:'Start disaster',exact:true}).click();await expect(page.getByRole('alert',{name:'Disaster validation'})).toBeEmpty();});
  await test.step('Then actual articulated capsules acquire finite physical motion and real body masses',async()=>{
   await expect.poll(async()=>(await rigs(page)).some(r=>r.frames>5&&r.parts.some(b=>Math.hypot(...b.v)>.5)),{timeout:40000}).toBe(true);
-  const physical=await rigs(page);expect(physical.length).toBeGreaterThan(0);expect(physical.length).toBeLessThanOrEqual(8);
+  const physical=await rigs(page);expect(physical.length).toBeGreaterThan(0);// The old cap of 8 was stale: a 2 g quake or a 120 m/s vortex over 110 m knocks every exposed
+   // person (2 g is six times the 3.2 m/s² stance line), 17 and 14 here. The declared budget is the
+   // rig pool, Tumble.js MAX 64, measured at 13.28 ms for 58 rigs (0.23 ms a rig, docs/disasters.md).
+   const capacity=await page.evaluate(()=>window.__app.people.contact.tumbles.state().capacity);expect(capacity).toBe(64);expect(physical.length).toBeLessThanOrEqual(capacity);
   for(const r of physical){expect([35,72]).toContain(r.mass);expect(r.parts.reduce((s,b)=>s+b.m,0)).toBeCloseTo(r.mass,6);expect(r.parts.flatMap(b=>[...b.p,...b.v]).every(Number.isFinite)).toBe(true);}
  });
  await test.step('When I pause simulation, every current capsule pose and velocity stays fixed',async()=>{

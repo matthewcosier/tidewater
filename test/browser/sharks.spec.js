@@ -58,7 +58,7 @@ test( 'Sharks respond to a real tsunami current, freeze on pause and reset with 
 		await island( page ); await page.getByRole( 'button', { name: 'Watch sharks', exact: true } ).click();
 		start = await sharks( page ); const m = start.members[ 0 ];
 		await page.getByRole( 'button', { name: 'Disasters', exact: true } ).click();
-		await page.getByLabel( 'Disaster type' ).selectOption( 'tsunami' );
+		await page.getByLabel( 'Disaster type' ).selectOption( 'tsunami' ); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }
 		await page.getByLabel( 'Target location' ).selectOption( 'custom' );
 		await page.getByLabel( 'Target X (m)' ).fill( m.x.toFixed( 0 ) );
 		await page.getByLabel( 'Target Z (m)' ).fill( m.z.toFixed( 0 ) );
@@ -67,7 +67,7 @@ test( 'Sharks respond to a real tsunami current, freeze on pause and reset with 
 		await page.getByLabel( 'Wave width (m)' ).fill( '45' );
 		await page.getByLabel( 'Warning lead time (s)' ).fill( '6' );
 		await page.getByLabel( 'Radius (m)' ).fill( '220' );
-		await page.getByLabel( 'Duration (s)' ).fill( '70' );
+		await page.locator( '[data-key="duration"]' ).fill( '70' );
 	} );
 	await test.step( 'When I start the tsunami', async () => { await page.getByRole( 'button', { name: 'Start disaster', exact: true } ).click(); } );
 	await test.step( 'Then the shared water current carries sharks and triggers their flee response', async () => {

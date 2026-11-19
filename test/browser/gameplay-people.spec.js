@@ -93,8 +93,8 @@ test('Ferry passengers retain real support or physical motion when flood separat
   await ready(page,'&ferryTimetable=short');
   await expect.poll(()=>page.evaluate(()=>window.__app.ferry.crowd.people.filter(p=>p.path?.some(v=>v[0]==='T')&&p.path.some(v=>v[0]==='S')).length),{timeout:45000}).toBeGreaterThan(0);
   aboard=await page.evaluate(()=>window.__app.ferry.ship.position.toArray());
-  await page.getByRole('button',{name:'Disasters',exact:true}).click();await page.getByLabel('Disaster type').selectOption('tsunami');await page.getByLabel('Target location').selectOption('custom');await page.getByLabel('Target X (m)').fill(String(aboard[0]));await page.getByLabel('Target Z (m)').fill(String(aboard[2]));
-  await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('25');await page.getByLabel('Radius (m)').fill('180');await page.getByLabel('Duration (s)').fill('60');await page.getByLabel('Warning lead time (s)').fill('3');await page.getByRole('button',{name:'View target',exact:true}).click();
+  await page.getByRole('button',{name:'Disasters',exact:true}).click();await page.getByLabel('Disaster type').selectOption('tsunami'); { const advanced = page.locator( 'details.disaster-advanced:not([open]) > summary' ); if ( await advanced.isVisible() ) await advanced.click(); }await page.getByLabel('Target location').selectOption('custom');await page.getByLabel('Target X (m)').fill(String(aboard[0]));await page.getByLabel('Target Z (m)').fill(String(aboard[2]));
+  await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('25');await page.getByLabel('Radius (m)').fill('180');await page.locator('[data-key="duration"]').fill('60');await page.getByLabel('Warning lead time (s)').fill('3');await page.getByRole('button',{name:'View target',exact:true}).click();
  });
  await test.step('When I start the wave through the disaster controls',async()=>{
   await page.getByRole('button',{name:'Start disaster',exact:true}).click();await expect(page.getByRole('alert',{name:'Disaster validation'})).toBeEmpty();
