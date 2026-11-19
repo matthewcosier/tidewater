@@ -1,5 +1,6 @@
 import {Frustum,Sphere} from '../math/index.js';
 import {posed} from './ScenePose.js';
+import {pieceMotionOf} from './PieceMotion.js';
 
 // Reuse static shadow depth, but never reuse a moving caster's old depth. Check
 // both old/new world bounds against the LIGHT frusta: an off-screen object can
@@ -17,7 +18,9 @@ export class ShadowCasters {
    const g=o.geometry,p=g.attributes.position,data=p?.data??p,inst=o.instanceMatrix,old=this.entries.get(o),matrix=o.matrixWorld.elements;
    const visibility=Array.isArray(o.material)?o.material.map(m=>m&&m.visible!==false?'1':'0').join(''):o.material.visible===false?'0':'1';
    if(!visibility.includes('1')||o.count===0||g.instanceCount===0)return;
-   const deform=old&&(old.geometry!==g||old.position!==p||old.version!==data?.version||old.array!==data?.array||old.instances!==inst||old.instanceVersion!==inst?.version||old.instanceArray!==inst?.array||old.geometryCount!==g.instanceCount||old.visibility!==visibility||old.count!==o.count||old.index!==g.index||old.indexVersion!==g.index?.version||old.indexArray!==g.index?.array||old.drawStart!==g.drawRange.start||old.drawCount!==g.drawRange.count);
+   const deform=old&&(old.geometry!==g||old.position!==p||old.version!==data?.version||old.array!==data?.array||old.instances!==inst||old.instanceVersion!==inst?.version||old.instanceArray!==inst?.array||old.geometryCount!==g.instanceCount||old.visibility!==visibility||old.count!==o.count||old.index!==g.index||old.indexVersion!==g.index?.version||old.indexArray!==g.index?.array||old.drawStart!==g.drawRange.start||old.drawCount!==g.drawRange.count||old.pieces!==pieceMotionOf(g));
+   // A loose piece drawn by the GPU moves with no vertex write (PieceMotion.js): its batch's piece
+   // motion is a deformation, as the rewritten vertices were.
    const skin=!!g._skinBounds;
    let moved=!old;
    if(old)for(let i=0;i<16;i++)if(matrix[i]!==old.matrix[i]){moved=true;break;}
@@ -42,7 +45,7 @@ export class ShadowCasters {
    // Rigid motion reuses the entry and bounds; only a new/deformed caster needs
    // its geometry identity/version snapshot replaced.
    if(!old||deform){
-    Object.assign(entry,{geometry:g,position:p,version:data?.version,array:data?.array,instances:inst,instanceVersion:inst?.version,instanceArray:inst?.array,geometryCount:g.instanceCount,visibility,count:o.count,index:g.index,indexVersion:g.index?.version,indexArray:g.index?.array,unbounded,drawStart:g.drawRange.start,drawCount:g.drawRange.count});
+    Object.assign(entry,{geometry:g,position:p,version:data?.version,array:data?.array,instances:inst,instanceVersion:inst?.version,instanceArray:inst?.array,geometryCount:g.instanceCount,visibility,count:o.count,index:g.index,indexVersion:g.index?.version,indexArray:g.index?.array,unbounded,drawStart:g.drawRange.start,drawCount:g.drawRange.count,pieces:pieceMotionOf(g)});
     if(!old)this.entries.set(o,entry);
    }
   });

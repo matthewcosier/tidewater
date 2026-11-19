@@ -1,5 +1,5 @@
-import { Matrix4, Matrix3, Vector3, Quaternion } from '../engine/index.js';
-import { markGeometryMotion } from '../engine/render/GeometryMotion.js';
+import { Matrix4, Vector3, Quaternion } from '../engine/index.js';
+import { pieceSlot, setPieceTransform } from '../engine/render/PieceMotion.js';
 
 // Loose props with physics that costs nothing until something comes near.
 //
@@ -8,8 +8,8 @@ import { markGeometryMotion } from '../engine/render/GeometryMotion.js';
 // tells it which vertex range it owns (GeoBuilder tagSpans). Every prop starts dormant: no body
 // in the car physics, just an entry in a coarse grid. Near the moving car or the walker (the
 // activation bubble, wider with speed) a prop wakes as an Avian body (rally-physics props.rs);
-// its pose comes back once a frame and is written into its vertex range, so the merged batch
-// draws it where it went. Once it rests and everyone is well away it goes back to sleep: the body
+// its pose comes back once a frame as one transform of its vertex range, so the merged batch
+// draws it where it went (engine/render/PieceMotion.js). Once it rests and everyone is well away it goes back to sleep: the body
 // goes, the pose stays. Fence panels wake as sensors and break into loose pieces when the car
 // hits them fast enough; a slow push meets a solid fence.
 
@@ -31,7 +31,7 @@ const REST = 0.6; // seconds at rest before a prop may sleep
 const EPS = 1e-4;
 const REACH = 0.15; // how far the walker may get ahead of their stopped body (m)
 
-const _m = new Matrix4(), _d = new Matrix4(), _inv = new Matrix4(), _n = new Matrix3();
+const _m = new Matrix4(), _d = new Matrix4(), _inv = new Matrix4();
 const _p = new Vector3(), _q = new Quaternion(), _s = new Vector3( 1, 1, 1 ), _v = new Vector3(), _c = new Vector3();
 const UP = new Vector3( 0, 1, 0 );
 
@@ -516,42 +516,12 @@ export class PropPhysics {
 
 	}
 
-	// Rewrite the prop's vertex range: the built vertices moved rigidly from m0 to m.
+	// The GPU draws the prop's vertex range (engine/render/PieceMotion.js): the built vertices stay at
+	// rest and one transform per span moves them rigidly from m0 to m.
 	draw( p ) {
 
 		_d.multiplyMatrices( p.m, _inv.copy( p.m0 ).invert() );
-		_n.getNormalMatrix( _d );
-		const e = _d.elements, ne = _n.elements;
-		for ( const s of p.spans ) {
-
-			markGeometryMotion( s.geo, s.start, s.count );
-			const pos = s.geo.attributes.position, nrm = s.geo.attributes.normal;
-			const a = s.start * 3, n = s.count * 3;
-			if ( ! s.pos ) {
-
-				s.pos = pos.array.slice( a, a + n );
-				s.nrm = nrm.array.slice( a, a + n );
-
-			}
-			const P = pos.array, N = nrm.array, P0 = s.pos, N0 = s.nrm;
-			for ( let k = 0; k < n; k += 3 ) {
-
-				const x = P0[ k ], y = P0[ k + 1 ], z = P0[ k + 2 ];
-				P[ a + k ] = e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z + e[ 12 ];
-				P[ a + k + 1 ] = e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z + e[ 13 ];
-				P[ a + k + 2 ] = e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z + e[ 14 ];
-				const nx = N0[ k ], ny = N0[ k + 1 ], nz = N0[ k + 2 ];
-				N[ a + k ] = ne[ 0 ] * nx + ne[ 3 ] * ny + ne[ 6 ] * nz;
-				N[ a + k + 1 ] = ne[ 1 ] * nx + ne[ 4 ] * ny + ne[ 7 ] * nz;
-				N[ a + k + 2 ] = ne[ 2 ] * nx + ne[ 5 ] * ny + ne[ 8 ] * nz;
-
-			}
-			pos.addUpdateRange( a, n );
-			nrm.addUpdateRange( a, n );
-			pos.needsUpdate = true;
-			nrm.needsUpdate = true;
-
-		}
+		for ( const s of p.spans ) setPieceTransform( pieceSlot( s ), _d );
 
 	}
 

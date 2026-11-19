@@ -1,4 +1,5 @@
 import * as THREE from '../engine/index.js';
+import { WORLD } from '../world/WorldLayout.js';
 import { Group, Mesh, BoxGeometry, CylinderGeometry, Color } from '../engine/index.js';
 import { Material } from '../engine/render/Material.js';
 import { LAYERS } from '../core/SceneRenderer.js';
@@ -13,7 +14,7 @@ import { JetskiLights } from './JetskiLights.js';
 // is the physics, docs/jetski.md the model and the controls). One ski at a time runs the full physics on
 // the GPU water queries (the one you ride, or last rode); the parked ones bob on one query each.
 //
-// Model contract (public/models/jetski.glb from the model): Y up, +Z forward, metres, origin on
+// Model contract (public/models/jetski.glb from the model lane): Y up, +Z forward, metres, origin on
 // the centreline at the static waterline; nodes Hull, Bars, Nozzle, Seat, GripL/R, FootL/R, JetOut, Bow,
 // SprayL/R. Until it lands a placeholder stand-up ski is built from boxes.
 
@@ -22,8 +23,8 @@ const DEFAULT_SPOTS = [
 	{ name: 'Beach hire 1', x: 22, z: - 38, yaw: 0 },
 	{ name: 'Beach hire 2', x: 26, z: - 38, yaw: 0 },
 	{ name: 'Beach hire 3', x: 30, z: - 38, yaw: 0 },
-	{ name: 'Joey 1', x: - 176, z: 640, yaw: Math.PI },
-	{ name: 'Joey 2', x: - 170, z: 640, yaw: Math.PI },
+	{ name: 'Joey 1', x: WORLD.joeyTerminal.position.x, z: WORLD.joeyTerminal.position.z - 12, yaw: Math.PI },
+	{ name: 'Joey 2', x: WORLD.joeyTerminal.position.x + 6, z: WORLD.joeyTerminal.position.z - 12, yaw: Math.PI },
 ];
 const DEG = Math.PI / 180;
 // his pelvis in ski_sit (player.glb extras `ski.pelvis`): the rider's origin goes at Seat minus this
@@ -301,7 +302,7 @@ export class Jetskis {
 
 	vesselCapsules() {
 
-		const out = this._caps || ( this._caps = [ 0, 1, 2 ].map( () => ( { a: new THREE.Vector3(), b: new THREE.Vector3(), r: 0, top: 0 } ) ) );
+		const out = this._caps || ( this._caps = [ 0, 1, 2, 3, 4 ].map( () => ( { a: new THREE.Vector3(), b: new THREE.Vector3(), r: 0, top: 0 } ) ) );
 		const app = this.app;
 		let n = 0;
 		const b = app.boatCtl;
@@ -312,15 +313,14 @@ export class Jetskis {
 
 		}
 
-		const ship = app.ferry?.ship;
-		if ( ship ) for ( const x of [ - 6.7, 6.7 ] ) {
+		for ( const ship of app.fleet?.ships || ( app.ferry?.ship ? [ app.ferry.ship ] : [] ) ) for ( const x of [ - 6.7, 6.7 ] ) {
 
 			ship.toWorld( _v.set( x, 0, - 24 ), out[ n ].a ); ship.toWorld( _v.set( x, 0, 21 ), out[ n ].b );
 			out[ n ].r = 2.0; out[ n ].top = ship.position.y + 2.6; n ++;
 
 		}
 
-		// (the three cached capsules stay; the list handed out is rebuilt: n of them plus the course's bumpers)
+		// (the five cached capsules stay; the list handed out is rebuilt: n of them plus the course's bumpers)
 		const all = this._capList || ( this._capList = [] );
 		all.length = 0;
 		for ( let i = 0; i < n; i ++ ) all.push( out[ i ] );

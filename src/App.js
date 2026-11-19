@@ -3,6 +3,8 @@ import { RagdollPool } from './player/workers/RagdollPool.js';
 import { SimulationPacing } from './core/SimulationPacing.js';
 import { updateOceanDisplacementBounds } from './ocean/DisplacementBounds.js';
 import { Disasters } from './disasters/Disasters.js';
+import { DisasterSound } from './disasters/DisasterSound.js';
+import { CameraShake } from './core/CameraShake.js';
 import { Vector3, Euler, Color, MathUtils, Mesh } from './engine/index.js';
 import { GPU } from './engine/gpu/GPU.js';
 import { SunShadows } from './engine/render/Shadows.js';
@@ -21,6 +23,8 @@ import { Atmosphere, SUN_ILLUMINANCE } from './sky/Atmosphere.js';
 import { Sky, sunDirectionFromTime } from './sky/Sky.js';
 import { Clouds } from './sky/Clouds.js';
 import { SkyProClouds } from './sky/SkyProClouds.js';
+import { stormLight } from './disasters/TornadoFunnel.js';
+const STORM_LIGHT = { sun: 1, sky: 1 }; // scratch for stormLight, written every frame
 import { Environment } from './sky/Environment.js';
 
 import { TerrainData } from './world/TerrainData.js';
@@ -44,6 +48,7 @@ import { Sharks } from './world/marine/Sharks.js';
 import { addWorldTool } from './ui/WorldTools.js';
 import { Aviation } from './aviation/Aviation.js';
 import { Glider } from './glider/Glider.js';
+import { BOOT_WIND } from './core/BootWind.js';
 import { prepareGliderSite } from './glider/Site.js';
 import { prepareChairliftSite } from './chairlift/Route.js';
 import { Chairlift } from './chairlift/Chairlift.js';
@@ -81,6 +86,8 @@ import { Cockatoo } from './player/Cockatoo.js';
 import { RallyDrive } from './rally/RallyDrive.js';
 import { PropPhysics } from './physics/Props.js';
 import { Ferry } from './ferry/Ferry.js';
+import { Fleet } from './ferry/Fleet.js';
+import { FLEET } from './ferry/FerryService.js';
 import { People } from './people/People.js';
 import { Beach } from './people/Beach.js';
 import { Jetskis } from './jetski/Jetski.js';
@@ -97,7 +104,7 @@ import { WakeSim } from './ocean/WakeSim.js';
 import { Vegetation } from './world/Vegetation.js';
 import { SoundScape } from './audio/SoundScape.js';
 import { updateCameraVelocity, useStaticVelocity } from './post/CameraVelocity.js';
-import { poseScene } from './engine/render/ScenePose.js'; // L6 perf
+import { poseScene } from './engine/render/ScenePose.js';
 
 const _up = new Vector3( 0, 1, 0 );
 
@@ -200,7 +207,7 @@ export class App {
 		}
 
 		await progress( 0.19, 'Rolling in the swell…' );
-		this.shoreField = computeShoreField( this.terrainData, { res: 512, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
+		this.shoreField = computeShoreField( this.terrainData, { cell: 4, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
 		this.terrainGPU = new TerrainGPU( this.terrainData, this.shoreField );
 		// terrain and rocks apply the heightfield sun shadow (long hill shadows) in their own lighting
 		this.terrain = new Terrain( { scene, terrainData: this.terrainData, terrainGPU: this.terrainGPU, renderer } );
@@ -222,6 +229,7 @@ export class App {
 		// ---------------------------------------------------------------- ocean
 		await progress( 0.3, 'Simulating the ocean…' );
 		this.fft = new OceanFFT( renderer );
+		this.setAmbientWind( BOOT_WIND.speed, BOOT_WIND.direction );
 		if ( this.reef.setOcean ) this.reef.setOcean( this.fft ); // coral / sea fan sway follows the simulated swell
 		this.foamTexture = createFoamTexture( renderer );
 		this.oceanLOD = new CDLOD( { gridSize: Number( qs.get( 'G' ) || 32 ), leafSize: 8, levels: 12, minY: - 25, maxY: 25 } );
@@ -242,7 +250,7 @@ export class App {
 			this.surface.shoreSim = this.shoreSim;
 			// WGSL: fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f (x = wetness, y = sand foam)
 			this.terrain.wetness = {
-				modules: [ this.shoreSim.module ],
+				modules: [ this.shoreSim.module, this.disasterWater.module ],
 				code: /* wgsl */`
 fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	let s = shoreSimSample( xz );
@@ -251,6 +259,12 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	let band = smoothstep( 0.45, 0.0, h );
 	// foam left on the sand: the lace the water carried, stranded and popping (ShoreSim.sandFoam)
 	return vec2f( max( s.y, band * ( 1.0 - inside ) ), shoreSimSandFoam( xz, s, h ) );
+}
+// 0..1: the seabed a drawdown has bared (FloodLook.seabedWetness); 0 with no disaster grid live
+fn terrainSeabedWet( xz: vec2f, h: f32 ) -> f32 {
+	if ( disasterWater.domain.w < 1.0 || h > 0.1 || ! disasterInGrids( xz ) ) { return 0.0; }
+	let d = disasterSample( xz );
+	return floodSeabedWet( h, h + d.w, d.w );
 }`,
 			};
 			this.terrain.finalizeMaterial();
@@ -457,8 +471,18 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		await this.rally.init();
 		this.props.attach( this.rally.physics );
 		this.people = new People( this ); // the townsfolk brains, events and speech bubbles (src/people, docs/people.md)
-		this.ferry = new Ferry( this );
-		await this.ferry.init();
+		this.fleet = Fleet.of( new Ferry( this, FLEET[ 0 ] ) );
+		await this.fleet[ 0 ].init();
+		for ( const spec of FLEET.slice( 1 ) ) {
+
+			if ( ! this.joeyTerminal ) break;
+			const sister = new Ferry( this, spec, this.fleet[ 0 ] );
+			await sister.init();
+			this.fleet.push( sister );
+
+		}
+		for ( const f of this.fleet ) f.rivals = this.fleet.filter( o => o !== f );
+		// ---- end two ferries
 		this.jetskis = new Jetskis( this ); // rideable jetskis (src/jetski)
 		await this.jetskis.init();
 		this.player.jetskis = this.jetskis;
@@ -467,13 +491,16 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.beach.init(); // bodies load in the background
 		await Promise.all( [ this.terminal.ready, this.joeyTerminal.ready, this.joeyVillage.ready ] );
 		this.disasters = new Disasters(this,this.disasterWater);
+		this.cameraShake = new CameraShake(); // src/core/CameraShake.js: what would shake a person holding the camera
+		this.disasterSound = new DisasterSound( this ); // src/disasters/DisasterSound.js: the disasters heard at the camera, the shake's input, the wet lens
 		this.windfarm = new WindFarm(this);
 		await this.windfarm.init();
 		this.aviation = new Aviation(this);
 		await this.aviation.init();
-		this.player.aviation = this.aviation; // walk-up E prompt at the carrier jet (lane L2)
+		this.player.aviation = this.aviation;
 		this.glider = new Glider(this);
 		await this.glider.init();
+		this.player.glider = this.glider;
 		this.chairlift = new Chairlift(this).init({connector:true});
 		this.livestock = new Livestock(this);
 		await this.livestock.init();
@@ -581,11 +608,13 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		let c;
 		if ( sunUp ) c = new Color( T[ 0 ], T[ 1 ], T[ 2 ] ).multiplyScalar( SUN_ILLUMINANCE * horizonFade );
 		else c = new Color( 0.6, 0.7, 1.0 ).multiplyScalar( 0.3 * G.night.value ); // moonlight: enough to read the shore by
-		G.sunColor.value.copy( c );
+		// a tornado's storm (TornadoFunnel.StormState sets this.storm) cuts the beam and the sky light 3-5x
+		stormLight( this.storm || 0, STORM_LIGHT );
+		G.sunColor.value.copy( c ).multiplyScalar( STORM_LIGHT.sun );
 		const irr = a.skyIrradiance;
 		const nightAmb = 0.04 * G.night.value; // night sky fill: the shore and the sea stay readable
-		G.skyIrradiance.value.setRGB( irr[ 0 ] + nightAmb * 0.6, irr[ 1 ] + nightAmb * 0.7, irr[ 2 ] + nightAmb );
-		G.horizonColor.value.setRGB( a.horizon[ 0 ], a.horizon[ 1 ], a.horizon[ 2 ] );
+		G.skyIrradiance.value.setRGB( irr[ 0 ] + nightAmb * 0.6, irr[ 1 ] + nightAmb * 0.7, irr[ 2 ] + nightAmb ).multiplyScalar( STORM_LIGHT.sky );
+		G.horizonColor.value.setRGB( a.horizon[ 0 ], a.horizon[ 1 ], a.horizon[ 2 ] ).multiplyScalar( STORM_LIGHT.sky );
 
 	}
 
@@ -808,10 +837,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.boatSpray.update( dt );
 		this.jetskis?.update( dt );
 		this.wake.update( dt );
-		// The ferry first: her deck's pose feeds the car physics as a moving platform.
-		const ferryPending = this.ferry?.update( dt );
+		// The ferries first: their decks' poses feed the car physics as moving platforms. The
+		// sisters carry no crowd, so only the lead's update can wait on the ragdoll pool.
+		if ( this.fleet ) for ( let i = 1; i < this.fleet.length; i ++ ) this.fleet[ i ].update( dt );
+		const ferryPending = this.fleet?.[ 0 ].update( dt );
 		if ( ferryPending ) return ferryPending.then( () => this.afterFerry( dt ) );
 		return this.afterFerry( dt );
+	}
+
+	// "The ferry" to every system that asks (the camera, the cockatoo, the townsfolk, the wake):
+	// the ship whose deck the player is on, else the Spirit, the fleet's lead.
+	get ferry() {
+
+		const mine = this.player?.vessel?.ferry, mode = this.player?.mode;
+		return mine && ( mode === 'ferry' || mode === 'ferry-helm' ) ? mine : this.fleet?.[ 0 ];
+
 	}
 
 	afterFerry( dt ) {
@@ -879,7 +919,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.environment.update( dt );
 
 		// ---- world
-		updateOceanDisplacementBounds( this.oceanLOD, this.disasters?.field.water, this.disasters?.field.outer, this.disasters?.field.farFieldBounds() ); // + tsunami outer ring; + the wall beyond it
+		updateOceanDisplacementBounds( this.oceanLOD, this.disasters?.field.water, this.disasters?.field.outer, this.disasters?.field.farFieldBounds() );
 		this.oceanLOD.update( this.camera );
 		this.terrain.update( this.camera );
 		this.rocks.update( this.camera );
@@ -899,15 +939,26 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
+	// the frame inside the camera shake's frame(): the shaken pose is taken away on every path out, an exception included
 	renderFrame( dt ) {
 
+		return this.cameraShake ? this.cameraShake.frame( this.camera, this, this.drawFrame, dt ) : this.drawFrame( dt );
+
+	}
+
+	drawFrame( dt ) {
+
 		G.exposure.value = this.settings.exposure;
+		this.disasterSound?.update( dt, this.camera ); // reads the camera's pose as its owners set it
+		// decisions that keep state read the unshaken pose: the lens's soak on surfacing, the flare's above-water fade
+		const lensUnder = this.camera.position.y < ( this.cameraWaterHeight ?? 0 ), flareAbove = this.camera.position.y > ( this.cameraWaterHeight ?? 0 ) - 0.02;
+		this.cameraShake?.apply( this.camera, dt, this.disasterSound?.listener ); // an offset, taken away after the frame
 		updateCameraVelocity( this.camera );
-		this.post.lens.update( dt, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ) );
+		this.post.lens.update( dt, lensUnder );
 		if ( this.post.flare ) {
 
 			this.post.flare.setDepthHeight( this.sceneRenderer.sceneRT.height );
-			this.post.flare.update( this.camera, dt, { aboveWater: this.camera.position.y > ( this.cameraWaterHeight ?? 0 ) - 0.02 } );
+			this.post.flare.update( this.camera, dt, { aboveWater: flareAbove } );
 
 		}
 
@@ -915,10 +966,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// uniforms (setFrameCamera); shadows then render with this frame's sun and camera
 		this.post.beginFrame();
 		this.underwater.updateCamera( this.camera );
-		// ---- L6 perf: pose the scene graph once for every pass of this frame (src/engine/render/ScenePose.js).
-		// The simulation and the camera are final here; the passes below skip their own whole-scene update.
 		poseScene( this.scene );
-		// ---- end L6 perf
 		this.shadows.render( this.scene, this.engine.meshRenderer, this.shadows.update( this.camera, G.sunDir.value, this.scene ) );
 		this.sceneRenderer.render();
 		if ( this.post.flare ) this.post.flare.kernel.dispatch( 1 );
@@ -926,6 +974,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.post.endFrame();
 		GPU.submit();
 		commitGeometryMotion();
+		this.cameraShake?.restore( this.camera ); // the exact pose the owners set: no pose ever stores the shake
 		this.profiler.update( dt );
 
 		this.updateAudio( dt );

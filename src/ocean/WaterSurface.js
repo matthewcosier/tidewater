@@ -2,6 +2,10 @@ import { UniformBlock, ShaderModule } from '../engine/webgpu.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
 import { FFT_SIZE } from './OceanFFT.js';
 
+// s: one cycle of the flood's foam flow map (streaks drift |u| x 3 s before the half-cycle copy takes over; at
+// 6 m/s that is 18 m, longer than a foam tile's features, so the stretch reads as flow and not as smear)
+const FLOW_T = 3.0;
+
 // Combines every contribution to the water surface: FFT cascades (deep water),
 // shoreline waves, and the interactive wake. Provides the WGSL used by the ocean
 // vertex/fragment shaders and by compute passes that query the surface.
@@ -178,6 +182,10 @@ ${ cascadesV }
 	var shoreFoam = 0.0;
 	var swash = 0.0;
 	var surfMask = vec2f( 0.0 ); // clear plunging face, whitewater roller relief (m)
+${ this.disaster ? /* wgsl */`
+	// the flood at this vertex (Water.js disasterLookAt); floodKeep fades the shore waves where it covers the shore
+	let dl = disasterLookAt( worldXZ );
+	let floodKeep = 1.0 - dl.cover;` : '' }
 ${ SH ? /* wgsl */`
 	// Offshore of WATER_SHORE_DEEP the shore waves have faded out completely (their envelope is 0 from 26 m
 	// of depth, see ShoreWaves) and there is no swash: most of the sea skips their evaluation.
@@ -185,17 +193,26 @@ ${ SH ? /* wgsl */`
 	var swashLevel = -1e4;
 	if ( nearShore ) {
 		let sw = shoreEvaluate( worldXZ, depth, ground );
-		extra += sw.disp;
+		extra += sw.disp${ this.disaster ? ' * floodKeep' : '' };
 		shoreN = clamp( sw.nShore, vec3f( -1.0 ), vec3f( 1.0 ) );
 		// (the foam line on the swash front is added per pixel in the water shader: on this coarse mesh
 		// it would end short of the front and follow the triangles)
 		shoreFoam = sw.foam;
-		surfMask = vec2f( sw.face, sw.roller );
-		swashLevel = sw.swashLevel;
+		surfMask = vec2f( sw.face, sw.roller )${ this.disaster ? ' * floodKeep' : '' };
+		swashLevel = sw.swashLevel${ this.disaster ? ' - dl.cover * 4.0' : '' };
 	}` : '' }
 ${ WK ? '	extra += wakeDisplacement( worldXZ );' : '' }
 
-	${ this.disaster ? 'extra.y += disasterHeight( worldXZ ); shoreFoam += disasterFoam( worldXZ );' : '' }
+${ this.disaster ? /* wgsl */`
+	// The flood: its surface carried to the true waterline (disasterSurface), and on a breaking bore face the lip
+	// curls forward along the flow and the roller stands above the conjugate depth, both scaled by the jump, so a
+	// 2 m surge churns and a 300 m wall leans over its own face (FloodLook.js LIP_THROW, LIP_RISE).
+	// (Its foam is per pixel in the fragment: the per-vertex foam this added went to shoreFoam, which nothing reads.)
+	{
+		let lip = dl.bore.x * dl.bore.z;
+		let flowDir = dl.flow / max( length( dl.flow ), 1e-3 );
+		extra += vec3f( flowDir.x * lip * FLOOD_LIP_THROW, disasterSurface( worldXZ ) + lip * FLOOD_LIP_RISE, flowDir.y * lip * FLOOD_LIP_THROW );
+	}` : '' }
 	var total = disp + extra;
 	var y = frame.seaLevel + total.y;
 ${ SH ? /* wgsl */`
@@ -230,7 +247,7 @@ ${ T ? /* wgsl */`
 	o.height = total.y;
 	o.depth = depth;
 	o.foam = foam;
-	o.shoreN = ${ this.disaster ? 'normalize( vec3f( shoreN.x - disasterSlope( worldXZ ).x, shoreN.y, shoreN.z - disasterSlope( worldXZ ).y ) )' : 'shoreN' };
+	o.shoreN = ${ this.disaster ? 'normalize( vec3f( shoreN.x - dl.slope.x * ( 1.0 - 0.75 * dl.turbid ), shoreN.y, shoreN.z - dl.slope.y * ( 1.0 - 0.75 * dl.turbid ) ) )' : 'shoreN' };
 	o.shoreFoam = shoreFoam;
 	o.swash = swash;
 	o.surfMask = surfMask;
@@ -268,6 +285,9 @@ struct WaterSurfaceFrag {
 	aeration: f32,
 	gust: f32,
 	slick: f32,
+	turbid: f32,
+	// the flood at this pixel for the water's debug views 14/15 (depth, free surface, cover, whitewater; 0 without one)
+	flood: vec4f,
 ${ SF ? '	foamInfo: SurfFoamInfo,' : '' }
 };
 
@@ -276,11 +296,16 @@ ${ SF ? '	foamInfo: SurfFoamInfo,' : '' }
 fn waterSurfaceFragment( lagXZ: vec2f, footprint: f32, depth: f32, vertexFoam: f32, shoreN: vec3f, shoreFoam: f32, extraFoam: f32, simState: vec4f, surfMask: vec2f, P: vec3f ) -> WaterSurfaceFrag {
 	var d = vec4f( 0.0 );
 	var foamSum = 0.0;
+${ this.disaster ? /* wgsl */`
+	// the flood at this pixel (Water.js): its whitewater, the turbidity and the cover that ends the surf
+	let dlf = disasterLookAt( P.xz );
+	let floodKeepPx = 1.0 - dlf.cover;
+	let floodWW = disasterWhitewater( dlf, P.xz, frame.time );` : '' }
 	// the clear concave face of a plunging wave overhangs the trough: the foam carried by the
 	// (depth-averaged, world-space) shore simulation below it is not on the face
 	let face = ${ SH ? 'sat( surfMask.x )' : '0.0' };
 	// (some of it stays: the lace of the previous wave is drawn up the face)
-	let simFoam = ${ SIM ? 'extraFoam * ( 1.0 - face * 0.72 )' : '0.0' };
+	let simFoam = ${ SIM ? 'extraFoam * ( 1.0 - face * 0.72 )' : '0.0' }${ this.disaster ? ' * floodKeepPx' : '' };
 	foamSum += simFoam;
 ${ SH ? /* wgsl */`
 	// breaking-wave foam per pixel at the rest position: the per-vertex value, interpolated over
@@ -291,6 +316,7 @@ ${ SH ? /* wgsl */`
 	{
 		let dPx = waterSurfaceSeaDepth( lagXZ );
 		if ( dPx > -0.25 && dPx < 5.0 ) { shoreFoamPx = shoreFoamAt( lagXZ, dPx ) * smoothstep( 5.0, 4.0, dPx ); }
+${ this.disaster ? '		shoreFoamPx *= floodKeepPx;' : '' }
 	}` : '' }
 	// bubbles mixed into the water (milky, turquoise, hides the bottom): surf and wake
 	var aeration = 0.0;
@@ -355,12 +381,31 @@ ${ SH ? /* wgsl */`
 	let fresh = sat( ( ocean.foamBias - 0.15 - jac ) * 2.0 );
 	var whitecaps = vertexFoam + fresh;
 ${ DT ? '	whitecaps = whitecaps * mix( 0.5, 1.5, det.gust ) + det.streak * 0.5;' : '' }
+${ this.disaster ? /* wgsl */`
+	// the bore's roller, its wake and the streaks (Water.js disasterWhitewater, already the final cover): full of
+	// bubbles where white (milky, the bottom gone)
+	foamSum += floodWW;
+	aeration += floodWW;
+	whitecaps *= ( 1.0 - dlf.turbid ) * dlf.crest;` : '' }
 	let coverage = sat( ( foamSum + whitecaps ) * waterSurface.foamCoverage );
 
 	// foam pattern: an irregular bubbly mat thresholded by coverage, so foam grows, tears into
 	// lace and dissolves naturally
 	let fuv = lagXZ * waterSurface.foamScale;
-	let p1 = textureSample( waterFoamTex, smpAniso4Repeat, fuv );
+	var p1 = textureSample( waterFoamTex, smpAniso4Repeat, fuv );
+${ this.disaster ? /* wgsl */`
+	// Foam streaks carried by the flood: a two-phase flow map (Vlachos 2010, Valve), the pattern dragged along u for
+	// ${ FLOW_T } s and blended with a copy half a cycle out, so its reset never shows. Only where the flood flows
+	// (explicit gradients: this runs in a branch); still water keeps the plain sample above.
+	let fdx = dpdx( fuv );
+	let fdy = dpdy( fuv );
+	if ( dot( dlf.flow, dlf.flow ) > 0.01 ) {
+		let fl = dlf.flow * waterSurface.foamScale * ${ f( FLOW_T ) };
+		let ph = fract( frame.time / ${ f( FLOW_T ) } );
+		let a0 = textureSampleGrad( waterFoamTex, smpAniso4Repeat, fuv - fl * ph, fdx, fdy );
+		let a1 = textureSampleGrad( waterFoamTex, smpAniso4Repeat, fuv - fl * fract( ph + 0.5 ) + vec2f( 0.41, 0.23 ), fdx, fdy );
+		p1 = mix( a0, a1, abs( 2.0 * ph - 1.0 ) );
+	}` : '' }
 	// second layer at another scale, rotated, to break repetition
 	let r2 = vec2f( fuv.x * 0.8 - fuv.y * 0.6, fuv.x * 0.6 + fuv.y * 0.8 );
 	let p2 = textureSample( waterFoamTex, smpAniso4Repeat, r2 * 2.37 + vec2f( 0.31, 0.77 ) );
@@ -391,6 +436,8 @@ ${ SF ? /* wgsl */`
 	o.aeration = sat( aeration );
 	o.gust = ${ DT ? 'det.gust' : '0.5' };
 	o.slick = ${ DT ? 'det.slick' : '0.0' };
+	o.turbid = ${ this.disaster ? 'dlf.turbid' : '0.0' };
+	o.flood = ${ this.disaster ? 'vec4f( dlf.depth, dlf.height, dlf.cover, floodWW )' : 'vec4f( 0.0 )' };
 	return o;
 }
 `;

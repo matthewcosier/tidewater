@@ -55,6 +55,19 @@ export class LensDroplets {
 
 	}
 
+	// Water thrown onto the lens above the surface (src/disasters/DisasterSound.js: the flood's front or its spray
+	// passing the camera): wets it to `strength` (0..1) and restarts the drying, as surfacing does. `seed` places the
+	// drops (the caller's seeded draw). A wetter lens is left as it is.
+	splash( strength, seed ) {
+
+		const s = Math.min( 1, Math.max( 0, Number( strength ) || 0 ) );
+		if ( s <= this.wet.value ) return;
+		this.wet.value = s;
+		this.age.value = 0;
+		this.seed.value = ( ( ( Number( seed ) || 0 ) % 97 ) + 97 ) % 97;
+
+	}
+
 	// compatibility with the three.js version (the composite is lensDroplets() in WGSL)
 	build() {
 

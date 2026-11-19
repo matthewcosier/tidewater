@@ -8,12 +8,15 @@ import {Vector3,Quaternion} from '../src/engine/index.js';
 import {structure,STRUCTURES,StructuralDamage} from '../src/disasters/Structures.js';
 import {materialMembers,memberFrame} from '../src/disasters/MaterialMembers.js';
 import {drawMember} from '../src/disasters/MemberSkin.js';
+import {pieceMotionOf} from '../src/engine/render/PieceMotion.js';
+import {drawnSpan,drawnRange,drawnNormalAt} from './helpers/drawn-pieces.mjs';
 await init({module_or_path:await readFile(new URL('../public/rally/rally_physics_bg.wasm',import.meta.url))});
 const rows=(sim)=>{const a=sim.structure_joint_states(),out=[];for(let i=0;i<a.length;i+=15)out.push(Array.from(a.slice(i,i+15)));return out;};
 function fixture(name='Connected timber fixture',decoration=false){const sim=new RallyPhysics(),colliders=new Colliders(),B=new Builder(),terrain={heightAt:()=>-100};sim.reset(100,100,100,0);
  structure(name,colliders,()=>{B.box('wood',-1.05,3,0,2,3,.08);B.box('wood',1.05,3,0,2,3,.08);B.box('roofMetal',0,4.55,0,4.3,.02,2);if(decoration==='torus')B.torus('hard',-1.05,3.8,.15,.18,.02);else if(decoration)B.box('hard',-1.05,3.02,.15,.42,.36,.08);colliders.addBox(new Vector3(0,3,0),new Vector3(2.2,1.6,.1),0,{solid:true,walkable:true});});
  for(const b of Object.values(B.batches))b.build();const record=STRUCTURES.pop(),field={terrain:()=>-100,sample:()=>({height:-100,wx:0,wy:0,wz:0,ux:0,uz:0,ax:0,ay:0,az:0})};const app={terrainData:terrain,colliders,rally:{physics:sim,refreshIslandColliders:()=>{}}},damage=new StructuralDamage(app,{field});damage.addRecords([record]);return {sim,damage,record,colliders};}
-const vertices=r=>r.spans.map(s=>s.geo.attributes.position.array.slice(s.start*3,(s.start+s.count)*3));
+// where each span's vertices are drawn (the GPU moves loose pieces from their rest vertices)
+const vertices=r=>r.spans.map(s=>drawnSpan(s));
 const step=(sim,damage,n,loads)=>{for(let i=0;i<n;i++){sim.set_disaster_loads(new Float32Array(loads()));sim.advance(1/120,0,0,0,0);damage.sync(sim.prop_poses());}};
 
 test('Authored material entry builds connected sections, preserves rest geometry and restores all joints/colliders',()=>{
@@ -35,7 +38,7 @@ test('Actual connected panels transfer a subfailure load, bend continuously, the
 test('Continuous member skin is invariant under a shared rigid transform and contains real intermediate section vertices',()=>{
  const {sim,damage,record}=fixture();try{assert.ok(damage.fracture(record));const member=record.members.find(m=>m.material==='timber'),rotation=new Quaternion().setFromAxisAngle(new Vector3(.2,.5,.7).normalize(),.8),translation=new Vector3(4,2,-3);
   for(const body of member.sections){body.position.copy(body.origin).applyQuaternion(rotation).add(translation);body.quaternion.copy(rotation).multiply(body.restQuaternion);}
-  drawMember(member);let intermediate=0;for(const s of member.spans)for(let i=0;i<s.pos.length;i+=3){const p=new Vector3().fromArray(s.pos,i),actual=new Vector3().fromArray(s.geo.attributes.position.array,s.start*3+i),expected=p.clone().applyQuaternion(rotation).add(translation);assert.ok(actual.distanceTo(expected)<2e-5);const u=p.sub(member.center).dot(member.axes[0])/member.length+.5;if(u>.2&&u<.8)intermediate++;}assert.ok(intermediate>12,'surface tessellation must allow visible bending between end faces');
+  drawMember(member);let intermediate=0;for(const s of member.spans)for(let i=0;i<s.pos.length;i+=3){const p=new Vector3().fromArray(s.pos,i),actual=new Vector3().fromArray(drawnSpan(s),i),expected=p.clone().applyQuaternion(rotation).add(translation);assert.ok(actual.distanceTo(expected)<2e-5);const u=p.sub(member.center).dot(member.axes[0])/member.length+.5;if(u>.2&&u<.8)intermediate++;}assert.ok(intermediate>12,'surface tessellation must allow visible bending between end faces');
  }finally{damage.reset();sim.free();}
 });
 
@@ -47,8 +50,8 @@ test('Bending and severed skin agree with the two solved section frames for ever
    const p=new Vector3().fromArray(s.pos,i),u=Math.max(0,Math.min(1,p.clone().sub(member.center).dot(member.axes[0])/member.length+.5));let t=u;
    if(severed){const tri=Math.floor(i/9)*9,centroid=new Vector3();for(let j=0;j<9;j+=3)centroid.add(new Vector3().fromArray(s.pos,tri+j));t=centroid.multiplyScalar(1/3).sub(member.center).dot(member.axes[0])>0?1:0;}
    const projected=member.sections.map((b,k)=>p.clone().sub(b.origin).applyQuaternion(rotations[k]).add(b.position));
-   const expected=projected[0].lerp(projected[1],t),actual=new Vector3().fromArray(s.geo.attributes.position.array,s.start*3+i);assert.ok(actual.distanceTo(expected)<2e-5);
-   if(s.nrm){const n=new Vector3().fromArray(s.nrm,i),expected=n.clone().applyQuaternion(rotations[0]).lerp(n.clone().applyQuaternion(rotations[1]),t).normalize(),actual=new Vector3().fromArray(s.geo.attributes.normal.array,s.start*3+i);assert.ok(actual.distanceTo(expected)<2e-5);}
+   const expected=projected[0].lerp(projected[1],t),actual=new Vector3().fromArray(drawnRange(s.geo,s.start+i/3,1),0);assert.ok(actual.distanceTo(expected)<2e-5);
+   if(s.nrm){const n=new Vector3().fromArray(s.nrm,i),expected=n.clone().applyQuaternion(rotations[0]).lerp(n.clone().applyQuaternion(rotations[1]),t).normalize(),actual=new Vector3().copy(drawnNormalAt(s.geo,s.start+i/3));assert.ok(actual.distanceTo(expected)<2e-5);}
   }}
  }finally{damage.reset();sim.free();}
 });
@@ -66,7 +69,7 @@ for(const shape of ['box','torus'])for(const severed of [false,true])test(`Actua
   assert.equal(triangles.length,shape==='torus'?192:12);
   {member.severed=severed;drawMember(member);
    for(const tri of triangles)for(let edge=0;edge<3;edge++){
-    const a=tri[edge],b=tri[(edge+1)%3],restA=new Vector3().fromArray(span.pos,(a-span.start)*3),restB=new Vector3().fromArray(span.pos,(b-span.start)*3),nowA=new Vector3().fromArray(span.geo.attributes.position.array,a*3),nowB=new Vector3().fromArray(span.geo.attributes.position.array,b*3);
+    const a=tri[edge],b=tri[(edge+1)%3],restA=new Vector3().fromArray(span.pos,(a-span.start)*3),restB=new Vector3().fromArray(span.pos,(b-span.start)*3),nowA=new Vector3().fromArray(drawnRange(span.geo,a,1),0),nowB=new Vector3().fromArray(drawnRange(span.geo,b,1),0);
     assert.ok(Math.abs(nowA.distanceTo(nowB)-restA.distanceTo(restB))<2e-5,`indexed triangle bridges separated section poses (${severed?'severed':'bending'}): ${nowA.distanceTo(nowB)}m instead of ${restA.distanceTo(restB)}m`);
    }
   }
@@ -97,12 +100,14 @@ test('Actual native connection damping is dissipative for unequal masses and cou
 test('Repeated native poses leave geometry untouched while motion and connection failure invalidate the skin',()=>{
  const {sim,damage,record}=fixture('Sleeping member cache');try{
   assert.ok(damage.fracture(record));const member=record.members.find(m=>m.sections.length===2),attribute=member.spans[0].geo.attributes.position,poses=sim.prop_poses();
-  const version=attribute.version;damage.sync(poses);assert.equal(attribute.version,version,'unchanged poses must not upload geometry again');
+  // a redraw: the member's drawn pose moved (its slots' transforms) or its skin changed kind (its vertex weights)
+  const geo=member.spans[0].geo,redraws=()=>pieceMotionOf(geo)+geo.attributes.piece.version;
+  const version=redraws();damage.sync(poses);assert.equal(redraws(),version,'unchanged poses must not upload geometry again');assert.equal(attribute.version,0,'the GPU draws the member: its rest vertices are never rewritten');
   const id=member.sections[1].id;for(let i=0;i<poses.length;i+=10)if(poses[i]===id)poses[i+1]+=.3;
-  damage.sync(poses);assert.ok(attribute.version>version);const moved=attribute.version;damage.sync(poses);assert.equal(attribute.version,moved);
+  damage.sync(poses);assert.ok(redraws()>version);const moved=redraws();damage.sync(poses);assert.equal(redraws(),moved);
   const states=sim.structure_joint_states();for(let i=0;i<states.length;i+=15)if(states[i]===member.joint)states[i+1]=1;
   const original=sim.structure_joint_states.bind(sim);sim.structure_joint_states=()=>states;
-  damage.sync(poses);assert.equal(member.severed,true);assert.ok(attribute.version>moved,'a break must redraw even when section poses are identical');sim.structure_joint_states=original;
+  damage.sync(poses);assert.equal(member.severed,true);assert.ok(redraws()>moved,'a break must redraw even when section poses are identical');sim.structure_joint_states=original;
   damage.reset();assert.ok(damage.fracture(record));assert.ok(record.members.every(m=>m.skinDirty===false));
  }finally{damage.reset();sim.free();}
 });

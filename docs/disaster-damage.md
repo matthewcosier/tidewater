@@ -5,10 +5,6 @@ falls about its hinge. Code: `src/disasters/TreeFailure.js` (failure and hinge),
 (green-wood mass), `src/disasters/Bodies.js` (wiring), `src/disasters/FallenVegetation.js` (the copied mesh
 and the snap cut), `rally-physics/src/disasters.rs` (`set_prop_motion_limits`, `set_prop_crown`).
 
-Every failed tree used to spawn upright as one free body with the density of cork (35 kg per metre of
-height, 142 kg/m³ for an 18 m palm), and a gust sent it cartwheeling. fallen palms drew as
-flat frond starbursts and bare trunks, because the crown had no support and sank into the terrain.
-
 ## Design note
 
 1. **Reference.** EF scale damage indicators (WSEC 2006, used by the US NWS): DI 28 hardwoods are
@@ -54,55 +50,11 @@ flat frond starbursts and bare trunks, because the crown had no support and sank
 - Body: stem box plus a crown sphere of 0.3 x crown radius (the crushed crown) that holds the top off the
   ground; friction 0.9 so branches snag.
 
+## Evidence
+
 # Disaster damage: buildings fail piece by piece
 
-Earlier behaviour: a house still tilted in the flood as one
-whole block, because the old path turned a whole house into jointed members on its first exposed
-frame and let the anchor joint rotate the lot.
-
 ## Design note
-
-1. **Reference.** Wind: the EF scale damage indicators for one- and two-family residences (WSEC 2006,
-   "A recommendation for an enhanced Fujita scale", Texas Tech; DI 2). Declared bands for this game,
-   inside those indicators: roof covering 38-49 m/s, roof structure 50-60 m/s, exterior walls 61-74
-   m/s, broken glass in doors and windows about 43 m/s (DI 2 DOD 3, expected 96 mph). Pressure is
-   q = 0.5 rho V^2 (rho 1.225 kg/m^3) times an external coefficient: roof uplift Cp -1.0 over the
-   field and -1.5 at eaves, ridge and gable edges (ASCE 7-16 ch. 30 zones 1 to 3), walls +0.8
-   windward, -0.7 side, -0.5 leeward (ASCE 7-16 fig. 27.3-1), plus internal pressure GCpi 0.18 while
-   the house is enclosed and 0.55 once an opening has broken (ASCE 7-16 table 26.13-1). Water: FEMA
-   P-646 (2019) hydrodynamic force F = 0.5 rho_s Cd b h u^2 with rho_s 1100 kg/m^3 (sea water with
-   sediment) and Cd 2.0, the impulsive surge at the leading edge 1.5 x the hydrodynamic force (FEMA
-   P-646 eq. 6-7), and the hydrostatic push 0.5 rho_s g b h^2 while the interior is still dry. Masonry fails only above about 5 m flow depth (Suppasri et al. 2013, Nat. Hazards 66: 319-341,
-   masonry and RC washed away mostly above 5-6 m). Failure order the player should see: windows and
-   doors, wall panels one by one, the roof lifting off; never the house moving as one block.
-2. **Source of truth.** Wind, water height and flow from `DisasterField.sample` (one sample per
-   building per frame at its centre), ground from `TerrainData.heightAt`, capacities scattered per
-   event by `EventRandom.capacityFactor` (new stream `STREAM.component`, CAPACITY_COV of the
-   building material). The components are the building's own authored spans (`structure()` tags).
-3. **Budget.** CPU only: one field sample per exposed house per frame and a loop over its 30 to 60
-   components (24 village buildings, about 1000 components, under 0.1 ms). Rigid pieces spawn at
-   most 8 per second (burst 8) inside the existing 224-body structure budget; no new draws (the
-   pieces move vertices inside the existing merged village batches).
-4. **Detail by distance.** Large pieces (mass over 25 kg or longest side over 1.5 m) within 150 m of
-   the camera become rigid bodies; smaller or farther pieces collapse their vertices and go to the
-   debris hook (`StructuralDamage.onDebris(fn)`) for the tornado's GPU debris renderer to draw. A failed component that waits for a spawn token
-   stays drawn in place; it never pops. Reset restores every vertex and collider.
-7. **Edges.** Utilisation reads only the field (wind, water, flow), never a piece's own motion. Openings breached before walls are tested in the same frame, so the interior floods and the
-   hydrostatic term stops. Non-finite field values give zero load. Wind loads only the height of a
-   part above its own ground (`exposed` in `stepComponents`, ground read at the part's centre):
-   stilt pad stones sit about 73% in the soil and took the whole 80 m/s core load on their full face
-   before this (96 of 98 failed in the node test; 23 of 80 masonry parts in the browser test). Stones are binned by 3 m cell and by height, so a chimney never carries the pad stones at its foot. Colliders: a failed part takes only its own collider. On a record's first failure its shell box
-   (the one box over the whole body) is swapped for one slab per wall and masonry part in the shell's
-   frame; each failure drops its part's slab. Before this the first rigid piece disabled every
-   collider of the house and the walls still standing became walk-through (37 of 43 in the node test). A door or window piece spawns inside its standing wall's slab and is pushed out of it by the solver.
-8. **Evidence plan.** `test/building-damage.mjs` on the real village records (TerrainData + Village):
-   45 m/s fails roofing before walls; 50 m/s strips the roofs and leaves over 80% of walls standing;
-   a 2 m/s, 1.5 m flood breaks the submerged doors and windows and no masonry; the body spawn rate
-   stays under its bound; standing pieces never move; after one panel per house fails, the player's
-   capsule walking into any standing wall is stopped and a ray through the failed panel passes; an
-   80 m/s wind fails no stone more than two thirds buried and over half the masonry standing clear of
-   the ground. BDD `test/browser/disaster-buildings.spec.js` reads each part's failure game time
-   (`failedAt`) and asserts the first roof sheet goes strictly before the first wall panel.
 
 ## Model (buildings)
 
@@ -115,6 +67,30 @@ A failed roof frame takes its sheets; a failed wall panel takes the openings and
 Houses, sheds, the boathouse and the market stall use this path (`structure(..., {progressive:true})`);
 the pier, boardwalks and other decks keep the jointed module path.
 
+## Drawing (buildings, members, props)
+
+A loose piece is drawn by the GPU (`src/engine/render/PieceMotion.js`, `docs/render-performance.md`
+"Loose pieces drawn by the GPU"). Its vertices stay at rest in the merged batch; the first time a
+span moves it claims a slot, written once into its vertices' `piece` attribute, and every frame it
+moves it sets one 3x4 transform, rest to drawn, in its geometry's own frame:
+
+- a rigid piece (`Structures.drawSpans`): the body's pose after its rest origin; a span with a frame
+  (the imported terminals) takes `inverse * pose * frame`, its normal renormalised as `saveSpan`
+  renormalised its rest normals;
+- a jointed member (`MemberSkin.drawMember`): two consecutive slots, its two section frames, and each
+  vertex's rest weight toward the second (the bending blend, or 0 / 1 per triangle once severed),
+  written when the skin changes kind and again for every new claim (the kind is kept on the claim, so a
+  member that bends again after Restore island is drawn bending); the normal is renormalised after the
+  blend, as before;
+- a prop (`PropPhysics.draw`): `m * m0^-1`.
+
+The vertex stage of every pass applies it before the material hook, so the main pass, the shadow
+cascades, the refraction and colour passes and the motion vectors (this frame's transform against the
+last drawn one) see the piece where the CPU rewrite used to put it (`test/piece-equivalence.mjs`).
+Restore sets the slots back to identity for one frame (the jump writes its motion, as before), then
+hands them back and clears the vertices' slots, so a restored batch is drawn as at load. A small or
+distant piece still collapses its vertices on the CPU once (`hidePiece`).
+
 ## Not done yet
 
-Bend sway in the vegetation shader (reads `t.util`); pre-fractured terminals.
+Bend sway in the vegetation shader (reads `t.util`); pre-fractured terminals. See the lane map.

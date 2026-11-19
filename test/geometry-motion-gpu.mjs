@@ -1,6 +1,4 @@
 import { tempOutput } from './output-path.mjs';
-// GPU proof for CPU-batched fragment motion, independently of object transforms.
-// node test/geometry-motion-gpu.mjs [output]
 import './headless.mjs';
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';

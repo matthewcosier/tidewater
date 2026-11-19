@@ -3,6 +3,7 @@ import { LAYERS, DEPTH_FORMAT } from '../engine/render/SceneRenderer.js';
 import { FrameUniforms, createViewUniforms, setFrameCamera } from '../engine/render/Frame.js';
 import { Box3, Matrix4 } from '../engine/math/index.js';
 import { ATTRIBUTE_BLOCK, trackAttributeChanges, attributeBlocksUnchanged } from '../engine/render/AttributeChanges.js';
+import { piecesAway } from '../engine/render/PieceMotion.js';
 
 // Refraction source for the water: the scene below the water surface only, rendered right after the
 // opaque pass (same jittered camera, so the temporal resolve treats it like the scene) at a fraction
@@ -70,6 +71,9 @@ export class RefractionPass {
 			if ( m.underwaterLighting === 'none' || m.isWaterMaterial ) return false;
 			if ( o.isInstancedMesh ) return this._instancedMinY( o ) < this._clipY;
 			if ( ! o.geometry.attributes.position ) return true;
+			// a loose piece drawn by the GPU (PieceMotion.js) can be anywhere: its batch's rest bounds do
+			// not hold it, so the batch is drawn (the clip keeps only what is under the water)
+			if ( piecesAway( o.geometry ) ) return true;
 			return minimumWorldY( this._localBox( o ), o.matrixWorld ) < this._clipY;
 
 		};

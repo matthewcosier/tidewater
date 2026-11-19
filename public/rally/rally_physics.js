@@ -362,8 +362,9 @@ export class RallyPhysics {
     }
     /**
      * The platform's pose and motion for the coming steps: position xyz, rotation xyzw,
-     * linear velocity xyz, angular velocity xyz (about its origin). The solver carries it
-     * along that motion until the next call.
+     * linear velocity xyz, angular velocity xyz (about its origin). The next `advance` carries it
+     * along its pose delta (`derive_kinematic_velocities`); the given velocity serves a first
+     * pose, a teleport or a gap.
      * @param {number} id
      * @param {Float32Array} state
      * @returns {boolean}
@@ -462,13 +463,6 @@ export class RallyPhysics {
         wasm.rallyphysics_set_pusher(this.__wbg_ptr, x, y, z, vx, vy, vz, radius, height, active);
     }
     /**
-     * The detachable RS wing changes the rear aero balance independently of wheel damage.
-     * @param {boolean} attached
-     */
-    set_rear_wing(attached) {
-        wasm.rallyphysics_set_rear_wing(this.__wbg_ptr, attached);
-    }
-    /**
      * @param {Float32Array} segments
      * @returns {boolean}
      */
@@ -490,9 +484,8 @@ export class RallyPhysics {
         return ret !== 0;
     }
     /**
-     * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Square grid wrapper kept for the synthetic test terrains: `resolution` texels per side over
+     * `size` metres from `origin` on both axes. The game uses set_terrain_grid.
      * @param {Float32Array} heights
      * @param {number} resolution
      * @param {number} size
@@ -503,6 +496,27 @@ export class RallyPhysics {
         const ptr0 = passArrayF32ToWasm0(heights, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.rallyphysics_set_terrain(this.__wbg_ptr, ptr0, len0, resolution, size, origin);
+        return ret !== 0;
+    }
+    /**
+     * The source is Tidewater's row-major (z then x) texel-centred height grid, `heights[z * res_x + x]`,
+     * res_x texels along x and res_z rows along z (the WORLD.terrain rectangle, 2048 x 3328 m at 1 m),
+     * texel centres at origin + texel * (i + 0.5) per axis. Parry rows are Z and columns X, so the
+     * matrix is built directly: Avian's Vec<Vec> helper only lays the data out right for square grids.
+     * The vertices are the texel centres: extent per axis texel * (res - 1), centre per axis
+     * origin + texel * res / 2 (the square case is the old size * (res - 1) / res and origin + size / 2).
+     * @param {Float32Array} heights
+     * @param {number} res_x
+     * @param {number} res_z
+     * @param {number} texel
+     * @param {number} origin_x
+     * @param {number} origin_z
+     * @returns {boolean}
+     */
+    set_terrain_grid(heights, res_x, res_z, texel, origin_x, origin_z) {
+        const ptr0 = passArrayF32ToWasm0(heights, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.rallyphysics_set_terrain_grid(this.__wbg_ptr, ptr0, len0, res_x, res_z, texel, origin_x, origin_z);
         return ret !== 0;
     }
     /**
@@ -570,6 +584,19 @@ export class RallyPhysics {
         var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
+    }
+    /**
+     * Ground height (m) of the static terrain colliders at world (x, z), read from the heightfield's
+     * own triangles (the surface the bodies collide with), NaN off the grid. A vertical ray cast was
+     * tried first: it missed on shared vertices and edges, where a node test probes. Terrain
+     * colliders are never rotated. Lets node tests prove the collider sits on TerrainData.heightAt.
+     * @param {number} x
+     * @param {number} z
+     * @returns {number}
+     */
+    terrain_height(x, z) {
+        const ret = wasm.rallyphysics_terrain_height(this.__wbg_ptr, x, z);
+        return ret;
     }
     /**
      * Remote owner poses become kinematic bodies in the local collision world.
@@ -754,12 +781,12 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 43757, function: Function { arguments: [], shim_idx: 43758, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 43758, function: Function { arguments: [], shim_idx: 43759, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h44f5a62f65970bcf, wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 52282, function: Function { arguments: [Externref], shim_idx: 52283, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 52283, function: Function { arguments: [Externref], shim_idx: 52284, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h5cefeeeb60d29d96, wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90);
             return ret;
         },

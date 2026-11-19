@@ -13,6 +13,7 @@ import { Colliders } from '../src/world/Colliders.js';
 import { Scene, Vector3 } from '../src/engine/index.js';
 import { StorageBuffer } from '../src/engine/gpu/Texture.js';
 import { STRUCTURES, StructuralDamage } from '../src/disasters/Structures.js';
+import { drawnPosition } from '../src/engine/render/PieceMotion.js';
 
 const trace = process.env.BUILDING_DAMAGE_TRACE ? ( ...a ) => console.error( ( performance.now() / 1000 ).toFixed( 1 ), ...a ) : () => {};
 await init( { module_or_path: await readFile( new URL( '../public/rally/rally_physics_bg.wasm', import.meta.url ) ) } );
@@ -77,9 +78,14 @@ function covered() {
 	}
 	return out;
 }
+// Where the span is drawn against its rest: the GPU moves a loose piece by its slot's transform.
+const drawn = { x: 0, y: 0, z: 0 };
 function moved( s ) {
-	const a = s.geo.attributes.position.array, rest = s.restPos ?? s.pos;
-	for ( let i = 0; i < rest.length; i ++ ) if ( Math.abs( a[ s.start * 3 + i ] - rest[ i ] ) > .05 ) return true;
+	const rest = s.restPos ?? s.pos;
+	for ( let i = 0; i < s.count; i ++ ) {
+		drawnPosition( s.geo, s.start + i, drawn );
+		if ( Math.abs( drawn.x - rest[ i * 3 ] ) > .05 || Math.abs( drawn.y - rest[ i * 3 + 1 ] ) > .05 || Math.abs( drawn.z - rest[ i * 3 + 2 ] ) > .05 ) return true;
+	}
 	return false;
 }
 const all = () => { const list = houses.flatMap( r => r.spans.map( s => ( { r, s, kind: kindOf( r, s ) } ) ) ); byGeo.clear(); for ( const x of list ) { if ( ! byGeo.has( x.s.geo ) ) byGeo.set( x.s.geo, [] ); byGeo.get( x.s.geo ).push( x ); } for ( const v of byGeo.values() ) v.sort( ( a, b ) => a.s.start - b.s.start ); return list; };

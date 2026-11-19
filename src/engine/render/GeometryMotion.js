@@ -1,4 +1,5 @@
 import { BufferAttribute } from '../geometry/BufferAttribute.js';
+import { commitPieces } from './PieceMotion.js';
 
 // CPU-deformed batches need the last rendered vertex position as well as the
 // previous object matrix. Keep updates local to the changed fragment ranges.
@@ -38,4 +39,6 @@ export function commitGeometryMotion() {
   previous.needsUpdate = true;
  }
  dirty.clear();
+ // the loose pieces drawn by the GPU: this frame's transforms become the last drawn ones
+ commitPieces();
 }

@@ -88,3 +88,19 @@ test('A mesh used as the shadow scene root retains its original draw identity',(
  s.render(jet,renderer,[0,1,2]);
  assert.equal(passes.length,3);for(const p of passes)assert.equal(p.items[0].object,jet);
 });
+
+// Loose pieces drawn by the GPU (engine/render/PieceMotion.js) move with no vertex write: the cached
+// depth and the refraction pass must still see them where they are drawn.
+import {saveSpan,drawSpans,restoreSpans,commitGeometryMotion} from '../src/disasters/Structures.js';
+import {piecesAway} from '../src/engine/render/PieceMotion.js';
+import {Quaternion} from '../src/engine/index.js';
+test('A piece carried 300 m by the GPU redraws cached depth, and its batch counts as away until Restore',()=>{
+ const {s,scene,camera,jet}=fixture(),g=jet.geometry,span=saveSpan({geo:g,start:0,count:g.attributes.position.count});s.update(camera,sun,scene);
+ assert.deepEqual(s.update(camera,sun,scene),[],'a batch with no moved piece keeps its cached depth');
+ assert.equal(piecesAway(g),false,'an intact batch is held by its rest bounds');
+ drawSpans({origin:new Vector3(),spans:[span]},new Vector3(300,0,0),new Quaternion());
+ assert.ok(s.update(camera,sun,scene).includes(1),'the piece moved with no vertex write: its old shadow must go');
+ assert.equal(piecesAway(g),true,'the refraction pass cannot cull the batch by its rest bounds while a piece is away');
+ restoreSpans([span]);assert.ok(s.update(camera,sun,scene).includes(1),'the jump back redraws the depth');commitGeometryMotion();
+ assert.equal(piecesAway(g),false,'after Restore the batch is held by its rest bounds again');assert.equal(g.attributes.piece.array.every(x=>x===0),true,'Restore leaves the batch as at load');
+});

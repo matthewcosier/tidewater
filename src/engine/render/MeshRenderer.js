@@ -1,5 +1,6 @@
 import { GPU } from '../gpu/GPU.js';
 import { inheritGeometryMotion } from './GeometryMotion.js';
+import { inheritPieces, uploadPieces } from './PieceMotion.js';
 import { recordAttributeChanges } from './AttributeChanges.js';
 import { composeShader, createShaderModule, getBindGroupLayout, group0ForBlock } from '../gpu/Shader.js';
 import { buildMeshShader } from './MeshShader.js';
@@ -90,6 +91,8 @@ export class MeshRenderer {
 		GPU.onSubmit( () => {
 
 			if ( this.drawCount ) GPU.queue.writeBuffer( this.drawBuffer, 0, this.drawData.buffer, 0, this.drawCount * DRAW_STRIDE );
+			// the loose pieces' transforms set or settled since the last frame (PieceMotion.js)
+			uploadPieces();
 
 		} );
 		this.stats.draws = 0;
@@ -252,9 +255,10 @@ export class MeshRenderer {
 	_cachedLayout( object, geometry, material ) {
 
 		inheritGeometryMotion( geometry );
+		inheritPieces( geometry );
 		let byMat = _layouts.get( geometry );
 		if ( ! byMat ) _layouts.set( geometry, byMat = new Map() );
-		const inst = object.isInstancedMesh ? ( object.instanceColor ? 2 : 1 ) : 0;
+		const inst = object.isInstancedMesh ? ( object.instanceColor ? 2 : 1 ) + ( object.instancePrevMatrix ? 4 : 0 ) : 0;
 		const mkey = inst ? material.id + ':' + inst : material.id;
 		let e = byMat.get( mkey );
 		if ( e && e.version === material.version && e.attrsVersion === geometry.attributesVersion && ( ! inst || e.instanceMatrix === object.instanceMatrix ) ) {
@@ -285,7 +289,7 @@ export class MeshRenderer {
 	_layout( object, geometry, material ) {
 
 		const attrs = [];
-		const want = [ 'position', 'normal', 'uv', 'color', 'previousPosition', ...Object.keys( material.attributes ) ];
+		const want = [ 'position', 'normal', 'uv', 'color', 'previousPosition', 'piece', ...Object.keys( material.attributes ) ];
 		for ( const name of want ) {
 
 			const a = geometry.attributes[ name ];
@@ -297,6 +301,8 @@ export class MeshRenderer {
 
 			for ( let i = 0; i < 4; i ++ ) attrs.push( { name: 'instanceMatrix' + i, attr: object.instanceMatrix, column: i } );
 			if ( object.instanceColor ) attrs.push( { name: 'instanceColor', attr: object.instanceColor } );
+			// last frame's instance matrices (InstancedMesh.trackPreviousMatrices): one more vertex buffer
+			if ( object.instancePrevMatrix ) for ( let i = 0; i < 4; i ++ ) attrs.push( { name: 'instancePrevMatrix' + i, attr: object.instancePrevMatrix, column: i } );
 
 		}
 

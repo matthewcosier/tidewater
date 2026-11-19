@@ -1,9 +1,3 @@
-// Built sites keep their ground clear of the camera-following pebble field.
-// TerrainData.addClearZone marks a built site free of plants, rocks and debris, and DebrisPlacer honours it for
-// every placed item (obs.clear), but the pebble density mask was painted from the terrain alone: the gravel
-// path's pebbles and white shell grit sat on the terrain under the chairlift base deck and showed through its
-// planks as white dots. Runs the real mask step on the real terrain with the sites reserved in App.js order
-// (evacuation, then chairlift, then Debris).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TerrainData } from '../src/world/TerrainData.js';
@@ -31,11 +25,12 @@ test( 'Pebble mask: no pebble, cobble or grit inside a built site, and the open 
 	terrain.clearZones = [];
 	const open = maskOf();
 	terrain.clearZones = zones;
-	const { data, res, texel } = mask;
+	// The mask is rectangular since the strait domain (TerrainData sizeX x sizeZ): resX texels along x, resZ rows along z.
+	const { data, resX, resZ, texel, originX, originZ } = mask;
 	let inside = 0, dirty = 0, worst = 0, outsideChanged = 0;
-	for ( let j = 0; j < res; j ++ ) for ( let i = 0; i < res; i ++ ) {
+	for ( let j = 0; j < resZ; j ++ ) for ( let i = 0; i < resX; i ++ ) {
 
-		const x = terrain.origin + ( i + 0.5 ) * texel, z = terrain.origin + ( j + 0.5 ) * texel, o = ( j * res + i ) * 4;
+		const x = originX + ( i + 0.5 ) * texel, z = originZ + ( j + 0.5 ) * texel, o = ( j * resX + i ) * 4;
 		if ( terrain.inClearZone( x, z ) ) {
 
 			inside ++;
@@ -57,7 +52,7 @@ test( 'Pebble mask: no pebble, cobble or grit inside a built site, and the open 
 	const b = site.base;
 	for ( const [ dx, dz ] of [ [ 0, 0 ], [ 4, 0 ], [ - 4, 0 ], [ 0, 4 ], [ 0, - 4 ] ] ) {
 
-		const i = Math.floor( ( b.x + dx - terrain.origin ) / texel ), j = Math.floor( ( b.z + dz - terrain.origin ) / texel ), o = ( j * res + i ) * 4;
+		const i = Math.floor( ( b.x + dx - originX ) / texel ), j = Math.floor( ( b.z + dz - originZ ) / texel ), o = ( j * resX + i ) * 4;
 		assert.deepEqual( [ data[ o ], data[ o + 1 ], data[ o + 2 ] ], [ 0, 0, 0 ], `pebble mask at the base deck (${ dx }, ${ dz }) m` );
 
 	}

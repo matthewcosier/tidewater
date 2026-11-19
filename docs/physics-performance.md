@@ -54,3 +54,47 @@ This is not proof of an irreducible performance floor. The follow-up below measu
 The vendored Avian contact patch avoids redundant work at stationary endpoints. The optional native comparison feature checks contact responses against the upstream solver. Production WebAssembly excludes the comparison code. The island advances at most three fixed physics steps per frame while a disaster is active. This slows simulation time under load without reducing solver detail.
 
 Use `tools/articulated-benchmark.mjs` and the browser frame-time benchmark to repeat measurements on a particular machine. Compare runs with the same viewport, render scale, camera and event workload.
+
+## Experimental implementation notes
+
+- **Per-event seed.** Every disaster draws a fresh 32-bit seed (`EventRandom.freshSeed`, crypto) unless `config.seed` is given for tests and bug repro. The tornado's track wander, speed surges, wind pulses and gusts (`TornadoMotion.js`), the dust and debris parcels (`TornadoParticles.spawn`, `STREAM.particles`) and the funnel's genesis, rope-out, base height, wall-cloud size and debris height (`TornadoFunnel.tornadoLifecycle`, track stream indices 32+) all derive from it through stateless hashes, so a fixed seed replays an event exactly and adding draws to one element never shifts another. The seed is internal (event.seed, Disasters.runSeed, telemetry); no panel shows it.
+- **Capacity scatter.** Member, anchor and tree capacities scatter lognormally around the nominal value with mean 1 (`capacityFactor`; COV timber and light frame 0.25, masonry 0.30, steel 0.07, trees 0.35, sources in `EventRandom.js`). A building's anchor capacity is drawn once per run, when a disaster starts from calm, because strength belongs to the building, not to the event: two disasters in one run meet the same houses.
+- **Status wording.** While the 25 ms disaster cap (`DISASTER_MAX_STEP`, `SimulationPacing.js`) slows a loaded frame below real time, the Disasters status reads "Playback slowed under load" with the rate shown (to 2 decimals); otherwise it names the mode. "real time · 0.62× speed" contradicted itself (`test/disaster-playback-status.mjs`).
+- **Allocation.** Disaster loads and body sync reuse one-shape option objects, a Set, a sample, a context and a growing Float32Array (7 floats per body, doubled when short, never per frame) and pass `subarray(0, n)` to the bridge: 79-81 minor collections per 1500 frames at 305 bodies before, 13-16 after; body sync 46-47 per 15000 frames before, 0 after, with the same forces and poses (`test/disaster-bookkeeping-alloc.mjs`). Left: V8's `Math.hypot` builds an argument array (3 calls per body); replacing it with a square root changes the last bit of the forces, so it waits for an exactness argument. `Field.acceleration` (the water lane's file) still allocates its air, raw, relative and water objects per call.
+
+## People's ragdolls in a tsunami flood (2026-11-15)
+
+Measured with `tools/flood-profile.mjs` (10 m tsunami, seed 7, warning lead 3 s, 2560 x 1267, view `tsunamiFlood`,
+the real engine loop), flood-on-land phase, before and after taken 15 minutes apart at load average 28 and 27:
+
+| Flood on land | Before | Pool fix |
+|---|---|---|
+| Frames a second | 5.8 | 8.6 |
+| Engine CPU ms a frame (median) | 170 | 116 |
+| Game seconds per wall second | 0.15 | 0.22 |
+| `Ragdoll.simulate` on the main thread, ms a frame | 35.5 | 0 |
+| Garbage collection, ms a frame | 37.9 | 19.5 |
+| Allocated, MB a frame | 71.6 | 22.4 |
+| Pool: dispatched / accepted / fallback | 2,929 / 1,611 / 1,319 | 3,276 / 3,279 / 0 |
+
+Cause: the GPU water solver's readback lands in the host grid whenever its mapping resolves
+(`WaterGridGPU.readback`). A frame waiting for the ragdoll workers let it land mid-frame; each landing stepped the
+grid's version and the pool discarded every result in flight as stale (`grid=false`, every one of the 1,319), so the
+ferry crowd, dispatched just after the solver's step, was solved twice a frame. The pool now treats a version step
+the readbacks alone account for as the next interval's water, as a frame that does not wait sees it
+(`RagdollPool.js` `steady`); any other step still sends the interval to the serial solver once.
+`test/articulated-flood.mjs` runs real workers in a real node flood with the real readback code landing during the
+wait: 0 of 24 accepted before, 24 of 24 after, each equal to the serial solve bit for bit.
+
+The solver's substep storage (joint coordinates, limit rows, the articulated response's columns and caches, the
+capsule narrow phase, self contacts, load options) is now owned by the rig and reused: same operations, same order,
+bit for bit through 36 flood frames against the allocating solver (`test/reference/PreScratchRagdoll.js`). One
+0.025 s flood interval allocates 651 KB in the solver against 1.87 MB; what is left are boxed doubles from calls V8
+does not inline into `simulate`.
+
+Left on the main thread for people in the flood (pool-fix profile): the pool's `postMessage` 2.5 ms a frame (each
+batch copies both water grids, 2 MB, to every worker), result decoding 1.0 ms (`done`: every body's full record comes
+back), `Contact.body` 1.35 ms (the rest test, pose and drawing after a result). Next, in order: send each job only
+the water cells round its rigs (the terrain tile already works this way), return only the bodies' moving state, one
+batch a frame (the crowd's batch goes out before the car, player and wind farm update, so merging it with the beach's
+needs the crowd's update moved after them).

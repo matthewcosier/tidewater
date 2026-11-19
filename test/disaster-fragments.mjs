@@ -8,6 +8,7 @@ import {Rand} from '../src/world/Props.js';
 import {mulberry32} from '../src/util/Noise.js';
 import {Colliders} from '../src/world/Colliders.js';
 import {structure,STRUCTURES,StructuralDamage} from '../src/disasters/Structures.js';
+import {drawnSpan} from './helpers/drawn-pieces.mjs';
 await init({module_or_path:await readFile(new URL('../public/rally/rally_physics_bg.wasm',import.meta.url))});
 const advance=(sim,n)=>{for(let i=0;i<n;i++)sim.advance(1/120,0,0,0,0);};
 const poses=sim=>{const p=sim.prop_poses(),a=[];for(let i=0;i<p.length;i+=10)a.push(Array.from(p.slice(i,i+10)));return a;};
@@ -20,7 +21,7 @@ test('Real boardwalk fragments retain authored geometry and collide above flat o
   for(const b of Object.values(B.batches))b.build();const record=STRUCTURES.pop();assert.equal(STRUCTURES.length,before);
   const app={terrainData:terrain,rally:{physics:sim}},damage=new StructuralDamage(app,{});damage.addRecords([record]);
   const original=record.spans.map(s=>s.geo.attributes.position.array.slice(s.start*3,(s.start+s.count)*3));
-  try{assert.equal(damage.fracture(record),true);damage.sync(sim.prop_poses());for(let i=0;i<record.spans.length;i++){const s=record.spans[i],current=s.geo.attributes.position.array.slice(s.start*3,(s.start+s.count)*3);for(let j=0;j<current.length;j++)assert.ok(Math.abs(current[j]-original[i][j])<1e-5,'fracture must not snap authored vertices upward');}
+  try{assert.equal(damage.fracture(record),true);damage.sync(sim.prop_poses());for(let i=0;i<record.spans.length;i++){const s=record.spans[i],current=drawnSpan(s);for(let j=0;j<current.length;j++)assert.ok(Math.abs(current[j]-original[i][j])<1e-5,'fracture must not snap authored vertices upward');}
    advance(sim,1200);const p=poses(sim);assert.ok(p.length>1);for(const body of p)assert.ok(body[2]>terrain.heightAt(body[1],body[3])-.12,`buried boardwalk body ${body[0]}: y=${body[2]}, ground=${terrain.heightAt(body[1],body[3])}`);
    damage.reset();assert.equal(sim.prop_count(),0);assert.ok(record.colliders.every(c=>c.solid&&c.walkable));
   }finally{sim.free();}

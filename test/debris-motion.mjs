@@ -4,29 +4,32 @@ import {BufferGeometry,BufferAttribute,Mesh,Vector3,Quaternion} from '../src/eng
 import {Material} from '../src/engine/render/Material.js';
 import {MeshRenderer} from '../src/engine/render/MeshRenderer.js';
 import * as structures from '../src/disasters/Structures.js';
+import {drawnGeometry} from './helpers/drawn-pieces.mjs';
 
+// The GPU draws a moving piece from its rest vertices and its slot's transforms (this frame's and the
+// last drawn one): drawnGeometry reads where the vertex stage puts each vertex.
 test('A moving batched fragment retains its previous rendered vertices for temporal reprojection',()=>{
  const vertices=new Float32Array([0,0,0,1,0,0,0,1,0]);
  const geo=new BufferGeometry().setAttribute('position',new BufferAttribute(vertices.slice(),3));
  const span=structures.saveSpan({geo,start:0,count:3}),body={origin:new Vector3(),spans:[span]};
  structures.drawSpans(body,new Vector3(3,0,0),new Quaternion());
- const previous=geo.getAttribute('previousPosition');
- assert.ok(previous,'moving geometry needs previous rendered positions, otherwise its velocity is only camera motion');
- assert.deepEqual(previous.array,vertices,'first movement starts from the intact structure');
- const first=geo.attributes.position.array.slice();
+ assert.deepEqual(drawnGeometry(geo,true),vertices,'first movement starts from the intact structure');
+ const first=drawnGeometry(geo);
+ assert.deepEqual(first,new Float32Array([3,0,0,4,0,0,3,1,0]),'the piece is drawn where it moved');
  structures.commitGeometryMotion();
  structures.drawSpans(body,new Vector3(7,2,0),new Quaternion());
- assert.deepEqual(previous.array,first,'second frame reprojects to the actual first frame, not the current shape');
+ assert.deepEqual(drawnGeometry(geo,true),first,'second frame reprojects to the actual first frame, not the current shape');
  const mesh=new Mesh(geo,new Material());
  const layout=MeshRenderer.prototype._layout.call({},mesh,geo,mesh.material);
- assert.ok(layout.layout.some(a=>a.name==='previousPosition'),'the real renderer must consume the saved positions');
+ assert.ok(layout.layout.some(a=>a.name==='piece'),'the real renderer must draw the pieces from their transforms');
  assert.ok(layout.buffers.length<=8&&layout.layout.length<=16);
  structures.commitGeometryMotion();
- assert.deepEqual(previous.array,geo.attributes.position.array,'a paused following frame has no continuing object velocity');
+ assert.deepEqual(drawnGeometry(geo,true),drawnGeometry(geo),'a paused following frame has no continuing object velocity');
+ assert.deepEqual(geo.attributes.position.array,vertices,'the batch keeps the rest vertices while the piece moves');
  structures.restoreSpans([span]);
- assert.deepEqual(geo.attributes.position.array,vertices,'Restore retains exact authored vertices');
+ assert.deepEqual(drawnGeometry(geo),vertices,'Restore retains exact authored vertices');
  structures.commitGeometryMotion();
- assert.deepEqual(previous.array,vertices,'Restore also settles history for the following frame');
+ assert.deepEqual(drawnGeometry(geo,true),vertices,'Restore also settles history for the following frame');
 });
 
 test('Late structures keep one baseline even when registration repeats after movement',()=>{
@@ -50,12 +53,11 @@ test('A loose prop moving in a shared material batch retains rendered vertex his
   .setAttribute('normal',new BufferAttribute(new Float32Array([0,0,1,0,0,1,0,0,1]),3));
  const prop={m0:new Matrix4(),m:new Matrix4().makeTranslation(2,0,0),spans:[{geo,start:0,count:3}]};
  PropPhysics.prototype.draw.call({},prop);
- const prior=geo.getAttribute('previousPosition');
- assert.ok(prior,'Loose props also need object motion rather than just camera motion');
- assert.deepEqual(prior.array,original);
- structures.commitGeometryMotion();const atTwo=geo.attributes.position.array.slice();
+ assert.deepEqual(drawnGeometry(geo,true),original,'Loose props also need object motion rather than just camera motion');
+ structures.commitGeometryMotion();const atTwo=drawnGeometry(geo);
+ assert.deepEqual(atTwo,new Float32Array([2,0,0,3,0,0,2,1,0]));
  prop.m.makeTranslation(4,1,0);PropPhysics.prototype.draw.call({},prop);
- assert.deepEqual(prior.array,atTwo,'the second prop pose reprojects to its last rendered pose');
+ assert.deepEqual(drawnGeometry(geo,true),atTwo,'the second prop pose reprojects to its last rendered pose');
  structures.commitGeometryMotion();
 });
 
@@ -66,7 +68,8 @@ test('Village material views inherit motion history registered through their sha
  structures.drawSpans({origin:new Vector3(),spans:[span]},new Vector3(2,0,0),new Quaternion());
  const mesh=new Mesh(view,new Material()),renderer=new MeshRenderer();
  const layout=renderer._cachedLayout(mesh,view,mesh.material);
- assert.ok(layout.layout.some(a=>a.name==='previousPosition'),'the actual material view must receive motion history created on its backing batch');
- assert.equal(view.getAttribute('previousPosition'),shared.getAttribute('previousPosition'),'all views use one previous-vertex snapshot');
+ assert.ok(layout.layout.some(a=>a.name==='piece'),'the actual material view must draw the pieces moved on its backing batch');
+ assert.equal(view.getAttribute('piece'),shared.getAttribute('piece'),'all views read one piece attribute');
+ assert.deepEqual(drawnGeometry(view),drawnGeometry(shared),'every view draws the piece where it moved');
  structures.commitGeometryMotion();
 });

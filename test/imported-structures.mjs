@@ -5,11 +5,12 @@ import {importedTerminalFixture} from './helpers/imported-terminal.mjs';
 import {BufferAttribute,BufferGeometry,Group,Mesh,Vector3} from '../src/engine/index.js';
 import {partitionImportedGeometry} from '../src/disasters/ImportedFragments.js';
 import {readFile} from 'node:fs/promises';
+import {drawnRange} from './helpers/drawn-pieces.mjs';
 import init,{RallyPhysics} from '../public/rally/rally_physics.js';
 
 function meshes(app){const result=[];for(const site of [app.terminal,app.joeyTerminal])site?.root.traverse(m=>{if(m.isMesh&&/^Terminal (Building|Glazing|Interior|Tower|Walkway|Jetty|Hardstand)$/.test(m.parent?.name??''))result.push(m);});return result;}
 function surfaceMoments(mesh){
- const g=mesh.geometry,p=g.attributes.position,index=g.index?.array,n=index?.length??p.count,a=new Vector3(),b=new Vector3(),c=new Vector3(),ab=new Vector3(),ac=new Vector3(),moments=Object.fromEntries(Object.entries(g.attributes).filter(([name])=>name!=='previousPosition').map(([name,v])=>[name,Array(v.itemSize).fill(0)]));let area=0;
+ const g=mesh.geometry,p=g.attributes.position,index=g.index?.array,n=index?.length??p.count,a=new Vector3(),b=new Vector3(),c=new Vector3(),ab=new Vector3(),ac=new Vector3(),moments=Object.fromEntries(Object.entries(g.attributes).filter(([name])=>name!=='previousPosition'&&name!=='piece').map(([name,v])=>[name,Array(v.itemSize).fill(0)]));let area=0;
  for(let i=0;i<n;i+=3){const ids=[0,1,2].map(k=>index?.[i+k]??i+k);a.fromBufferAttribute(p,ids[0]).applyMatrix4(mesh.matrixWorld);b.fromBufferAttribute(p,ids[1]).applyMatrix4(mesh.matrixWorld);c.fromBufferAttribute(p,ids[2]).applyMatrix4(mesh.matrixWorld);const A=ab.subVectors(b,a).cross(ac.subVectors(c,a)).length()*.5;area+=A;for(const [name,out]of Object.entries(moments)){const attr=g.attributes[name];for(let k=0;k<out.length;k++)out[k]+=A*ids.reduce((n,id)=>n+attr.getComponent(id,k),0)/3;}}
  return {area,moments,triangles:n/3};
 }
@@ -50,7 +51,7 @@ test('Real native imported fragments keep bounded rest extents, rigid triangles,
   for(const r of targets)assert.equal(damage.fracture(r),true);
   assert.ok(damage.bodies.size>=3);const loads=[];for(const b of damage.bodies.values()){const spanPositions=b.spans.flatMap(s=>Array.from(s.pos));for(const k of [0,2]){const values=spanPositions.filter((_,i)=>i%3===k);assert.ok(Math.max(...values)-Math.min(...values)<=10.0001,`${b.name} native body owns an oversized original face`);}loads.push(b.id,12*b.mass,9.81*b.mass,-4*b.mass,0,.7*b.mass,0);}
   physics.set_disaster_loads(new Float32Array(loads));for(let i=0;i<90;i++)physics.advance(1/120,0,0,0,0);damage.sync(physics.prop_poses());
-  let moved=0;for(const b of damage.bodies.values()){if(b.position.distanceTo(b.origin)>.1)moved++;for(const s of b.spans)for(let j=0;j<s.count;j++){const expected=new Vector3().fromArray(s.pos,j*3).sub(b.origin).applyQuaternion(b.quaternion).add(b.position).applyMatrix4(s.inverse),actual=new Vector3().fromBufferAttribute(s.geo.attributes.position,s.start+j);assert.ok(expected.distanceTo(actual)<2e-4,'each actual triangle must follow one native rigid transform without cross-body stretching');}}
-  assert.equal(moved,damage.bodies.size);damage.reset();assert.equal(physics.prop_count(),0);for(let i=0;i<list.length;i++)for(const [name,a]of Object.entries(baseline[i])){if(name==='previousPosition')continue;assert.deepEqual(list[i].geometry.attributes[name].array,a,`Restore must preserve every ${name} value, including unfractured neighbouring cells`);}assert.ok(targets.every(r=>r.colliders.every(c=>!c.disasterDisabled)));
+  let moved=0;for(const b of damage.bodies.values()){if(b.position.distanceTo(b.origin)>.1)moved++;for(const s of b.spans)for(let j=0;j<s.count;j++){const expected=new Vector3().fromArray(s.pos,j*3).sub(b.origin).applyQuaternion(b.quaternion).add(b.position).applyMatrix4(s.inverse),actual=new Vector3().fromArray(drawnRange(s.geo,s.start+j,1),0);assert.ok(expected.distanceTo(actual)<2e-4,'each actual triangle must follow one native rigid transform without cross-body stretching');}}
+  assert.equal(moved,damage.bodies.size);damage.reset();assert.equal(physics.prop_count(),0);for(let i=0;i<list.length;i++)for(const [name,a]of Object.entries(baseline[i])){if(name==='previousPosition'||name==='piece')continue;assert.deepEqual(list[i].geometry.attributes[name].array,a,`Restore must preserve every ${name} value, including unfractured neighbouring cells`);}assert.ok(targets.every(r=>r.colliders.every(c=>!c.disasterDisabled)));
  }}finally{damage.reset();physics.free();}
 });

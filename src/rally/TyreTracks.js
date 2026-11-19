@@ -21,6 +21,7 @@ const GROUND = [
 	{ depth: 0.3, berm: 0.14, rise: 0.25 },
 ];
 const HARD = kind => kind === 2 || kind === 3;
+const PEAK = { 2: [ 0.11, 8 * Math.PI / 180 ], 3: [ 0.10, 7 * Math.PI / 180 ] };
 const ATTRIBUTES = { position: 3, normal: 3, uv: 2, aMark: 4, aShape: 4, aSlip: 4, aAcross: 3 };
 
 // The imprint is a height field in metres over the ribbon (u -1..1 across, uv.y metres along):
@@ -212,7 +213,9 @@ export class TyreTracks {
 		if ( rich ) {
 			ratio = clamp( state[ 81 + wheel ], - 1, 1 );
 			slide = clamp( state[ i + 7 ], 0, 1 );
-			scrub = Math.max( smooth( 0.1, 0.45, Math.abs( ratio ) ), smooth( 0.08, 0.3, Math.abs( state[ 85 + wheel ] ) ), smooth( 0.35, 0.8, slide ) );
+			// Loose ground prints anyway; scrub only shades it. Hard ground marks from its peak slip.
+			const [ ratioOnset, angleOnset ] = PEAK[ kind ] || [ 0.1, 0.08 ];
+			scrub = Math.max( smooth( ratioOnset, ratioOnset + 0.35, Math.abs( ratio ) ), smooth( angleOnset, angleOnset + 0.22, Math.abs( state[ 85 + wheel ] ) ), smooth( 0.35, 0.8, slide ) );
 		} else {
 			// Older snapshots: a stopped wheel on a moving contact is a lock-up.
 			const locked = turning < 0.1 && speed > 1;
@@ -228,9 +231,10 @@ export class TyreTracks {
 		const t = this.terrain, road = t.roadSurfaceAt?.( x, z )?.kind;
 		if ( road === 'asphalt' ) return 3;
 		if ( road === 'gravel' ) return 4;
-		const gridX = clamp( Math.floor( ( x - t.origin ) / t.texel ), 0, t.res - 1 );
-		const gridZ = clamp( Math.floor( ( z - t.origin ) / t.texel ), 0, t.res - 1 );
-		const sand = ( t.sand?.[ gridZ * t.res + gridX ] ?? 255 ) / 255, rock = t.rock?.[ gridZ * t.res + gridX ] ?? 0;
+		// per axis: the terrain domain is a rectangle (resX columns along x, resZ rows along z)
+		const gridX = clamp( Math.floor( ( x - t.originX ) / t.texel ), 0, t.resX - 1 );
+		const gridZ = clamp( Math.floor( ( z - t.originZ ) / t.texel ), 0, t.resZ - 1 );
+		const sand = ( t.sand?.[ gridZ * t.resX + gridX ] ?? 255 ) / 255, rock = t.rock?.[ gridZ * t.resX + gridX ] ?? 0;
 		return rock > 0.7 && sand < 0.25 ? 2 : sand > 0.3 ? 0 : 1;
 	}
 
@@ -239,19 +243,6 @@ export class TyreTracks {
 		const dx = c.x - old.x, dz = c.z - old.z, distance = Math.hypot( dx, dz );
 		if ( distance > 4 ) return { x: c.x, z: c.z, edge: null, lock: 0 }; // teleport / reset
 		if ( distance < 0.08 ) {
-			if ( ! old.stamped && c.kind === 3 && c.speed < 0.8 && c.ratio > 0.6 && Math.abs( state[ 15 + wheel * 4 ] ) > 4 ) {
-				// Standing burnout. Deposit the loaded footprint once at this patch;
-				// new strip geometry belongs to the distance travelled after release.
-				const steer = state[ 14 + wheel * 4 ];
-				this.forward.set( Math.sin( steer ), 0, Math.cos( steer ) ).applyQuaternion( this.q );
-				const norm = Math.hypot( this.forward.x, this.forward.z ) || 1;
-				const tx = this.forward.x / norm, tz = this.forward.z / norm;
-				const target = this.target( c, profile ), half = target.patch * 0.5;
-				const a = this.edge( c.x - tx * half, c.z - tz * half, tx, tz, null, target, 1, 0, 1 );
-				const b = this.edge( c.x + tx * half, c.z + tz * half, tx, tz, null, target, 1, target.patch, 1 + target.patch );
-				this.segment( a, b, c.kind, profile.tread );
-				old.stamped = true;
-			}
 			// A tyre that ploughed to a stop locked bulldozes a mound of sand ahead of itself.
 			if ( old.lock > 0.6 && old.edge && c.speed < 0.4 ) { this.mound( old.edge, c ); old.lock = 0; }
 			return old;

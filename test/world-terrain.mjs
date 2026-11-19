@@ -1,6 +1,7 @@
 // Terrain stream test: TerrainData -> TerrainGPU -> Terrain (CDLOD + WGSL material), rendered
 // headless at the real resolution with the engine's sun shadows.
 //   node test/world-terrain.mjs [outDir] [--time]
+import assert from 'node:assert/strict';
 import { worldHarness, done } from './world-harness.mjs';
 import { TerrainData } from '../src/world/TerrainData.js';
 import { TerrainGPU } from '../src/world/TerrainGPU.js';
@@ -16,8 +17,27 @@ let t = performance.now();
 const data = new TerrainData();
 console.log( 'TerrainData', ( performance.now() - t ).toFixed( 0 ), 'ms' );
 t = performance.now();
-const shore = computeShoreField( data, { res: 512, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
+const shore = computeShoreField( data, { cell: 4, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
 console.log( 'ShoreField', ( performance.now() - t ).toFixed( 0 ), 'ms' );
+{
+
+	// The shore field must tile the whole rectangular terrain domain. A square field over sizeX
+	// stopped at z = originZ + sizeX (1024 m), so the open water past it had no wave arrival time
+	// and the surf, the fish break depth and the surf audio read the edge cell instead.
+	const fx = shore.resX * shore.cellSize, fz = shore.resZ * shore.cellSize;
+	assert.equal( fx, data.sizeX, `shore field x extent ${ shore.resX } x ${ shore.cellSize } m = ${ fx } m, terrain sizeX ${ data.sizeX } m` );
+	assert.equal( fz, data.sizeZ, `shore field z extent ${ shore.resZ } x ${ shore.cellSize } m = ${ fz } m, terrain sizeZ ${ data.sizeZ } m` );
+	const px = 0, pz = 1500; // m: open water past the old square field's z = 1024 m edge
+	const i = Math.floor( ( px - shore.originX ) / shore.cellSize ), j = Math.floor( ( pz - shore.originZ ) / shore.cellSize );
+	const k = j * shore.resX + i;
+	const arrival = shore.data[ k * 4 ], shoreline = shore.data[ k * 4 + 3 ], depth = shore.depth[ k ];
+	const msg = `shore field at world ( ${ px }, ${ pz } ) m: cell ( ${ i }, ${ j } ) of ${ shore.resX } x ${ shore.resZ }, depth ${ depth } m, arrival ${ arrival } s, shoreline arrival ${ shoreline } s`;
+	// 1e5 s is the field's "never reached" marker (ShoreField.js)
+	assert.ok( i >= 0 && i < shore.resX && j >= 0 && j < shore.resZ, msg );
+	assert.ok( depth > 0 && Number.isFinite( arrival ) && arrival < 1e5 && Number.isFinite( shoreline ) && shoreline < 1e5, msg );
+	console.log( msg );
+
+}
 const gpu = new TerrainGPU( data, shore );
 console.log( 'TerrainGPU', gpu.timings );
 const terrain = new Terrain( { scene: H.scene, terrainData: data, terrainGPU: gpu } );
@@ -86,7 +106,7 @@ const only = process.argv.find( ( a ) => a.startsWith( '--view=' ) );
 for ( const [ k, v ] of Object.entries( views ) ) {
 
 	if ( only && only.slice( 7 ) !== k ) continue;
-	await H.shot( `${ out }/terrain-${ k }.png`, v );
+	await H.shot( `${ out }/tidewater-terrain-${ k }.png`, v );
 
 }
 

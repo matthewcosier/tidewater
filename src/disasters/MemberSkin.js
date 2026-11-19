@@ -1,5 +1,5 @@
 import {Matrix4,Quaternion} from '../engine/index.js';
-import {markGeometryMotion} from '../engine/render/GeometryMotion.js';
+import {pieceSlot,setPieceTransform,setPieceWeights,pieceWeightKind} from '../engine/render/PieceMotion.js';
 const leftMatrix=new Matrix4(),rightMatrix=new Matrix4(),localLeft=new Matrix4(),localRight=new Matrix4(),rotation=new Quaternion(),inverseRest=new Quaternion();
 function sectionTransform(out,body){
  rotation.copy(body.quaternion).multiply(inverseRest.copy(body.restQuaternion).invert());out.makeRotationFromQuaternion(rotation);const e=out.elements,p=body.origin;
@@ -19,23 +19,18 @@ function weights(member,span){
 // A continuous skin driven by two real rigid section frames. It is a reduced
 // flexible member, not a volumetric soft body. After its material joint breaks,
 // each tessellated triangle belongs to one real section and can separate.
-// Rest weights and affine section transforms avoid allocating vector objects for
-// each vertex; their interpolation is identical to the section-frame definition.
+// The GPU draws it (engine/render/PieceMotion.js): each span holds two consecutive
+// slots, the two section transforms, and each vertex its rest weight toward the
+// second; the weights are written when the skin changes kind (bending, severed),
+// the transforms each time the member moves. The blend is the section-frame
+// definition: p = L x + ( R x - L x ) t, the normal renormalised after it.
+const RIGID=0,OWNER=1,SEVERED=2,BLEND=3;
 export function drawMember(member){
  const left=member.sections[0],right=member.sections.at(-1),rigid=left===right;
  sectionTransform(leftMatrix,left);if(!rigid)sectionTransform(rightMatrix,right);
  for(const s of member.spans){
-  const la=s.inverse?localLeft.multiplyMatrices(s.inverse,leftMatrix).elements:leftMatrix.elements;
-  const ra=rigid?la:s.inverse?localRight.multiplyMatrices(s.inverse,rightMatrix).elements:rightMatrix.elements;
-  const position=s.geo.attributes.position,normal=s.geo.attributes.normal,base=s.start*3,P=s.pos,N=s.nrm,A=position.array,B=normal?.array,W=rigid?null:weights(member,s);markGeometryMotion(s.geo,s.start,s.count);
-  for(let i=0;i<P.length;i+=3){const x=P[i],y=P[i+1],z=P[i+2],t=rigid?0:W.owner??(member.severed?W.side[Math.floor(i/9)]:W.blend[i/3]);
-   let px=la[0]*x+la[4]*y+la[8]*z+la[12],py=la[1]*x+la[5]*y+la[9]*z+la[13],pz=la[2]*x+la[6]*y+la[10]*z+la[14];
-   if(t){px+=(ra[0]*x+ra[4]*y+ra[8]*z+ra[12]-px)*t;py+=(ra[1]*x+ra[5]*y+ra[9]*z+ra[13]-py)*t;pz+=(ra[2]*x+ra[6]*y+ra[10]*z+ra[14]-pz)*t;}
-   A[base+i]=px;A[base+i+1]=py;A[base+i+2]=pz;
-   if(B&&N){const x=N[i],y=N[i+1],z=N[i+2];let nx=la[0]*x+la[4]*y+la[8]*z,ny=la[1]*x+la[5]*y+la[9]*z,nz=la[2]*x+la[6]*y+la[10]*z;
-    if(t){nx+=(ra[0]*x+ra[4]*y+ra[8]*z-nx)*t;ny+=(ra[1]*x+ra[5]*y+ra[9]*z-ny)*t;nz+=(ra[2]*x+ra[6]*y+ra[10]*z-nz)*t;}const inv=1/(Math.hypot(nx,ny,nz)||1);B[base+i]=nx*inv;B[base+i+1]=ny*inv;B[base+i+2]=nz*inv;
-   }
-  }
-  position.addUpdateRange(base,P.length);position.needsUpdate=true;if(normal){normal.addUpdateRange(base,P.length);normal.needsUpdate=true;}
+  const slot=pieceSlot(s,2),kind=rigid?RIGID:s.rigidAttachment?OWNER:member.severed?SEVERED:BLEND;
+  if(pieceWeightKind(slot)!==kind){const W=rigid?null:weights(member,s);setPieceWeights(s,slot,i=>rigid?0:W.owner??(member.severed?W.side[Math.floor(i/3)]:W.blend[i]),kind);}
+  setPieceTransform(slot,leftMatrix,s.inverse,s.frame);setPieceTransform(slot+1,rigid?leftMatrix:rightMatrix,s.inverse,s.frame);
  }
 }

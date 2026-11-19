@@ -2,6 +2,7 @@ import { commonModule } from './wgsl/common.js';
 import { surfaceModule, lightingModule, hookModules, shadowModule } from './wgsl/lighting.js';
 import { collectModules } from '../gpu/Shader.js';
 import { GPU } from '../gpu/GPU.js';
+import { pieceModule } from './PieceMotion.js';
 
 // Builds the WGSL of a mesh pipeline: vertex fetch + material vertex hook + transform, fragment
 // surface hook + lighting + outputs. See Material.js for the snippet contract.
@@ -53,6 +54,9 @@ export function buildMeshShader( material, layout, pass ) {
 	defs.LIT = material.lit ? 1 : 0;
 	defs.INSTANCED = has.has( 'instanceMatrix0' ) ? 1 : 0;
 	defs.INSTANCE_COLOR = has.has( 'instanceColor' ) ? 1 : 0;
+	defs.INSTANCE_PREV = has.has( 'instancePrevMatrix0' ) ? 1 : 0;
+	// loose pieces of a shared batch, moved by their slot's transform (PieceMotion.js)
+	defs.HAS_PIECE = has.has( 'piece' ) ? 1 : 0;
 	Object.assign( defs, pass.defines || {} );
 	defs.CLIP_DISTANCES = defs.REFRACTION_CLIP && GPU.features.has( 'clip-distances' ) ? 1 : 0;
 
@@ -169,6 +173,17 @@ ${ material.output }
 ${ fetch }#if !HAS_POSITION
 	v.position = vec3f( 0.0 );
 #endif
+#if HAS_PIECE
+	// A loose piece: its vertices stay at rest in the batch and its slot's transform draws it (this
+	// frame's, and the last drawn frame's for the motion). The material hook below sees the moved
+	// position and normal, as it saw the vertices the CPU once rewrote (PieceMotion.js).
+	var pieceMotion = vec3f( 0.0 );
+	if ( i.piece.x != 0u ) {
+		let pose = piecePose( i.piece, v.position, v.normal );
+		v.position = pose.position;
+${ has.has( 'normal' ) ? '\t\tv.normal = pose.normal;\n' : '' }		pieceMotion = pose.previous - pose.position;
+	}
+#endif
 	v.instance = i.instance;
 	v.vertex = i.vertex;
 #if INSTANCED
@@ -178,6 +193,10 @@ ${ fetch }#if !HAS_POSITION
 #else
 	v.model = draw.model;
 	v.prevModel = draw.prevModel;
+#endif
+#if INSTANCE_PREV
+	// an instance that moves inside its object (a wheel turning on its car): last frame's own matrix
+	v.prevModel = draw.prevModel * mat4x4f( i.instancePrevMatrix0, i.instancePrevMatrix1, i.instancePrevMatrix2, i.instancePrevMatrix3 );
 #endif
 #if INSTANCE_COLOR
 	v.color = vec4f( v.color.rgb * i.instanceColor, v.color.a );
@@ -203,6 +222,9 @@ ${ fetch }#if !HAS_POSITION
 #if HAS_PREVIOUS_POSITION
 		// Retain the material's local displacement while undoing the CPU batch motion.
 		previousLocal += i.previousPosition - i.position;
+#endif
+#if HAS_PIECE
+		previousLocal += pieceMotion;
 #endif
 		pwp = ( v.prevModel * vec4f( previousLocal, 1.0 ) ).xyz + select( v.prevWorldOffset, v.worldOffset, v.prevWorldOffset.x > 1e29 );
 	}
@@ -390,6 +412,7 @@ struct FragOut {
 	// custom-shaded materials (the water) that only need sunShadow(): no scene lighting hooks, whose
 	// modules would add their uniform buffers / textures to the pipeline (12 uniform buffers per stage)
 	if ( material.lightingHooks === false && ! collectModules( material.modules ).includes( lightingModule ) ) modules = [ commonModule, surfaceModule, shadowModule, ...material.modules ];
+	if ( defs.HAS_PIECE ) modules.push( pieceModule );
 
 	return {
 		code,
