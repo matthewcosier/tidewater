@@ -556,7 +556,7 @@ export class Mate {
 		// her lines: air, the ferry, dolphins
 		this.airT = this.js.aloft ? this.airT + dt : 0;
 		if ( this.airT > 0.4 && this.airT - dt <= 0.4 ) this.say( 'woo' );
-		const pos = c.position, ship = this.app.ferry?.ship;
+		const pos = c.position, ship = ( this.app.fleet?.shipAt( pos, 70 ) || this.app.ferry )?.ship;
 		if ( ship && this.flat( ship.position, pos ) < 70 ) this.say( 'ferry' );
 		const dol = this.app.dolphins?.brain?.members;
 		if ( dol && ( this._dolT = ( this._dolT || 0 ) - dt ) <= 0 ) {

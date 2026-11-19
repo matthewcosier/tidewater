@@ -1,11 +1,139 @@
 //! Compliant material connections between actual contact bodies.
 //! Compliance is m/N and rad/(N m). Failure is evaluated after every 120 Hz step.
 //! Removed elastic energy is recorded as fracture dissipation; no launch impulse.
+//!
+//! Breaking adds no energy (docs/disaster-damage.md, "A structure breaks without throwing its pieces").
+//! A piece's collision box is the fitted box of its triangles, so the boxes of pieces that were built
+//! touching overlap, by up to 4 m on the harbour pier. The solver separates overlapping boxes: with no
+//! load at all the pier broke 291 of its 305 connections in a second and its sections left at 34 m/s.
+//! So a piece does not collide with a thing it began inside until it has first come clear of it:
+//! another piece of its own structure (`BeganInside`, refused in `filter_pairs`), or a standing box or
+//! post (`InsideStanding`, its contact points dropped in `modify_contacts`). Nothing else is exempt.
+use avian3d::collision::collider::contact_query;
+use avian3d::parry::shape::TypedShape;
 use avian3d::prelude::*;
 use avian3d::dynamics::solver::islands::WakeBody;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use std::collections::HashSet;
 use wasm_bindgen::prelude::*;
 use crate::RallyPhysics;
+use crate::disasters::IslandStatic;
+
+/// Overlap (m) past which two things began inside each other. Shallower is one resting on the other, which
+/// the solver holds at about 5 mm, and those collide from the first step (a sheet stays on its rafter).
+pub const TOUCH: f32 = 0.01;
+/// A loose piece of a structure (a jointed section, a torn-off part, a proxy) and the structure it is from.
+#[derive(Component)]
+pub struct Piece { structure: u32 }
+/// A piece that has not been through a step: the standing shapes it is inside are not copied yet.
+#[derive(Component)]
+pub struct NewPiece;
+/// A standing box or post, as a world pose. The standing bodies are rebuilt whenever a building changes,
+/// so what a piece began inside is kept as the shape, not as the body.
+pub struct Standing { shape: Collider, at: Vec3, q: Quat, half: Vec3, round: bool }
+impl Standing {
+    fn new(shape: Collider, at: Vec3, q: Quat) -> Option<Self> {
+        let (half, round) = match shape.shape_scaled().as_typed_shape() {
+            TypedShape::Cuboid(c) => (Vec3::new(c.half_extents.x, c.half_extents.y, c.half_extents.z), false),
+            TypedShape::Cylinder(c) => (Vec3::new(c.radius, c.half_height, c.radius), true),
+            _ => return None,
+        };
+        Some(Self { shape, at, q, half, round })
+    }
+    /// Whether a world point lies in the shape, within TOUCH.
+    fn holds(&self, point: Vec3) -> bool {
+        let l = self.q.inverse() * (point - self.at);
+        l.y.abs() <= self.half.y + TOUCH && if self.round { l.x.hypot(l.z) <= self.half.x + TOUCH }
+            else { l.x.abs() <= self.half.x + TOUCH && l.z.abs() <= self.half.z + TOUCH }
+    }
+}
+/// The standing shapes a piece began inside and has not come clear of.
+#[derive(Component, Default)]
+pub struct InsideStanding(Vec<Standing>);
+/// Pairs of pieces of one structure that began inside each other and have not come clear.
+#[derive(Resource, Default)]
+pub struct BeganInside(HashSet<(Entity, Entity)>);
+fn pair(a: Entity, b: Entity) -> (Entity, Entity) { if a < b { (a, b) } else { (b, a) } }
+/// How deep two shapes overlap (m); 0 when they are apart.
+fn depth(a: &Collider, pa: Vec3, qa: Quat, b: &Collider, pb: Vec3, qb: Quat) -> f32 {
+    contact_query::contact(a, pa, qa, b, pb, qb, 0.0).ok().flatten().map_or(0.0, |c| c.penetration.max(0.0))
+}
+fn intersects(a: &Collider, pa: Vec3, qa: Quat, b: &Collider, pb: Vec3, qb: Quat) -> bool {
+    contact_query::intersection_test(a, pa, qa, b, pb, qb).unwrap_or(false)
+}
+/// Each box or post of a standing collider with its world pose (a cell of standing shapes is one compound).
+fn each_standing(collider: &Collider, at: Vec3, q: Quat, f: &mut impl FnMut(Standing)) {
+    match collider.shape_scaled().as_typed_shape() {
+        TypedShape::Compound(c) => for (iso, shape) in c.shapes() {
+            if let Some(s) = Standing::new(Collider::from(shape.clone()), at + q * Vec3::from(iso.translation), (q * Quat::from(iso.rotation)).normalize()) { f(s); }
+        },
+        _ => if let Some(s) = Standing::new(collider.clone(), at, q) { f(s); },
+    }
+}
+/// Lists two pieces of one structure as begun inside each other when they overlap deeper than TOUCH.
+fn began_inside(world: &mut World, a: Entity, b: Entity) {
+    let of = |e| Some((world.get::<Piece>(e)?.structure, world.get::<Collider>(e)?.clone(), world.get::<Position>(e)?.0, world.get::<Rotation>(e)?.0));
+    let (Some(x), Some(y)) = (of(a), of(b)) else { return; };
+    if x.0 != y.0 || depth(&x.1, x.2, x.3, &y.1, y.2, y.3) <= TOUCH { return; }
+    world.resource_mut::<BeganInside>().0.insert(pair(a, b));
+}
+/// The solver's two questions about a piece. A pair of pieces on the list makes no contact. A contact
+/// point of a piece against the standing shapes is dropped while it lies in a shape the piece began inside.
+#[derive(SystemParam)]
+pub struct BreakupHooks<'w, 's> {
+    inside: Res<'w, BeganInside>,
+    standing: Query<'w, 's, &'static InsideStanding>,
+    island: Query<'w, 's, (), With<IslandStatic>>,
+}
+impl CollisionHooks for BreakupHooks<'_, '_> {
+    fn filter_pairs(&self, a: Entity, b: Entity, _: &mut Commands) -> bool { !self.inside.0.contains(&pair(a, b)) }
+    fn modify_contacts(&self, contacts: &mut ContactPair, _: &mut Commands) -> bool {
+        // The point of each contact on the standing shape's own surface says which standing shape it is with: the
+        // midpoint does not when a rail or a post stands wholly inside a large piece (a porch rail in a wall's
+        // 5 m box pushed the wall at 0.5 m/s). The normal runs from the first shape to the second.
+        let (piece, side) = if self.island.contains(contacts.collider2) { (contacts.collider1, -0.5) } else if self.island.contains(contacts.collider1) { (contacts.collider2, 0.5) } else { return true; };
+        let Ok(list) = self.standing.get(piece) else { return true; };
+        if list.0.is_empty() { return true; }
+        for manifold in &mut contacts.manifolds {
+            let normal = manifold.normal;
+            manifold.points.retain(|p| { let on = p.point + normal * (side * p.penetration); !list.0.iter().any(|s| s.holds(on)) });
+        }
+        contacts.manifolds.retain(|m| !m.points.is_empty());
+        !contacts.manifolds.is_empty()
+    }
+}
+/// A piece's first step: copy every standing box and post it is more than TOUCH inside. It runs in the step,
+/// not when the piece is named, because the game rebuilds the standing shapes between the two (a house's
+/// shell becomes one slab per wall on its first failure).
+pub fn copy_standing_shapes(mut commands: Commands, mut fresh: Query<(Entity, &Position, &Rotation, &Collider, &mut InsideStanding), With<NewPiece>>,
+    standing: Query<(&Position, &Rotation, &Collider), With<IslandStatic>>) {
+    for (entity, p, q, shape, mut list) in &mut fresh {
+        let reach = shape.aabb(p.0, *q);
+        for (sp, sq, cell) in &standing {
+            if !cell.aabb(sp.0, *sq).intersects(&reach) { continue; }
+            each_standing(cell, sp.0, sq.0, &mut |s| {
+                if s.shape.aabb(s.at, s.q).intersects(&reach) && depth(shape, p.0, q.0, &s.shape, s.at, s.q) > TOUCH { list.0.push(s); }
+            });
+        }
+        commands.entity(entity).remove::<NewPiece>();
+    }
+}
+/// Each step: a listed pair whose boxes no longer intersect leaves the list, and a copied standing shape
+/// the piece no longer intersects is forgotten. One box test per entry; a pair asleep is skipped.
+pub fn pieces_come_clear(mut inside: ResMut<BeganInside>, bodies: Query<(&Position, &Rotation, &Collider, Has<Sleeping>)>,
+    mut standing: Query<(&Position, &Rotation, &Collider, &mut InsideStanding), Without<Sleeping>>) {
+    if !inside.0.is_empty() {
+        inside.0.retain(|&(a, b)| {
+            let (Ok(x), Ok(y)) = (bodies.get(a), bodies.get(b)) else { return false; };
+            (x.3 && y.3) || intersects(x.2, x.0.0, x.1.0, y.2, y.0.0, y.1.0)
+        });
+    }
+    for (p, q, shape, mut list) in &mut standing {
+        if list.0.is_empty() { continue; }
+        list.0.retain(|s| intersects(shape, p.0, q.0, &s.shape, s.at, s.q));
+    }
+}
 
 pub(crate) struct Connection {
     entity: Entity, a: Entity, b: Entity, ra: Vec3, rb: Vec3,
@@ -38,6 +166,8 @@ impl RallyPhysics {
     pub(crate) fn remove_body_connections(&mut self,e:Entity){
         let ids:Vec<u32>=self.connections.iter().filter_map(|(id,c)|(c.a==e||c.b==e).then_some(*id)).collect();
         for id in ids {self.remove_structure_joint(id);}
+        // The body is going: so are the pairs it began inside (its copied standing shapes go with its components).
+        self.app.world_mut().resource_mut::<BeganInside>().0.retain(|&(a,b)|a!=e&&b!=e);
     }
     pub(crate) fn update_structure_connections(&mut self,dt:f32){
         let world=self.app.world_mut();
@@ -57,8 +187,11 @@ impl RallyPhysics {
             c.utilization=c.force.length()/c.force_limit+c.torque.length()/c.torque_limit;
             if c.utilization>1.0 {
                 c.broken=true;c.fracture+=c.energy;c.energy=0.0;
-                // Removing the constraint enables ordinary contact between its former bodies.
+                // Removing the constraint enables ordinary contact between its former bodies, except
+                // while they are still inside each other: a pair that came clear while joined and has
+                // flexed back is listed again here.
                 world.entity_mut(c.entity).remove::<(FixedJoint,JointCollisionDisabled)>();
+                began_inside(world,c.a,c.b);
                 world.commands().queue(WakeBody(c.a));world.commands().queue(WakeBody(c.b));
                 continue;
             }
@@ -133,6 +266,76 @@ mod tests {
         let a=before.chunks_exact(7).find(|x|x[0]==2.0).unwrap();let b=after.chunks_exact(7).find(|x|x[0]==2.0).unwrap();assert_eq!(a,b,"broken connection adds no impulse");
         s.sleep_prop(2);assert!(s.structure_joint_states().chunks_exact(15).all(|x|x[0]!=11.0));s.sleep_prop(1);s.remove_structure_anchor(90);assert!(s.structure_joint_states().is_empty());
     }
+    // Two 1 m cubes of 20 kg, the second 0.4 m into the first along x: the fitted boxes of two members built touching.
+    fn overlapping(s:&mut RallyPhysics,structures:[u32;2]){body(s,1,0.0,&[0.5,0.5,0.5],20.0);body(s,2,0.6,&[0.5,0.5,0.5],20.0);assert!(s.set_structure_piece(1,structures[0])&&s.set_structure_piece(2,structures[1]));}
+    fn motion(s:&RallyPhysics,id:u32)->Vec<f32>{s.disaster_motion().chunks_exact(7).find(|v|v[0]==id as f32).unwrap().to_vec()}
+    fn speed(s:&RallyPhysics,id:u32)->f32{let v=motion(s,id);Vec3::new(v[4],v[5],v[6]).length()}
+    fn x(s:&RallyPhysics,id:u32)->f32{motion(s,id)[1]}
+    fn fastest(s:&mut RallyPhysics,steps:usize,ids:&[u32])->f32{let mut top=0f32;for _ in 0..steps{step(s,1);for id in ids{top=top.max(speed(s,*id));}}top}
+    #[test]
+    fn a_connection_that_breaks_between_overlapping_pieces_adds_no_speed(){
+        let mut s=sim();overlapping(&mut s,[7,7]);
+        s.add_structure_anchor(90,&[0.0,0.0,0.0,0.0,0.0,0.0,1.0]);
+        assert!(s.add_structure_joint(10,90,1,&[0.0,0.0,0.0],&[1e-6,1e-5,1e6,1e6,5.0]));
+        assert!(s.add_structure_joint(11,1,2,&[0.3,0.0,0.0],&[1e-6,1e-5,0.5,1e6,5.0]));
+        let joined=fastest(&mut s,60,&[1,2]);assert!(joined<1e-3,"joined and unloaded, a piece moved at {joined} m/s");
+        // 1 N on 20 kg until the 0.5 N connection breaks: under half a millimetre a second gained each step.
+        s.set_disaster_loads(&[2.0,0.0,1.0,0.0,0.0,0.0,0.0]);
+        let mut steps=0;while joint(&s,11)[1]==0.0{step(&mut s,1);steps+=1;assert!(steps<240,"the 0.5 N connection held 1 N for 2 s");}
+        s.set_disaster_loads(&[]);let at_break=speed(&s,2);
+        let after=fastest(&mut s,240,&[1,2]);
+        assert!(after<at_break+0.02,"after the connection broke between two pieces 0.4 m inside each other, with no load, a piece reached {after:.3} m/s (it had {at_break:.3} m/s at the break)");
+    }
+    #[test]
+    fn overlapping_pieces_stay_at_rest_when_their_connection_goes_and_collide_once_they_have_come_clear(){
+        let mut s=sim();overlapping(&mut s,[7,7]);assert!(s.add_structure_joint(11,1,2,&[0.3,0.0,0.0],&[1e-6,1e-5,1e6,1e6,5.0]));
+        step(&mut s,30);assert!(s.remove_structure_joint(11));
+        let after=fastest(&mut s,240,&[1,2]);
+        assert!(after<0.01,"with their connection removed and no load, two pieces 0.4 m inside each other reached {after:.3} m/s");
+        assert_eq!(s.structure_overlaps(),vec![1,0],"the pair is listed while the pieces are inside each other");
+        // Pulled clear, then pushed back: the second piece now stops against the first.
+        s.set_disaster_loads(&[2.0,40.0,0.0,0.0,0.0,0.0,0.0]);while x(&s,2)<1.3{step(&mut s,1);}
+        assert_eq!(s.structure_overlaps(),vec![0,0],"a pair that has come clear leaves the list");
+        s.set_disaster_loads(&[2.0,-40.0,0.0,0.0,0.0,0.0,0.0]);step(&mut s,480);
+        let into=1.0-(x(&s,2)-x(&s,1));assert!(into<0.02,"pushed back after coming clear, the second piece went {into:.3} m into the first");
+        s.sleep_prop(2);assert_eq!(s.structure_overlaps(),vec![0,0]);
+    }
+    #[test]
+    fn a_piece_inside_a_standing_box_is_not_pushed_out_and_stops_against_it_once_clear(){
+        // Two standing boxes in one cell (one compound, as on the island); the piece begins 0.3 m inside the first.
+        let mut s=sim();s.add_surface_boxes(&[0.0,0.0,0.0,1.0,0.5,1.0,0.0,0.6, 0.0,0.0,6.0,1.0,0.5,1.0,0.0,0.6],&[5,5]);
+        body(&mut s,1,1.2,&[0.5,0.5,0.5],20.0);assert!(s.set_structure_piece(1,7));
+        let after=fastest(&mut s,240,&[1]);
+        assert!(after<0.01,"with no load, a piece that began 0.3 m inside a standing box reached {after:.3} m/s");
+        assert_eq!(s.structure_overlaps(),vec![0,1],"the standing box is copied to the piece");
+        s.clear_island_statics();s.add_surface_boxes(&[0.0,0.0,0.0,1.0,0.5,1.0,0.0,0.6, 0.0,0.0,6.0,1.0,0.5,1.0,0.0,0.6],&[5,5]);
+        let rebuilt=fastest(&mut s,120,&[1]);assert!(rebuilt<0.01,"after the standing shapes were rebuilt the piece reached {rebuilt:.3} m/s");
+        s.set_disaster_loads(&[1.0,40.0,0.0,0.0,0.0,0.0,0.0]);while x(&s,1)<1.8{step(&mut s,1);}
+        assert_eq!(s.structure_overlaps(),vec![0,0],"a standing box the piece has left is forgotten");
+        s.set_disaster_loads(&[1.0,-40.0,0.0,0.0,0.0,0.0,0.0]);step(&mut s,480);
+        let into=1.0-(x(&s,1)-0.5);assert!(into<0.02,"pushed back after coming clear, the piece went {into:.3} m into the standing box");
+    }
+    #[test]
+    fn a_rail_and_a_post_standing_inside_a_large_piece_do_not_push_it(){
+        // A porch rail (a 12 cm slab) and a post, both wholly inside a 2 m piece, as a wall's fitted box holds them.
+        let mut s=sim();s.add_surface_boxes(&[0.2,0.1,0.3,0.06,0.55,0.7,0.05,0.6, 0.0,0.0,9.0,1.0,0.5,1.0,0.0,0.6],&[5,5]);s.add_cylinders(&[-0.4,-0.3,0.14,-0.8,0.9]);
+        body(&mut s,1,0.0,&[1.0,1.0,1.0],450.0);assert!(s.set_structure_piece(1,7));
+        let after=fastest(&mut s,240,&[1]);
+        assert!(after<0.01,"with no load, a piece that began around a standing rail and a post reached {after:.3} m/s");
+        assert_eq!(s.structure_overlaps(),vec![0,2],"the rail and the post are copied to the piece");
+    }
+    #[test]
+    fn pieces_of_different_structures_and_pieces_that_only_touch_collide_from_the_first_step(){
+        let mut s=sim();overlapping(&mut s,[7,8]);step(&mut s,240);
+        let into=1.0-(x(&s,2)-x(&s,1));assert!(into<TOUCH,"two pieces of different structures stayed {into:.3} m inside each other");
+        assert_eq!(s.structure_overlaps(),vec![0,0]);
+        // One structure, 5 mm into each other: a resting contact, not an overlap. Pushed together they hold.
+        let mut s=sim();body(&mut s,1,0.0,&[0.5,0.5,0.5],20.0);body(&mut s,2,0.995,&[0.5,0.5,0.5],20.0);assert!(s.set_structure_piece(1,7)&&s.set_structure_piece(2,7));
+        assert_eq!(s.structure_overlaps(),vec![0,0]);
+        let parted=fastest(&mut s,120,&[1,2]);assert!(parted<0.1,"two pieces 5 mm into each other parted at {parted:.3} m/s");
+        s.set_disaster_loads(&[2.0,-40.0,0.0,0.0,0.0,0.0,0.0]);step(&mut s,240);
+        let into=1.0-(x(&s,2)-x(&s,1));assert!(into<0.02,"pushed together, two touching pieces of one structure went {into:.3} m into each other");
+    }
 }
 #[wasm_bindgen]
 impl RallyPhysics {
@@ -163,7 +366,25 @@ impl RallyPhysics {
         self.connections.insert(id,Connection{entity,a,b,ra,rb,qa,qb,linear:parameters[0],angular:parameters[1],force_limit:parameters[2],torque_limit:parameters[3],damping:parameters[4],broken:false,force:Vec3::ZERO,torque:Vec3::ZERO,extension:0.0,angle:0.0,energy:0.0,numerical_energy:0.0,fracture:0.0,dissipated:0.0,utilization:0.0});true
     }
     pub fn remove_structure_joint(&mut self,id:u32)->bool{
-        let Some(c)=self.connections.remove(&id)else{return false;};self.app.world_mut().despawn(c.entity);true
+        let Some(c)=self.connections.remove(&id)else{return false;};let world=self.app.world_mut();world.despawn(c.entity);began_inside(world,c.a,c.b);true
+    }
+    /// Name an awake loose body as a piece of structure `structure`, before its first step. From then on
+    /// it does not collide with another piece of that structure it is more than TOUCH inside now, nor with
+    /// a standing box or post it is inside on its first step, until it has come clear of each.
+    pub fn set_structure_piece(&mut self,id:u32,structure:u32)->bool{
+        let Some(&e)=self.props.get(&id)else{return false;};let world=self.app.world_mut();
+        if world.get::<RigidBody>(e)!=Some(&RigidBody::Dynamic){return false;}
+        let others:Vec<Entity>=world.query::<(Entity,&Piece)>().iter(world).filter(|(o,p)|*o!=e&&p.structure==structure).map(|(o,_)|o).collect();
+        world.entity_mut(e).insert((Piece{structure},NewPiece,InsideStanding::default(),ActiveCollisionHooks::FILTER_PAIRS|ActiveCollisionHooks::MODIFY_CONTACTS));
+        for o in others{began_inside(world,e,o);}
+        true
+    }
+    /// Pairs of pieces, and standing shapes copied to pieces, that have not come clear yet: the work the
+    /// solver does for this rule each step.
+    pub fn structure_overlaps(&self)->Vec<u32>{
+        let world=self.app.world();let pairs=world.resource::<BeganInside>().0.len() as u32;
+        let mut shapes=0u32;for id in self.props.values(){if let Some(list)=world.get::<InsideStanding>(*id){shapes+=list.0.len() as u32;}}
+        vec![pairs,shapes]
     }
     /// Fifteen values: id, broken, force3 N, moment3 Nm, extension m, angle rad,
     /// elastic energy J, fracture loss J, utilization, viscous loss J, geometric-minus-constitutive energy residual J.

@@ -4,7 +4,7 @@ import {PerspectiveCamera} from '../src/engine/index.js';
 import {CDLOD} from '../src/core/CDLOD.js';
 import {WaterGrid} from '../src/disasters/WaterGrid.js';
 import {updateOceanDisplacementBounds} from '../src/ocean/DisplacementBounds.js';
-const lod=()=>new CDLOD({gridSize:8,leafSize:8,levels:6,minY:-25,maxY:25,center:{x:-128,z:-128,size:256}});
+const lod=()=>new CDLOD({gridSize:8,leafSize:8,levels:6,minY:-25,maxY:25,center:{x:-128,z:-128,sizeX:256,sizeZ:256}});
 const camera=()=>{const c=new PerspectiveCamera(55,1,.1,500);c.position.set(0,3000,160);c.lookAt(0,3000,0);c.updateProjectionMatrix();return c;};
 test('The real ocean quadtree retains a visible 3000 m water crest that sea-level bounds cull',()=>{
  const grid=new WaterGrid(()=>-30,{n:33,dx:8,sponge:false,friction:false});
@@ -15,4 +15,8 @@ test('The real ocean quadtree retains a visible 3000 m water crest that sea-leve
 });
 test('Stopping flood restores ordinary sea bounds without retaining an extreme culling volume',()=>{
  const l=lod();l.minY=-900;l.maxY=5000;updateOceanDisplacementBounds(l,null);assert.deepEqual([l.minY,l.maxY],[-25,25]);
+});
+test('A fixed CDLOD root without a finite sizeX and sizeZ is refused, not silently empty',()=>{
+ assert.throws(()=>new CDLOD({gridSize:8,leafSize:8,levels:6,center:{x:-128,z:-128,size:256}}),/sizeX/);
+ assert.doesNotThrow(()=>new CDLOD({gridSize:8,leafSize:8,levels:6,center:{x:-128,z:-128,sizeX:256,sizeZ:256}}));
 });

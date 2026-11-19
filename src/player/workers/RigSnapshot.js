@@ -34,22 +34,25 @@ export function unchanged(rig, stamp) {
 // arithmetic. Escaping this generous tile rejects the speculative job; the main
 // thread then runs the complete original interval against the full terrain.
 export function captureTerrain(terrain, rig) {
- const {res,texel,origin,heights}=terrain;
- if(!heights||!Number.isInteger(res)||!Number.isFinite(texel))return null;
+ // Per axis: the terrain domain is a rectangle (resX columns along x, resZ rows along z,
+ // row stride resX). A missing field returns null, which silently sends every job to the main thread.
+ const {resX,resZ,texel,originX,originZ,heights}=terrain;
+ if(!heights||!Number.isInteger(resX)||!Number.isInteger(resZ)||!Number.isFinite(texel))return null;
  const xs=rig.bodies.map(b=>b.x.x), zs=rig.bodies.map(b=>b.x.z), pad=64;
- const clamp=v=>Math.max(0,Math.min(res-1,v));
- const x0=clamp(Math.floor((Math.min(...xs)-pad-origin)/texel)-1),x1=clamp(Math.ceil((Math.max(...xs)+pad-origin)/texel)+1);
- const z0=clamp(Math.floor((Math.min(...zs)-pad-origin)/texel)-1),z1=clamp(Math.ceil((Math.max(...zs)+pad-origin)/texel)+1);
+ const clampX=v=>Math.max(0,Math.min(resX-1,v)),clampZ=v=>Math.max(0,Math.min(resZ-1,v));
+ const x0=clampX(Math.floor((Math.min(...xs)-pad-originX)/texel)-1),x1=clampX(Math.ceil((Math.max(...xs)+pad-originX)/texel)+1);
+ const z0=clampZ(Math.floor((Math.min(...zs)-pad-originZ)/texel)-1),z1=clampZ(Math.ceil((Math.max(...zs)+pad-originZ)/texel)+1);
  const width=x1-x0+1,data=new Float32Array(width*(z1-z0+1));
- for(let z=z0;z<=z1;z++)data.set(heights.subarray(z*res+x0,z*res+x1+1),(z-z0)*width);
- return {res,texel,origin,x0,x1,z0,z1,width,data};
+ for(let z=z0;z<=z1;z++)data.set(heights.subarray(z*resX+x0,z*resX+x1+1),(z-z0)*width);
+ return {resX,resZ,texel,originX,originZ,x0,x1,z0,z1,width,data};
 }
 export function terrainReader(tile, visit=()=>{}) {
  return (x,z)=>{
   visit(x,z);
-  const {res,texel,origin,x0,x1,z0,z1,width,data}=tile;
-  const fx=(x-origin)/texel-.5,fz=(z-origin)/texel-.5;
-  if(fx<0||fz<0||fx>=res-1||fz>=res-1)return -90;
+  const {resX,resZ,texel,originX,originZ,x0,x1,z0,z1,width,data}=tile;
+  const fx=(x-originX)/texel-.5,fz=(z-originZ)/texel-.5;
+  // off the domain: -90 m, as TerrainData.heightAt
+  if(fx<0||fz<0||fx>=resX-1||fz>=resZ-1)return -90;
   const i=Math.floor(fx),j=Math.floor(fz),tx=fx-i,tz=fz-j;
   if(i<x0||j<z0||i+1>x1||j+1>z1)throw new RangeError('rig-terrain-tile');
   const k=(j-z0)*width+i-x0,a=data[k],b=data[k+1],c=data[k+width],d=data[k+width+1];

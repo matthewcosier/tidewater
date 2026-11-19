@@ -163,32 +163,36 @@ const pebbleModule = new ShaderModule( {
 
 export class PebbleField {
 
-	// terrain: TerrainData, gpu: TerrainGPU, mask: { data (RGBA8), res, texel } over the terrain domain
+	// terrain: TerrainData, gpu: TerrainGPU, mask: { data (RGBA8), resX, resZ, texel, originX, originZ }
+	// over the rectangular terrain domain, row-major k = j * resX + i (resX along x, resZ rows along z)
 	constructor( { terrain, gpu, mask } ) {
 
 		this.terrain = terrain;
 		this.gpu = gpu;
 		const T = terrain;
 		// RGBA8, bilinear, clamp to edge (smpLinearClamp), linear data, no mips
-		this.maskTex = new Texture( { label: 'debrisPebbleMask', width: mask.res, height: mask.res, format: 'rgba8unorm', usage: [ 'sample', 'copyDst' ], data: mask.data } );
+		this.maskTex = new Texture( { label: 'debrisPebbleMask', width: mask.resX, height: mask.resZ, format: 'rgba8unorm', usage: [ 'sample', 'copyDst' ], data: mask.data } );
 
 		// occupied cells + height range
-		const n = Math.ceil( T.size / PCELL );
-		this.cellsPerSide = n;
-		this.cellFlags = new Uint8Array( n * n );
-		this.cellMinY = new Float32Array( n * n );
-		this.cellMaxY = new Float32Array( n * n );
-		const mpc = PCELL / mask.texel;
+		// the domain is a rectangle: nX cells along x by nZ rows along z, row-major c = cj * nX + ci
+		const nX = Math.ceil( T.sizeX / PCELL );
+		const nZ = Math.ceil( T.sizeZ / PCELL );
+		this.cellsX = nX;
+		this.cellsZ = nZ;
+		this.cellFlags = new Uint8Array( nX * nZ );
+		this.cellMinY = new Float32Array( nX * nZ );
+		this.cellMaxY = new Float32Array( nX * nZ );
+		const mpc = PCELL / mask.texel; // mask texels per cell (the texel is the same on both axes)
 		const hpc = PCELL / T.texel;
 		let occupied = 0;
-		for ( let cj = 0; cj < n; cj ++ ) for ( let ci = 0; ci < n; ci ++ ) {
+		for ( let cj = 0; cj < nZ; cj ++ ) for ( let ci = 0; ci < nX; ci ++ ) {
 
 			let any = 0;
-			const i0 = Math.max( 0, Math.floor( ci * mpc ) - 1 ), i1 = Math.min( mask.res - 1, Math.ceil( ( ci + 1 ) * mpc ) );
-			const j0 = Math.max( 0, Math.floor( cj * mpc ) - 1 ), j1 = Math.min( mask.res - 1, Math.ceil( ( cj + 1 ) * mpc ) );
+			const i0 = Math.max( 0, Math.floor( ci * mpc ) - 1 ), i1 = Math.min( mask.resX - 1, Math.ceil( ( ci + 1 ) * mpc ) );
+			const j0 = Math.max( 0, Math.floor( cj * mpc ) - 1 ), j1 = Math.min( mask.resZ - 1, Math.ceil( ( cj + 1 ) * mpc ) );
 			for ( let j = j0; j <= j1 && ! any; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const o = ( j * mask.res + i ) * 4;
+				const o = ( j * mask.resX + i ) * 4;
 				if ( mask.data[ o ] > 6 || mask.data[ o + 1 ] > 6 || mask.data[ o + 2 ] > 6 ) {
 
 					any = 1;
@@ -198,16 +202,16 @@ export class PebbleField {
 
 			}
 
-			const c = cj * n + ci;
+			const c = cj * nX + ci;
 			this.cellFlags[ c ] = any;
 			if ( ! any ) continue;
 			occupied ++;
 			let mn = Infinity, mx = - Infinity;
-			const hi0 = Math.max( 0, Math.floor( ci * hpc ) - 1 ), hi1 = Math.min( T.res - 1, Math.ceil( ( ci + 1 ) * hpc ) );
-			const hj0 = Math.max( 0, Math.floor( cj * hpc ) - 1 ), hj1 = Math.min( T.res - 1, Math.ceil( ( cj + 1 ) * hpc ) );
+			const hi0 = Math.max( 0, Math.floor( ci * hpc ) - 1 ), hi1 = Math.min( T.resX - 1, Math.ceil( ( ci + 1 ) * hpc ) );
+			const hj0 = Math.max( 0, Math.floor( cj * hpc ) - 1 ), hj1 = Math.min( T.resZ - 1, Math.ceil( ( cj + 1 ) * hpc ) );
 			for ( let j = hj0; j <= hj1; j ++ ) for ( let i = hi0; i <= hi1; i ++ ) {
 
-				const h = T.heights[ j * T.res + i ];
+				const h = T.heights[ j * T.resX + i ];
 				if ( h < mn ) mn = h;
 				if ( h > mx ) mx = h;
 
@@ -368,19 +372,19 @@ export class PebbleField {
 		this._frustum.setFromProjectionMatrix( this._mat, camera.coordinateSystem, camera.reversedDepth );
 		const cx = e[ 12 ], cy = e[ 13 ], cz = e[ 14 ];
 		const T = this.terrain;
-		const n = this.cellsPerSide;
+		const nX = this.cellsX, nZ = this.cellsZ;
 		let count = 0;
 		// nothing to see from high above
 		const hCam = cy - T.heightAt( cx, cz );
 		if ( hCam < R_FAR ) {
 
-			const i0 = Math.max( 0, Math.floor( ( cx - R_FAR - T.origin ) / PCELL ) ), i1 = Math.min( n - 1, Math.floor( ( cx + R_FAR - T.origin ) / PCELL ) );
-			const j0 = Math.max( 0, Math.floor( ( cz - R_FAR - T.origin ) / PCELL ) ), j1 = Math.min( n - 1, Math.floor( ( cz + R_FAR - T.origin ) / PCELL ) );
+			const i0 = Math.max( 0, Math.floor( ( cx - R_FAR - T.originX ) / PCELL ) ), i1 = Math.min( nX - 1, Math.floor( ( cx + R_FAR - T.originX ) / PCELL ) );
+			const j0 = Math.max( 0, Math.floor( ( cz - R_FAR - T.originZ ) / PCELL ) ), j1 = Math.min( nZ - 1, Math.floor( ( cz + R_FAR - T.originZ ) / PCELL ) );
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-				const c = j * n + i;
+				const c = j * nX + i;
 				if ( ! this.cellFlags[ c ] ) continue;
-				const x0 = T.origin + i * PCELL, z0 = T.origin + j * PCELL;
+				const x0 = T.originX + i * PCELL, z0 = T.originZ + j * PCELL;
 				const dx = Math.max( x0 - cx, 0, cx - x0 - PCELL ), dz = Math.max( z0 - cz, 0, cz - z0 - PCELL );
 				if ( Math.hypot( dx, dz ) > R_FAR ) continue;
 				this._box.min.set( x0, this.cellMinY[ c ] - 0.2, z0 );

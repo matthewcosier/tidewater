@@ -121,6 +121,15 @@ export class RallyPhysics {
      */
     set_damage(engine: number, pull: number, wheels: Float32Array): boolean;
     /**
+     * The fluid at every loaded body's load points for this frame, integrated every substep by
+     * `fluid_drag`. Records of nine floats: id, the point in the body's axes from its origin (m), the
+     * quadratic coefficient rho Cd A / 2 (kg/m), a linear damping (kg/s), the fluid's velocity (m/s).
+     * A body's records are consecutive. Replaces the whole list, so a stopped event leaves no stale
+     * fluid; a bad batch is refused whole. A sleeping body stays asleep while its records are
+     * identical and wakes when they change or go.
+     */
+    set_disaster_drag(data: Float32Array): boolean;
+    /**
      * Records: id (-1 = local car), force xyz in N, torque xyz in Nm. Replaces previous
      * loads, so stop cannot leave a stale force. Bad batches are rejected atomically.
      */
@@ -137,8 +146,9 @@ export class RallyPhysics {
     set_max_steps(steps: number): void;
     /**
      * The platform's pose and motion for the coming steps: position xyz, rotation xyzw,
-     * linear velocity xyz, angular velocity xyz (about its origin). The solver carries it
-     * along that motion until the next call.
+     * linear velocity xyz, angular velocity xyz (about its origin). The next `advance` carries it
+     * along its pose delta (`derive_kinematic_velocities`); the given velocity serves a first
+     * pose, a teleport or a gap.
      */
     set_platform(id: number, state: Float32Array): boolean;
     set_prop_angular_velocity(id: number, value: Float32Array): boolean;
@@ -146,7 +156,7 @@ export class RallyPhysics {
      * Give a released tree its crown: the stem box (`half`, metres) plus a sphere of radius
      * `crown_radius` centred `crown_y` metres up the body axis. The sphere is the crushed crown
      * that props a fallen top off the ground; without it the trunk lay flat and the crown mesh
-     * sank into the terrain (flat frond starbursts and bare trunks). Call before
+     * sank into the terrain (ledger D13: flat frond starbursts and bare trunks). Call before
      * set_prop_mass_properties, which then fixes the declared mass whatever the shape.
      */
     set_prop_crown(id: number, half: Float32Array, crown_y: number, crown_radius: number): boolean;
@@ -170,21 +180,31 @@ export class RallyPhysics {
      * `active` false removes it (driving, riding, swimming).
      */
     set_pusher(x: number, y: number, z: number, vx: number, vy: number, vz: number, radius: number, height: number, active: boolean): void;
-    /**
-     * The detachable RS wing changes the rear aero balance independently of wheel damage.
-     */
-    set_rear_wing(attached: boolean): void;
     set_roads(segments: Float32Array): boolean;
+    /**
+     * Name an awake loose body as a piece of structure `structure`, before its first step. From then on
+     * it does not collide with another piece of that structure it is more than TOUCH inside now, nor with
+     * a standing box or post it is inside on its first step, until it has come clear of each.
+     */
+    set_structure_piece(id: number, structure: number): boolean;
     /**
      * Terrain material per height texel: 0 dry sand, 1 soil/grass, 2 rock, 7 wet sand.
      */
     set_surface_map(codes: Uint8Array): boolean;
     /**
-     * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Square grid wrapper kept for the synthetic test terrains: `resolution` texels per side over
+     * `size` metres from `origin` on both axes. The game uses set_terrain_grid.
      */
     set_terrain(heights: Float32Array, resolution: number, size: number, origin: number): boolean;
+    /**
+     * The source is Tidewater's row-major (z then x) texel-centred height grid, `heights[z * res_x + x]`,
+     * res_x texels along x and res_z rows along z (the WORLD.terrain rectangle, 2048 x 3328 m at 1 m),
+     * texel centres at origin + texel * (i + 0.5) per axis. Parry rows are Z and columns X, so the
+     * matrix is built directly: Avian's Vec<Vec> helper only lays the data out right for square grids.
+     * The vertices are the texel centres: extent per axis texel * (res - 1), centre per axis
+     * origin + texel * res / 2 (the square case is the old size * (res - 1) / res and origin + size / 2).
+     */
+    set_terrain_grid(heights: Float32Array, res_x: number, res_z: number, texel: number, origin_x: number, origin_z: number): boolean;
     /**
      * The sea surface near the car, fitted by the renderer to wave queries: height at
      * (x0, z0), slope along x and z, and vertical rate (m/s). Non-finite input disables it.
@@ -216,10 +236,22 @@ export class RallyPhysics {
      */
     structure_joint_states(): Float32Array;
     /**
+     * Pairs of pieces, and standing shapes copied to pieces, that have not come clear yet: the work the
+     * solver does for this rule each step.
+     */
+    structure_overlaps(): Uint32Array;
+    /**
      * Hard hits on the body since the last call, each as car-local point xyz, car-local push
      * direction xyz, severity (change in velocity, m/s) and 1 if it hit scenery (0 another car).
      */
     take_impacts(): Float32Array;
+    /**
+     * Ground height (m) of the static terrain colliders at world (x, z), read from the heightfield's
+     * own triangles (the surface the bodies collide with), NaN off the grid. A vertical ray cast was
+     * tried first: it missed on shared vertices and edges, where a node test probes. Terrain
+     * colliders are never rotated. Lets node tests prove the collider sits on TerrainData.heightAt.
+     */
+    terrain_height(x: number, z: number): number;
     /**
      * Remote owner poses become kinematic bodies in the local collision world.
      * This enables contact without claiming a global server-authoritative solver.
@@ -271,6 +303,7 @@ export interface InitOutput {
     readonly rallyphysics_select_vehicle: (a: number, b: number) => number;
     readonly rallyphysics_set_assists: (a: number, b: number) => void;
     readonly rallyphysics_set_damage: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly rallyphysics_set_disaster_drag: (a: number, b: number, c: number) => number;
     readonly rallyphysics_set_disaster_loads: (a: number, b: number, c: number) => number;
     readonly rallyphysics_set_fluid_velocity: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly rallyphysics_set_max_steps: (a: number, b: number) => void;
@@ -281,15 +314,18 @@ export interface InitOutput {
     readonly rallyphysics_set_prop_motion_limits: (a: number, b: number, c: number, d: number) => number;
     readonly rallyphysics_set_prop_solid: (a: number, b: number, c: number) => number;
     readonly rallyphysics_set_pusher: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
-    readonly rallyphysics_set_rear_wing: (a: number, b: number) => void;
     readonly rallyphysics_set_roads: (a: number, b: number, c: number) => number;
+    readonly rallyphysics_set_structure_piece: (a: number, b: number, c: number) => number;
     readonly rallyphysics_set_surface_map: (a: number, b: number, c: number) => number;
     readonly rallyphysics_set_terrain: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly rallyphysics_set_terrain_grid: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly rallyphysics_set_water: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly rallyphysics_sleep_prop: (a: number, b: number) => number;
     readonly rallyphysics_snapshot: (a: number) => [number, number];
     readonly rallyphysics_structure_joint_states: (a: number) => [number, number];
+    readonly rallyphysics_structure_overlaps: (a: number) => [number, number];
     readonly rallyphysics_take_impacts: (a: number) => [number, number];
+    readonly rallyphysics_terrain_height: (a: number, b: number, c: number) => number;
     readonly rallyphysics_update_remote: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly rallyphysics_wake_prop: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly wasm_bindgen__closure__destroy__h44f5a62f65970bcf: (a: number, b: number) => void;

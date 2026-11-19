@@ -1,3 +1,4 @@
+import { SED_WGSL, FOAM_TURBID, FLOOD_ALBEDO, WALL_ALBEDO, WALL_ETA } from '../disasters/FloodLook.js';
 import { Material, ShaderModule, G } from '../engine/webgpu.js';
 import { commonModule } from '../engine/render/wgsl/common.js';
 import { whaleWaterModule } from './WhaleWater.js';
@@ -326,6 +327,7 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 	var dbgPath = 0.0;
 	var dbgScene = vec3f( 0.0 );
 	var dbgSrc = vec3f( 0.0 ); // which image the seabed came from (debug view 12)
+	var dbgMed = 0.0; // the surf medium's strength (debug view 14)
 	var dbgRefr = vec3f( 0.0 ); // refraction image at the end point: coverage, depth > 0, behind (13)
 
 	if ( ! viewFromBelow ) {
@@ -521,10 +523,13 @@ ${ T ? `		let L0 = max( pos.y - groundH, 0.0 ) / tDown;
 		let sandK = ${ SIM ? 'sat( simState.x * 2.5 ) * 1.8 + 0.45' : '1.0' };
 ${ hasMedium ? `		// surf zone: sand and bubbles stirred up by the breakers (see ShoreWaves.surfMedium)
 		let surfMed = shoreSurfMedium( pos.xz, vDepth );
-		let sigA = frame.waterAbsorption + surfMed.absorb * sandK;
+		let medKeep = 1.0 - surf.flood.z;
+		dbgMed = surfMed.scatter.y * medKeep;
+		// (+ the flood's sediment: brown-grey and opaque within centimetres over the land, FloodLook.js turbidity)
+		let sigA = frame.waterAbsorption + surfMed.absorb * sandK * medKeep + surf.turbid * ${ SED_WGSL.absorb };
 		// (bubble plumes are shallow and patchy: a moderate scatterer, milky turquoise rather than a glow)
-		let sigS = frame.waterScattering + surfMed.scatter * sandK + aer * 1.6;` : `		let sigA = frame.waterAbsorption;
-		let sigS = frame.waterScattering + aer * 1.6;` }
+		let sigS = frame.waterScattering + surfMed.scatter * sandK * medKeep + aer * 1.6 + surf.turbid * ${ SED_WGSL.scatter };` : `		let sigA = frame.waterAbsorption + surf.turbid * ${ SED_WGSL.absorb };
+		let sigS = frame.waterScattering + aer * 1.6 + surf.turbid * ${ SED_WGSL.scatter };` }
 		let sigT = sigA + sigS;
 
 		// refracted sun direction
@@ -558,12 +563,15 @@ ${ hasMedium ? `		// surf zone: sand and bubbles stirred up by the breakers (see
 		let sss = sunLight * sssCol * back * crest * mat.sss * smoothstep( 0.0, 0.25, L.y );
 
 		// the bead of the meniscus shades the sand right under it
-		let transmitted = sceneCol * Tview * ( 1.0 - 0.3 * lipW ) + inSun + inAmb + sss;
+		let transmitted0 = sceneCol * Tview * ( 1.0 - 0.3 * lipW ) + inSun + inAmb + sss;
+		let bodyE = sunIn * max( L.y, 0.0 ) * INV_PI + frame.skyIrradiance;
+		let wallK = smoothstep( ${ WALL_ETA[ 0 ].toFixed( 1 ) }, ${ WALL_ETA[ 1 ].toFixed( 1 ) }, surf.flood.y ) * ( 1.0 - sat( surf.turbid ) );
+		let transmitted = mix( mix( transmitted0, vec3f( ${ WALL_ALBEDO.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ) * bodyE + sss, wallK ), vec3f( ${ FLOOD_ALBEDO.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ) * bodyE, sat( surf.turbid ) );
 
 		// ---- foam
 		// foam: bright diffuse scatterer (albedo ~0.85), wrapped sun + sky irradiance (skyIrradiance = E/PI)
 ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );' : '		let foamLit = ( sunLight * ( max( dot( N, L ), 0.0 ) * 0.75 + 0.25 ) * INV_PI + frame.skyIrradiance * 0.95 ) * 0.85;' }
-		let foamCol = foamLit * mat.foamIntensity;
+		let foamCol = foamLit * mat.foamIntensity * mix( vec3f( 1.0 ), vec3f( ${ FOAM_TURBID.map( ( v ) => v.toFixed( 4 ) ).join( ', ' ) } ), surf.turbid );
 
 		// a thin bright rim just behind the edge: the rounded bead catches the sky
 		let rim = smoothstep( 0.0, 0.025, frontD ) * smoothstep( 0.1, 0.035, frontD ) * uprush;
@@ -639,7 +647,7 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 
 	}
 
-	// debug views: 1 = back faces red, 2 = normals, 3 = foam, 7 = the seabed seen through, 12 = its source
+	// debug views: 1 = back faces red, 2 = normals, 3 = foam, 7 = the seabed seen through, 12 = its source, 14/15 the flood readback
 	let dbg = mat.debugMode;
 	var res = min( outCol, vec3f( 16000.0 ) );
 	if ( dbg == 1 ) {
@@ -673,6 +681,10 @@ ${ SF ? '		let foamLit = surfFoamLight( surf.foamInfo, N, L, V, sunLight, pos );
 	} else if ( dbg == 11 ) {
 		// surf foam sources: whitewater of the breaking wave (r), foam carried by the shore sim (g), clear plunging face (b)
 		res = vec3f( in.vs.vShoreFoam, simState.x, in.vs.vSurfMask.x );
+	} else if ( dbg == 14 ) {
+		res = vec3f( sat( foam ), sat( ( pos.y - groundH ) * 0.5 ), sat( dbgMed * 2.0 ) );
+	} else if ( dbg == 15 ) {
+		res = vec3f( sat( surf.flood.x * 0.5 ), sat( ( pos.y - surf.flood.y ) * 0.5 ), sat( surf.flood.z ) );
 	} else if ( dbg == 5 ) {
 		res = vec3f( fract( lagXZ.x * 0.1 ), fract( vHeight ), fract( lagXZ.y * 0.1 ) );
 	}

@@ -26,7 +26,35 @@ export function memberFrame(spans){
  const mid=lo.clone().add(hi).multiplyScalar(.5),center=mean.clone();axes.forEach((a,i)=>center.addScaledVector(a,mid.getComponent(i)));
  return {center,half:hi.sub(lo).multiplyScalar(.5),axes,quaternion:new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(...axes))};
 }
-function distanceTo(point,m){const d=point.clone().sub(m.center);return Math.hypot(...m.axes.map((a,i)=>Math.max(0,Math.abs(d.dot(a))-m.half.getComponent(i))));}
+// The box a loose piece collides as: along each of its frame's axes, the box with the same area-weighted spread as its
+// own surfaces (a uniform box's surfaces give back the box itself), kept inside the fitted box. The fitted box holds
+// every vertex: a harbour pier bay's (deck boards, a pile reaching the bed, a rail post) was 3.6 x 4.4 x 3.4 m with
+// 97 % of its surface in the deck, and the wood filled 0.4 to 4 % of it. Loose, those bays stacked on each other's empty
+// boxes, metres above the water and the wreckage drawn under them, and were levered up over one another at up to 25
+// m/s in a 25 m flood. Each triangle counts with its exact second moment, read through its geometry's index (the
+// village batch shares vertices inside a primitive); fittings riding along (rigidAttachment) add nothing. A member
+// with no surface keeps its fitted box. One pass over the index of each geometry a record uses, once per record
+// (fracture caches the result with the members).
+function solidBoxes(members){
+ const owner=new Map(),byGeometry=new Map(),moments=new Map();
+ for(const m of members){moments.set(m,{A:0,sum:[0,0,0],sq:[0,0,0]});for(const s of m.spans){if(s.rigidAttachment||!(s.count>=3))continue;owner.set(s,m);const list=byGeometry.get(s.geo)??byGeometry.set(s.geo,[]).get(s.geo);list.push(s);}}
+ const d=[0,0,0],e=[0,0,0],f=[0,0,0];
+ const add=(m,p,i,j,k)=>{const ux=p[j]-p[i],uy=p[j+1]-p[i+1],uz=p[j+2]-p[i+2],vx=p[k]-p[i],vy=p[k+1]-p[i+1],vz=p[k+2]-p[i+2],area=.5*Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx);if(!(area>0))return;
+  const o=moments.get(m),c=m.center;o.A+=area;
+  for(let a=0;a<3;a++){const x=m.axes[a];d[a]=(p[i]-c.x)*x.x+(p[i+1]-c.y)*x.y+(p[i+2]-c.z)*x.z;e[a]=(p[j]-c.x)*x.x+(p[j+1]-c.y)*x.y+(p[j+2]-c.z)*x.z;f[a]=(p[k]-c.x)*x.x+(p[k+1]-c.y)*x.y+(p[k+2]-c.z)*x.z;
+   o.sum[a]+=area*(d[a]+e[a]+f[a])/3;o.sq[a]+=area*(d[a]*d[a]+e[a]*e[a]+f[a]*f[a]+d[a]*e[a]+e[a]*f[a]+f[a]*d[a])/6;}};
+ for(const [geo,list] of byGeometry){const index=geo?.index?.array;
+  if(!index){for(const s of list)for(let i=0;i+8<s.pos.length;i+=9)add(owner.get(s),s.pos,i,i+3,i+6);continue;}
+  list.sort((a,b)=>a.start-b.start);
+  for(let t=0;t+2<index.length;t+=3){const a=index[t];let lo=0,hi=list.length-1;if(a<list[0].start)continue;
+   while(lo<hi){const mid=(lo+hi+1)>>1;if(list[mid].start<=a)lo=mid;else hi=mid-1;}
+   const s=list[lo],end=s.start+s.count,b=index[t+1],c=index[t+2];if(a>=end||b<s.start||b>=end||c<s.start||c>=end)continue;
+   add(owner.get(s),s.pos,(a-s.start)*3,(b-s.start)*3,(c-s.start)*3);}
+ }
+ for(const m of members){const o=moments.get(m),center=m.center.clone(),half=m.half.clone();m.solid={center,half};if(!(o.A>0))continue;
+  for(let a=0;a<3;a++){const H=m.half.getComponent(a),mean=o.sum[a]/o.A,h=Math.min(H,Math.sqrt(3*Math.max(0,o.sq[a]/o.A-mean*mean))),shift=Math.max(h-H,Math.min(H-h,mean));half.setComponent(a,h);center.addScaledVector(m.axes[a],shift);}}
+}
+export function distanceTo(point,m){const d=point.clone().sub(m.center);return Math.hypot(...m.axes.map((a,i)=>Math.max(0,Math.abs(d.dot(a))-m.half.getComponent(i))));}
 // Deck allocation works per triangle, but adjacent triangles in the same native
 // member still occupy one contiguous vertex range. Rejoin those ranges after all
 // physical properties have been measured; this changes neither topology nor mass.
@@ -38,15 +66,24 @@ function compactSpans(spans){
   let at=0;for(const s of run){pos.set(s.pos,at);if(nrm)nrm.set(s.nrm,at);at+=s.pos.length;}return {...first,count,pos,nrm};
  });
 }
-export function materialMembers(record,terrain){
+// fitting {mass kg, size m}: a member under both is not returned as a member of its own (see the end of the function).
+export function materialMembers(record,terrain,fitting=null){
  const spans=record.spans,described=spans.map(s=>{const f=memberFrame([s]),d=f.half.clone().multiplyScalar(2),material=s.member?.material;
   return {spans:[s],...f,material:material==='roofMetal'||material==='hard'?'steel':material==='stone'?'masonry':record.material==='light'?'light':'timber',area:d.x*d.y,source:material,d};});
  const deck=/pier|boardwalk|evacuation|stair|station/i.test(record.name);
  let members;
  if(deck){
   const chunks=spans.flatMap(s=>s.member?.sectioned?Array.from({length:s.count/3},(_,i)=>({...s,start:s.start+i*3,count:3,pos:s.pos.slice(i*9,i*9+9),nrm:s.nrm?.slice(i*9,i*9+9)})):[s]);
-  const bins=new Map();for(const s of chunks){const b=bounds([s]),key=`${Math.floor(b.center.x/3)}:${Math.floor(b.center.z/3)}`;if(!bins.has(key))bins.set(key,[]);bins.get(key).push(s);}
+  // A pile stands on its own (Structures.fracture keeps its collider standing and checks its bending every frame): its
+  // triangles go to it, not into the 3 m bay above it, and so do the cap beam and bracing below its cap (the bent, a
+  // pier's substructure), so a bay leaves as its deck, a slab with its rails, and rests on the caps. With the bents in
+  // it a bay's box reached the seabed (3 m thick over 4 m) and hung its weight on its caps. A pile drawn with no
+  // triangles of its own (none sectioned) is not split out and goes with its record as before.
+  const piles=(record.colliders??[]).filter(c=>c.tag==='pile'&&c.yMax>c.yMin),held=piles.map(()=>[]);
+  const bentOf=b=>{let k=-1,best=BENT_REACH;for(let i=0;i<piles.length;i++){const c=piles[i],d=Math.hypot(b.center.x-c.x,b.center.z-c.z);if(d<=c.radius+PILE_REACH&&b.center.y<c.yMax-.1)return i;if(d<best&&b.center.y<c.yMax-.02){best=d;k=i;}}return k;};
+  const bins=new Map();for(const s of chunks){const b=bounds([s]),k=bentOf(b);if(k>=0){held[k].push(s);continue;}const key=`${Math.floor(b.center.x/3)}:${Math.floor(b.center.z/3)}`;if(!bins.has(key))bins.set(key,[]);bins.get(key).push(s);}
   members=[...bins.values()].map(group=>({spans:group,...memberFrame(group),material:record.material==='light'?'light':'timber',module:true}));
+  record.piles=piles.map((c,k)=>held[k].length?pileMember(c,held[k],terrain):null).filter(Boolean);
  }else{
   const panels=described.filter(m=>m.area>1.5&&m.d.y>.5&&m.d.z<.5&&['wood','roofMetal','stone','thatch'].includes(m.source));
   const supports=described.filter(m=>m.source==='wood'&&m.d.x>1&&m.d.y<.38&&Math.abs(m.axes[0].y)>.85&&m.center.y-m.half.x<=terrain.heightAt(m.center.x,m.center.z)+.3);
@@ -73,9 +110,30 @@ export function materialMembers(record,terrain){
   m.forceCapacity=Math.max(300,Math.min(m.materialCapacity,material.fastener*Math.max(2,Math.ceil(width/.6))));
   m.momentCapacity=Math.max(50,material.stress*width*m.thickness**2/6*Math.sqrt(corrugation));
   m.relaxation=material.relaxation;
-  m.spans=compactSpans(m.spans);
  }
+ // A fitting (a cleat, a lamp, a rope end that fell in a deck bay of its own) is never a body of its own: a 2 kg,
+ // 5 cm box riding a fast member was flung 7 m up. Its triangles join the nearest larger member as a rigid
+ // attachment, drawn with it, and its mass and volume are added to that member. A record made only of fittings
+ // keeps them as they are.
+ if(fitting){const small=m=>m.mass<fitting.mass&&2*Math.max(m.half.x,m.half.y,m.half.z)<fitting.size,hosts=members.filter(m=>!small(m));
+  if(hosts.length){for(const m of members)if(small(m)){const host=hosts.reduce((a,b)=>distanceTo(m.center,a)<distanceTo(m.center,b)?a:b);host.spans.push(...m.spans.map(s=>({...s,rigidAttachment:true})));host.mass+=m.mass;host.volume+=m.volume;}members=hosts;}
+ }
+ for(const m of members)m.spans=compactSpans(m.spans);
+ solidBoxes(members);
  return members;
+}
+// m: how far past a pile's collider (its radius plus 2 cm, Pier.js) a triangle still belongs to the pile (a rope or a
+// tyre round it rides with it).
+const PILE_REACH=.1;
+// m: a triangle below a pile's cap this close to the pile is its bent's (cap beam, bracing), not the deck's.
+const BENT_REACH=1.2;
+// A pile as it stands: its collider, its own triangles, its length above the bed (its foot 2.5 cm clear of the ground,
+// as a loose box's), and the bending moment its round section carries at the bed, stress x pi D³ / 32: 80 kN m for a
+// 0.3 m timber pile at 30 MPa (a square section of the same width, stress x D³ / 6, would be 135 kN m). Mass and volume
+// are of the length above the bed: a pile breaks at the bed and its foot stays in the ground.
+export function pileMember(c,spans,terrain){
+ const r=Math.max(.05,c.radius-.02),bottom=Math.max(c.yMin,terrain.heightAt(c.x,c.z)+.025),length=c.yMax-bottom,material=MATERIALS.timber;if(!(length>.3))return null;
+ return {collider:c,spans:compactSpans(spans),x:c.x,z:c.z,radius:r,bottom,top:c.yMax,length,diameter:2*r,material:'timber',momentCapacity:material.stress*Math.PI*(2*r)**3/32,mass:material.density*Math.PI*r*r*length,volume:Math.PI*r*r*length,joints:[],failed:false,pole:null};
 }
 export function beamConnection(member,root=false){return [member.length/(2*member.EA),root?member.length/(6*member.EI):2*member.length/(3*member.EI),root?member.forceCapacity:member.materialCapacity,member.momentCapacity,member.relaxation];}
 export function nearestConnection(a,b){

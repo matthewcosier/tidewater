@@ -8,8 +8,6 @@ use crate::{driving::PlayerCar,controller::Car};
 #[derive(Resource,Clone,Debug)]
 pub struct VehicleConfig {
     pub mass:f32, pub com:f32, pub inertia:Vec3,
-    // Centre of mass ahead (+) or behind (-) mid-wheelbase, m: a mid- or rear-engined car carries
-    // 57 to 61 % on its rear axle, and a rear-drive launch depends on it (L9 cars, item 7).
     pub com_z:f32,
     pub mounts:[Vec3;4], pub wheelbase:f32,
     // Suspension: zero-force length `rest`, bump travel below it, droop to `extension`.
@@ -24,8 +22,6 @@ pub struct VehicleConfig {
     pub shift_time:f32, pub front_share:f32, pub diff_lock:f32, pub top_speed:f32,
     pub brake_torque:f32, pub brake_front:f32, pub handbrake_torque:f32,
     pub drag:f32, pub max_steer:f32,
-    /// Newtons of aerodynamic downforce per (m/s)^2 of forward airspeed.
-    pub aero_load:f32,
     // Collision boxes (full sizes) and hull buoyancy.
     pub body:Vec3, pub body_y:f32, pub cabin:Vec3, pub cabin_y:f32, pub cabin_z:f32,
     pub displacement:f32, pub paddle:f32,
@@ -45,7 +41,7 @@ impl VehicleConfig {
             engine_inertia:0.16,gears:vec![3.35,2.12,1.48,1.14,0.92],reverse:3.2,final_drive:3.9,
             shift_time:0.16,front_share:0.0,diff_lock:70.0,top_speed:62.0,
             brake_torque:2600.0,brake_front:0.64,handbrake_torque:2400.0,
-            drag:0.47,max_steer:0.58,aero_load:0.0,
+            drag:0.47,max_steer:0.58,
             body:Vec3::new(1.72,0.48,4.10),body_y:0.64,
             cabin:Vec3::new(1.52,0.55,2.10),cabin_y:1.07,cabin_z:-0.15,
             displacement:0.65,paddle:650.0 }
@@ -63,7 +59,7 @@ impl VehicleConfig {
             engine_inertia:0.28,gears:vec![4.03,2.36,1.53,1.15,0.85],reverse:3.6,final_drive:4.1,
             shift_time:0.24,front_share:0.42,diff_lock:140.0,top_speed:44.5,
             brake_torque:4600.0,brake_front:0.62,handbrake_torque:3600.0,
-            drag:0.95,max_steer:0.56,aero_load:0.0,
+            drag:0.95,max_steer:0.56,
             body:Vec3::new(1.82,0.46,4.16),body_y:0.98,
             cabin:Vec3::new(1.72,0.93,2.58),cabin_y:1.64,cabin_z:-0.70,
             displacement:0.72,paddle:1100.0 }
@@ -95,7 +91,7 @@ impl VehicleConfig {
             engine_inertia:0.18,gears:vec![3.13,2.59,1.96,1.57,1.26,1.03,0.87],reverse:2.8,final_drive:3.62,
             shift_time:0.08,front_share:0.35,diff_lock:110.0,top_speed:90.3,
             brake_torque:3900.0,brake_front:0.62,handbrake_torque:2600.0,
-            drag:0.50,max_steer:0.55,aero_load:0.0,
+            drag:0.50,max_steer:0.55,
             body:Vec3::new(1.90,0.45,4.45),body_y:0.36,
             cabin:Vec3::new(1.45,0.42,1.90),cabin_y:0.86,cabin_z:-0.10,
             displacement:0.55,paddle:600.0 }
@@ -116,20 +112,11 @@ impl VehicleConfig {
             engine_inertia:0.35,gears:vec![3.25,2.29,1.73,1.32,1.04,0.84,0.69],reverse:3.0,final_drive:3.09,
             shift_time:0.08,front_share:0.4,diff_lock:160.0,top_speed:105.6,
             brake_torque:5400.0,brake_front:0.62,handbrake_torque:3400.0,
-            drag:0.49,max_steer:0.52,aero_load:0.0,
+            drag:0.49,max_steer:0.52,
             body:Vec3::new(2.00,0.50,4.48),body_y:0.37,
             cabin:Vec3::new(1.55,0.45,1.90),cabin_y:0.92,cabin_z:-0.15,
             displacement:0.6,paddle:700.0 }
     }
-    /// Petrel GT (was "Kestrel GT"; renamed so it does not share a name with the KESTREL 07
-    /// jet): 911 GT3 (992) class, the road car of the GT3 racing class. 1,450 kg (DIN, PDK), 4.0 L
-    /// flat six 375 kW at 8,400 rpm and 470 Nm at 6,100, 9,000 rpm redline, 7-speed PDK
-    /// 3.75 2.38 1.72 1.34 1.11 0.96 0.84 on a 4.54 final drive, rear drive, 318 km/h.
-    /// Geometry is the drawn car's, public/rally/concept_gt.glb (assets/rally/asset_report.json):
-    /// 0.384 m tyre radius, 0.284 m tread, 2.798 m wheelbase, 1.952 / 1.964 m track, 2.236 x 1.149 x
-    /// 4.357 m body. It is wider and longer than a 911 (2.457 m wheelbase, 1.601 / 1.553 m track,
-    /// 20 / 21 in wheels), so the wheels sit in its arches; `com_z` keeps the 911's 39:61 split on
-    /// the longer wheelbase. Mount 0.612 m = radius + rest - static sag (about 0.047 m).
     pub fn gt()->Self {
         Self { mass:1450.0,com:0.46,com_z:-0.308,inertia:Vec3::new(1750.0,2100.0,650.0),
             mounts:[Vec3::new(-0.976,0.612,1.399),Vec3::new(0.976,0.612,1.399),Vec3::new(-0.982,0.612,-1.399),Vec3::new(0.982,0.612,-1.399)],
@@ -142,7 +129,7 @@ impl VehicleConfig {
             engine_inertia:0.14,gears:vec![3.75,2.38,1.72,1.34,1.11,0.96,0.84],reverse:3.42,final_drive:4.54,
             shift_time:0.08,front_share:0.0,diff_lock:90.0,top_speed:88.3,
             brake_torque:3900.0,brake_front:0.6,handbrake_torque:2600.0,
-            drag:0.44,max_steer:0.55,aero_load:0.0,
+            drag:0.44,max_steer:0.55,
             body:Vec3::new(2.20,0.50,4.30),body_y:0.40,
             cabin:Vec3::new(1.60,0.50,2.00),cabin_y:0.90,cabin_z:-0.25,
             displacement:0.55,paddle:600.0 }
@@ -159,30 +146,15 @@ impl VehicleConfig {
             engine_inertia:0.12,gears:vec![3.80,2.06,1.26,0.89],reverse:3.88,final_drive:4.125,
             shift_time:0.3,front_share:0.0,diff_lock:20.0,top_speed:45.0,
             brake_torque:1400.0,brake_front:0.6,handbrake_torque:1000.0,
-            drag:0.60,max_steer:0.62,aero_load:0.0,
+            drag:0.60,max_steer:0.62,
             body:Vec3::new(1.50,0.40,3.30),body_y:0.50,
             cabin:Vec3::new(1.20,0.60,1.10),cabin_y:1.00,cabin_z:-0.30,
             displacement:0.3,paddle:450.0 }
     }
-    /// COSIER 992 GT3 RS. Porsche MY2022 figures and the approved rig's hub coordinates
-    /// (metres, +Z forward) are in docs/gt3-rs.md. Use the mean rolling radius for the
-    /// four contact rays. The visual rig retains its staggered tyres and factory camber.
-    pub fn gt3rs()->Self {
-        Self { mass:1450.0,com:0.46,com_z:-0.27,inertia:Vec3::new(1660.0,1980.0,575.0),
-            mounts:[Vec3::new(-0.815,0.584,1.2285),Vec3::new(0.815,0.584,1.2285),Vec3::new(-0.791,0.584,-1.2285),Vec3::new(0.791,0.584,-1.2285)],
-            wheelbase:2.457,radius:0.359,width:0.305,rest:0.27,travel:0.13,extension:0.31,
-            spring_front:69000.0,spring_rear:90000.0,grip_road:1.35,
-            idle:900.0,peak_rpm:6300.0,redline:9000.0,peak_torque:510.0,final_drive:4.27,
-            // 409 kg-equivalent at 200 km/h (992 RS launch data).
-            top_speed:82.22,drag:0.52,aero_load:1.30,
-            body:Vec3::new(1.90,0.50,4.55),body_y:0.39,
-            cabin:Vec3::new(1.46,0.58,1.97),cabin_y:0.99,cabin_z:-0.13,
-            ..Self::gt() }
-    }
-    /// Kinds the bridge accepts: 0 Aster, 1 Jeep, 2 supercar, 3 hypercar, 4 GT, 5 buggy, 6 GT3 RS.
-    pub const COUNT:u8=7;
+    /// Kinds the bridge accepts: 0 Aster, 1 Jeep, 2 supercar, 3 hypercar, 4 GT, 5 buggy.
+    pub const COUNT:u8=6;
     pub fn of(kind:u8)->Self {
-        match kind { 1=>Self::jeep(), 2=>Self::supercar(), 3=>Self::hypercar(), 4=>Self::gt(), 5=>Self::buggy(), 6=>Self::gt3rs(), _=>Self::aster() }
+        match kind { 1=>Self::jeep(), 2=>Self::supercar(), 3=>Self::hypercar(), 4=>Self::gt(), 5=>Self::buggy(), _=>Self::aster() }
     }
     /// Rounded boxes let a glancing car slide along walls and rails instead of snagging a corner.
     pub fn collider(&self)->Collider {

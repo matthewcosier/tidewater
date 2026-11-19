@@ -402,37 +402,44 @@ export class GrassField {
 	constructor( { terrain, mask } ) {
 
 		this.terrain = terrain;
-		const res = terrain.res;
-		const maskData = mask.data, mres = mask.res;
+		// the terrain domain is a rectangle: textures are resX wide (x) by resZ tall (z), rows are
+		// resX long, and every bound, clamp and cell count is taken per axis
+		const resX = terrain.resX, resZ = terrain.resZ;
+		const maskData = mask.data, mresX = mask.resX, mresZ = mask.resZ;
 
 		// terrain heights (float, loaded + bilinearly filtered manually) and density mask
-		this.heightTex = new Texture( { label: 'grassHeights', width: res, height: res, format: 'r32float', data: terrain.heights } );
+		this.heightTex = new Texture( { label: 'grassHeights', width: resX, height: resZ, format: 'r32float', data: terrain.heights } );
 		// three-style handle: `heightTex.needsUpdate = true` re-uploads terrain.heights (Vegetation.refreshTerrain)
 		Object.defineProperty( this.heightTex, 'needsUpdate', { set: ( v ) => {
 
 			if ( v ) this.heightTex.upload( terrain.heights );
 
 		} } );
-		this.maskTex = new Texture( { label: 'grassMask', width: mres, height: mres, format: 'rgba8unorm', data: maskData, sampler: 'linearClamp' } );
+		this.maskTex = new Texture( { label: 'grassMask', width: mresX, height: mresZ, format: 'rgba8unorm', data: maskData, sampler: 'linearClamp' } );
 
 		// per-cell occupancy + height range (for skipping empty cells and frustum tests)
-		const cellsPerSide = Math.ceil( terrain.size / CELL );
-		this.cellsPerSide = cellsPerSide;
-		this.cellFlags = new Uint8Array( cellsPerSide * cellsPerSide );
-		this.cellMinY = new Float32Array( cellsPerSide * cellsPerSide );
-		this.cellMaxY = new Float32Array( cellsPerSide * cellsPerSide );
-		const mpc = CELL / ( terrain.size / mres ); // mask texels per cell
-		const hpc = CELL / terrain.texel; // height texels per cell
-		for ( let cj = 0; cj < cellsPerSide; cj ++ ) {
+		// cellsX columns along x by cellsZ rows along z, row-major c = cj * cellsX + ci
+		const cellsX = Math.ceil( terrain.sizeX / CELL );
+		const cellsZ = Math.ceil( terrain.sizeZ / CELL );
+		this.cellsX = cellsX;
+		this.cellsZ = cellsZ;
+		this.cellFlags = new Uint8Array( cellsX * cellsZ );
+		this.cellMinY = new Float32Array( cellsX * cellsZ );
+		this.cellMaxY = new Float32Array( cellsX * cellsZ );
+		// mask texels per cell, per axis (the mask spans the terrain domain on each axis)
+		const mpcX = CELL / ( terrain.sizeX / mresX );
+		const mpcZ = CELL / ( terrain.sizeZ / mresZ );
+		const hpc = CELL / terrain.texel; // height texels per cell (the terrain texel is the same on both axes)
+		for ( let cj = 0; cj < cellsZ; cj ++ ) {
 
-			for ( let ci = 0; ci < cellsPerSide; ci ++ ) {
+			for ( let ci = 0; ci < cellsX; ci ++ ) {
 
 				let any = 0, mn = Infinity, mx = - Infinity;
-				const i0 = Math.max( 0, Math.floor( ci * mpc ) - 1 ), i1 = Math.min( mres - 1, Math.ceil( ( ci + 1 ) * mpc ) + 1 );
-				const j0 = Math.max( 0, Math.floor( cj * mpc ) - 1 ), j1 = Math.min( mres - 1, Math.ceil( ( cj + 1 ) * mpc ) + 1 );
+				const i0 = Math.max( 0, Math.floor( ci * mpcX ) - 1 ), i1 = Math.min( mresX - 1, Math.ceil( ( ci + 1 ) * mpcX ) + 1 );
+				const j0 = Math.max( 0, Math.floor( cj * mpcZ ) - 1 ), j1 = Math.min( mresZ - 1, Math.ceil( ( cj + 1 ) * mpcZ ) + 1 );
 				for ( let j = j0; j <= j1 && ! any; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
-					const o = ( j * mres + i ) * 4;
+					const o = ( j * mresX + i ) * 4;
 					if ( maskData[ o ] > 8 || maskData[ o + 1 ] > 8 || maskData[ o + 2 ] > 8 || maskData[ o + 3 ] > 8 ) {
 
 						any = 1;
@@ -442,14 +449,14 @@ export class GrassField {
 
 				}
 
-				const c = cj * cellsPerSide + ci;
+				const c = cj * cellsX + ci;
 				this.cellFlags[ c ] = any;
 				if ( ! any ) continue;
-				const hi0 = Math.max( 0, Math.floor( ci * hpc ) - 1 ), hi1 = Math.min( res - 1, Math.ceil( ( ci + 1 ) * hpc ) + 1 );
-				const hj0 = Math.max( 0, Math.floor( cj * hpc ) - 1 ), hj1 = Math.min( res - 1, Math.ceil( ( cj + 1 ) * hpc ) + 1 );
+				const hi0 = Math.max( 0, Math.floor( ci * hpc ) - 1 ), hi1 = Math.min( resX - 1, Math.ceil( ( ci + 1 ) * hpc ) + 1 );
+				const hj0 = Math.max( 0, Math.floor( cj * hpc ) - 1 ), hj1 = Math.min( resZ - 1, Math.ceil( ( cj + 1 ) * hpc ) + 1 );
 				for ( let j = hj0; j <= hj1; j ++ ) for ( let i = hi0; i <= hi1; i ++ ) {
 
-					const h = terrain.heights[ j * res + i ];
+					const h = terrain.heights[ j * resX + i ];
 					if ( h < mn ) mn = h;
 					if ( h > mx ) mx = h;
 
@@ -548,9 +555,9 @@ export class GrassField {
 
 		const cx = e[ 12 ], cy = e[ 13 ], cz = e[ 14 ];
 		const t = this.terrain;
-		const n = this.cellsPerSide;
-		const i0 = Math.max( 0, Math.floor( ( cx - R_FAR - t.origin ) / CELL ) ), i1 = Math.min( n - 1, Math.floor( ( cx + R_FAR - t.origin ) / CELL ) );
-		const j0 = Math.max( 0, Math.floor( ( cz - R_FAR - t.origin ) / CELL ) ), j1 = Math.min( n - 1, Math.floor( ( cz + R_FAR - t.origin ) / CELL ) );
+		const nX = this.cellsX, nZ = this.cellsZ;
+		const i0 = Math.max( 0, Math.floor( ( cx - R_FAR - t.originX ) / CELL ) ), i1 = Math.min( nX - 1, Math.floor( ( cx + R_FAR - t.originX ) / CELL ) );
+		const j0 = Math.max( 0, Math.floor( ( cz - R_FAR - t.originZ ) / CELL ) ), j1 = Math.min( nZ - 1, Math.floor( ( cz + R_FAR - t.originZ ) / CELL ) );
 		const [ near, mid, far ] = this.levels;
 		let nc = 0, mc = 0, fc = 0;
 
@@ -558,9 +565,9 @@ export class GrassField {
 
 			for ( let i = i0; i <= i1; i ++ ) {
 
-				const c = j * n + i;
+				const c = j * nX + i;
 				if ( ! this.cellFlags[ c ] ) continue;
-				const x0 = t.origin + i * CELL, z0 = t.origin + j * CELL;
+				const x0 = t.originX + i * CELL, z0 = t.originZ + j * CELL;
 				// nearest point of the cell (horizontal, like the shader's LOD distance)
 				const dx = Math.max( x0 - cx, 0, cx - x0 - CELL );
 				const dz = Math.max( z0 - cz, 0, cz - z0 - CELL );
@@ -696,7 +703,6 @@ fn vegGrassTierFade( tier: f32, d: f32, cut: f32 ) -> f32 {
 function createGrassMaterial( field ) {
 
 	const t = field.terrain;
-	const res = t.res;
 
 	const mat = new Material( {
 		name: 'veg-grass',
@@ -729,7 +735,8 @@ function createGrassMaterial( field ) {
 	let kind = blade.y;
 	let bRnd = blade.z;
 
-	let m = textureSampleLevel( grassMask, smpLinearClamp, ( xz - ${ f( t.origin ) } ) / ${ f( t.size ) }, 0.0 );
+	// the mask spans the rectangular terrain domain: uv per axis (x over sizeX, z over sizeZ)
+	let m = textureSampleLevel( grassMask, smpLinearClamp, ( xz - vec2f( ${ f( t.originX ) }, ${ f( t.originZ ) } ) ) / vec2f( ${ f( t.sizeX ) }, ${ f( t.sizeZ ) } ), 0.0 );
 	let isGrass = kind < 0.5;
 	let isOat = kind > 0.5 && kind < 2.5;
 	let lush = m.g;
@@ -780,10 +787,11 @@ function createGrassMaterial( field ) {
 	let cy = cos( yaw ); let sy = sin( yaw );
 
 	// terrain height (float texels loaded and bilinearly filtered manually)
-	let hfp = ( xz - ${ f( t.origin ) } ) / ${ f( t.texel ) } - 0.5;
+	// origin and clamp per axis: the height texture is resX wide (x) by resZ tall (z)
+	let hfp = ( xz - vec2f( ${ f( t.originX ) }, ${ f( t.originZ ) } ) ) / ${ f( t.texel ) } - 0.5;
 	let hfi = floor( hfp );
 	let hfr = hfp - hfi;
-	let ij = vec2i( clamp( hfi, vec2f( 0.0 ), vec2f( ${ f( res - 2 ) } ) ) );
+	let ij = vec2i( clamp( hfi, vec2f( 0.0 ), vec2f( ${ f( t.resX - 2 ) }, ${ f( t.resZ - 2 ) } ) ) );
 	let ha = textureLoad( grassHeights, ij, 0 ).x;
 	let hb = textureLoad( grassHeights, ij + vec2i( 1, 0 ), 0 ).x;
 	let hc = textureLoad( grassHeights, ij + vec2i( 0, 1 ), 0 ).x;

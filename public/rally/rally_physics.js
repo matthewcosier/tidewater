@@ -327,6 +327,22 @@ export class RallyPhysics {
         return ret !== 0;
     }
     /**
+     * The fluid at every loaded body's load points for this frame, integrated every substep by
+     * `fluid_drag`. Records of nine floats: id, the point in the body's axes from its origin (m), the
+     * quadratic coefficient rho Cd A / 2 (kg/m), a linear damping (kg/s), the fluid's velocity (m/s).
+     * A body's records are consecutive. Replaces the whole list, so a stopped event leaves no stale
+     * fluid; a bad batch is refused whole. A sleeping body stays asleep while its records are
+     * identical and wakes when they change or go.
+     * @param {Float32Array} data
+     * @returns {boolean}
+     */
+    set_disaster_drag(data) {
+        const ptr0 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.rallyphysics_set_disaster_drag(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
      * Records: id (-1 = local car), force xyz in N, torque xyz in Nm. Replaces previous
      * loads, so stop cannot leave a stale force. Bad batches are rejected atomically.
      * @param {Float32Array} data
@@ -362,8 +378,9 @@ export class RallyPhysics {
     }
     /**
      * The platform's pose and motion for the coming steps: position xyz, rotation xyzw,
-     * linear velocity xyz, angular velocity xyz (about its origin). The solver carries it
-     * along that motion until the next call.
+     * linear velocity xyz, angular velocity xyz (about its origin). The next `advance` carries it
+     * along its pose delta (`derive_kinematic_velocities`); the given velocity serves a first
+     * pose, a teleport or a gap.
      * @param {number} id
      * @param {Float32Array} state
      * @returns {boolean}
@@ -389,7 +406,7 @@ export class RallyPhysics {
      * Give a released tree its crown: the stem box (`half`, metres) plus a sphere of radius
      * `crown_radius` centred `crown_y` metres up the body axis. The sphere is the crushed crown
      * that props a fallen top off the ground; without it the trunk lay flat and the crown mesh
-     * sank into the terrain (flat frond starbursts and bare trunks). Call before
+     * sank into the terrain (ledger D13: flat frond starbursts and bare trunks). Call before
      * set_prop_mass_properties, which then fixes the declared mass whatever the shape.
      * @param {number} id
      * @param {Float32Array} half
@@ -462,13 +479,6 @@ export class RallyPhysics {
         wasm.rallyphysics_set_pusher(this.__wbg_ptr, x, y, z, vx, vy, vz, radius, height, active);
     }
     /**
-     * The detachable RS wing changes the rear aero balance independently of wheel damage.
-     * @param {boolean} attached
-     */
-    set_rear_wing(attached) {
-        wasm.rallyphysics_set_rear_wing(this.__wbg_ptr, attached);
-    }
-    /**
      * @param {Float32Array} segments
      * @returns {boolean}
      */
@@ -476,6 +486,18 @@ export class RallyPhysics {
         const ptr0 = passArrayF32ToWasm0(segments, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.rallyphysics_set_roads(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * Name an awake loose body as a piece of structure `structure`, before its first step. From then on
+     * it does not collide with another piece of that structure it is more than TOUCH inside now, nor with
+     * a standing box or post it is inside on its first step, until it has come clear of each.
+     * @param {number} id
+     * @param {number} structure
+     * @returns {boolean}
+     */
+    set_structure_piece(id, structure) {
+        const ret = wasm.rallyphysics_set_structure_piece(this.__wbg_ptr, id, structure);
         return ret !== 0;
     }
     /**
@@ -490,9 +512,8 @@ export class RallyPhysics {
         return ret !== 0;
     }
     /**
-     * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Square grid wrapper kept for the synthetic test terrains: `resolution` texels per side over
+     * `size` metres from `origin` on both axes. The game uses set_terrain_grid.
      * @param {Float32Array} heights
      * @param {number} resolution
      * @param {number} size
@@ -503,6 +524,27 @@ export class RallyPhysics {
         const ptr0 = passArrayF32ToWasm0(heights, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.rallyphysics_set_terrain(this.__wbg_ptr, ptr0, len0, resolution, size, origin);
+        return ret !== 0;
+    }
+    /**
+     * The source is Tidewater's row-major (z then x) texel-centred height grid, `heights[z * res_x + x]`,
+     * res_x texels along x and res_z rows along z (the WORLD.terrain rectangle, 2048 x 3328 m at 1 m),
+     * texel centres at origin + texel * (i + 0.5) per axis. Parry rows are Z and columns X, so the
+     * matrix is built directly: Avian's Vec<Vec> helper only lays the data out right for square grids.
+     * The vertices are the texel centres: extent per axis texel * (res - 1), centre per axis
+     * origin + texel * res / 2 (the square case is the old size * (res - 1) / res and origin + size / 2).
+     * @param {Float32Array} heights
+     * @param {number} res_x
+     * @param {number} res_z
+     * @param {number} texel
+     * @param {number} origin_x
+     * @param {number} origin_z
+     * @returns {boolean}
+     */
+    set_terrain_grid(heights, res_x, res_z, texel, origin_x, origin_z) {
+        const ptr0 = passArrayF32ToWasm0(heights, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.rallyphysics_set_terrain_grid(this.__wbg_ptr, ptr0, len0, res_x, res_z, texel, origin_x, origin_z);
         return ret !== 0;
     }
     /**
@@ -561,6 +603,17 @@ export class RallyPhysics {
         return v1;
     }
     /**
+     * Pairs of pieces, and standing shapes copied to pieces, that have not come clear yet: the work the
+     * solver does for this rule each step.
+     * @returns {Uint32Array}
+     */
+    structure_overlaps() {
+        const ret = wasm.rallyphysics_structure_overlaps(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Hard hits on the body since the last call, each as car-local point xyz, car-local push
      * direction xyz, severity (change in velocity, m/s) and 1 if it hit scenery (0 another car).
      * @returns {Float32Array}
@@ -570,6 +623,19 @@ export class RallyPhysics {
         var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
+    }
+    /**
+     * Ground height (m) of the static terrain colliders at world (x, z), read from the heightfield's
+     * own triangles (the surface the bodies collide with), NaN off the grid. A vertical ray cast was
+     * tried first: it missed on shared vertices and edges, where a node test probes. Terrain
+     * colliders are never rotated. Lets node tests prove the collider sits on TerrainData.heightAt.
+     * @param {number} x
+     * @param {number} z
+     * @returns {number}
+     */
+    terrain_height(x, z) {
+        const ret = wasm.rallyphysics_terrain_height(this.__wbg_ptr, x, z);
+        return ret;
     }
     /**
      * Remote owner poses become kinematic bodies in the local collision world.
@@ -754,12 +820,12 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 43757, function: Function { arguments: [], shim_idx: 43758, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 44267, function: Function { arguments: [], shim_idx: 44268, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h44f5a62f65970bcf, wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 52282, function: Function { arguments: [Externref], shim_idx: 52283, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 52792, function: Function { arguments: [Externref], shim_idx: 52793, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h5cefeeeb60d29d96, wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90);
             return ret;
         },
@@ -874,6 +940,11 @@ function getArrayF32FromWasm0(ptr, len) {
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -898,6 +969,14 @@ function getFloat32ArrayMemory0() {
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return decodeText(ptr, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -1041,6 +1120,7 @@ function __wbg_finalize_init(instance, module) {
     wasmModule = module;
     cachedDataViewMemory0 = null;
     cachedFloat32ArrayMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

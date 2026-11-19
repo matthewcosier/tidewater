@@ -1,6 +1,6 @@
 import { Vector3, Matrix4, Matrix3, Quaternion } from '../engine/index.js';
 import { GRAVITY, AIR_DENSITY, SEA_WATER_DENSITY } from '../physics/Loads.js';
-import {materialMembers,beamConnection,nearestConnection,memberFrame} from './MaterialMembers.js';
+import {materialMembers,beamConnection,nearestConnection,memberFrame,distanceTo} from './MaterialMembers.js';
 import {buildingComponents,stepComponents} from './BuildingComponents.js';
 import {drawMember} from './MemberSkin.js';
 import {rigidEnvironmentalLoad} from './RigidLoads.js';
@@ -24,7 +24,7 @@ export const STRENGTHS=Object.freeze({
  // Effective whole-structure anchor capacity, assumed rather than site-engineered values.
  timber:{solidDensity:600,density:65,anchorG:0.42,drag:1.3},light:{solidDensity:500,density:40,anchorG:0.25,drag:1.3},masonry:{solidDensity:2400,density:180,anchorG:0.65,drag:1.2},steel:{solidDensity:7850,density:100,anchorG:0.55,drag:1.2}
 });
-const v=new Vector3(),q=new Quaternion(),one=new Vector3(1,1,1),m=new Matrix4(),normal=new Matrix3(),pieceRotation=new Quaternion();
+const UP=new Vector3(0,1,0),v=new Vector3(),q=new Quaternion(),one=new Vector3(1,1,1),m=new Matrix4(),normal=new Matrix3(),pieceRotation=new Quaternion();
 // Loose building pieces (docs/disaster-damage.md, buildings). Large pieces near the camera become rigid
 // bodies at most PIECE_RATE per second with a burst of PIECE_BURST; the rest collapse their vertices and
 // go to the debris hook (onDebris) that the tornado's GPU debris draws.
@@ -34,7 +34,15 @@ export const PIECE_RANGE=150; // m from the camera
 export const PIECE_MASS=25; // kg: heavier, or longer than PIECE_SIZE, is a large piece
 export const PIECE_SIZE=1.5; // m
 const DEBRIS_PER_FRAME=64; // pieces handed to the debris hook per frame
+// m: no loose piece's collider is thinner than 10 cm. A 2 cm deck sheet of 4 kg, falling at 2 m/s, moves most of its
+// own thickness in one 120 Hz step: it went through the ground's surface, was pushed back out and stood up on its edge
+// with 20 J it never had. The sheet is drawn at its own thickness; only its collider is thicker.
+export const MIN_HALF=.05;
 export const PIECE_WAIT=1; // s a large piece waits for a spawn token before it goes to the debris hook instead
+// capacity-seconds of overload (damage integrates utilization - 1 over time) after which a record whose fracture
+// keeps being deferred for want of a rigid-body slot fails anyway through the debris hook (washAway). At the
+// 25 m pier tsunami's 13-250 x capacity that is under 0.1 s; a record barely over capacity creeps for longer.
+const STARVED_FAIL=1;
 export function saveSpan(s){const p=s.geo.attributes.position,n=s.geo.attributes.normal,copy={...s,pos:p.array.slice(s.start*3,(s.start+s.count)*3),nrm:n?.array.slice(s.start*3,(s.start+s.count)*3)};if(s.frame){copy.restorePos=copy.pos.slice();copy.restoreNrm=copy.nrm?.slice();const nm=new Matrix3().getNormalMatrix(s.frame);for(let i=0;i<copy.pos.length;i+=3){v.fromArray(copy.pos,i).applyMatrix4(s.frame).toArray(copy.pos,i);if(copy.nrm)v.fromArray(copy.nrm,i).applyMatrix3(nm).normalize().toArray(copy.nrm,i);}copy.inverse=s.frame.clone().invert();}return copy;}
 export function spanBounds(spans){const lo=new Vector3(Infinity,Infinity,Infinity),hi=new Vector3(-Infinity,-Infinity,-Infinity);for(const s of spans){const a=s.pos??s.geo.attributes.position.array.subarray(s.start*3,(s.start+s.count)*3);for(let i=0;i<a.length;i+=3){v.fromArray(a,i);lo.min(v);hi.max(v);}}return {lo,hi,center:lo.clone().add(hi).multiplyScalar(0.5),half:hi.clone().sub(lo).multiplyScalar(0.5)};}
 export function restoreSpans(spans){for(const s of spans){markGeometryMotion(s.geo,s.start,s.count);s.geo.attributes.position.array.set(s.restorePos??s.pos,s.start*3);s.geo.attributes.position.needsUpdate=true;if(s.nrm){s.geo.attributes.normal.array.set(s.restoreNrm??s.nrm,s.start*3);s.geo.attributes.normal.needsUpdate=true;}}}
@@ -62,6 +70,14 @@ export function fragmentProxy(bounds,terrain){
  if(hi.y-lo.y<.02)return null;
  return {center:lo.clone().add(hi).multiplyScalar(.5),half:hi.clone().sub(lo).multiplyScalar(.5),cut};
 }
+// A standing pile in a current (checkPiles): drag per metre is rho Cd D u² / 2, Cd 1.0 for a rough cylinder at a flood's
+// Reynolds numbers (1e6 to 1e7; DNV-RP-C205, 6.7), so the moment at the bed over a wetted length hw is rho Cd D u² hw² / 4.
+const PILE_CD=1.0;
+// m: a deck bay rests on a pile's cap when the cap is this close to the bay's box.
+const CAP_REACH=.3;
+// A pole collides as the square box of its round section's area: half side r sqrt(pi) / 2.
+const ROUND_TO_SQUARE=Math.sqrt(Math.PI)/2;
+const capPoint=new Vector3();
 export class StructuralDamage {
  constructor(app,owner){this.app=app;this.owner=owner;this.records=[];this.bodyBudget=224;this.joints=new Map();this.anchors=[];this.members=[];this.bodies=new Map();this.nextId=100000;this.deferred=0;this.pending=[];this.tokens=PIECE_BURST;this.debrisSinks=[];this.debrisCount=0;
   this.addRecords([...STRUCTURES,...importedStructures(app)]);
@@ -86,8 +102,12 @@ export class StructuralDamage {
    r.load=Math.hypot(seismic,wind+flood);r.capacity=mass*GRAVITY*mat.anchorG*r.anchorFactor;r.utilization=r.load/r.capacity;
    r.damage=Math.max(0,r.damage+dt*(r.utilization>1?(r.utilization-1):-.2));
    const exposed=s.shake>.25||Math.hypot(s.wx,s.wy,s.wz)>16||(depth>.08&&s.height>.1);
-   if(exposed&&(r.damage>0.08||r.utilization>.5)&&this.fracture(r))changed=true;
+   if(exposed&&(r.damage>0.08||r.utilization>.5)){r.starved=false;
+    if(this.fracture(r))changed=true;
+    else if(r.starved&&r.utilization>1&&r.damage>STARVED_FAIL&&this.washAway(r,s))changed=true;
+   }
   }
+  if(this.checkPiles())changed=true;
   if(this.releasePieces(dt))changed=true;
   // One deferred static rebuild per frame, run before the next physics step. No cameraCut: the pieces start where the building stood, so resetting TAA only smeared each break (test/disaster-frame-cost.mjs).
   if(changed)this.app.rally.requestIslandColliders();
@@ -99,11 +119,12 @@ export class StructuralDamage {
   // Each part's own ground: the wind loads only the height it stands above the soil (stepComponents).
   const terrain=this.app.terrainData;
   if(terrain?.heightAt)for(const c of list)c.ground=terrain.heightAt(c.center[0],c.center[2]);
-  const s=this.loadSample??={};
   // Built once per record so the per-frame step allocates nothing; the pieces queue only on a failure.
-  r.onFail=c=>{const roof=c.kind==='roofCover'||c.kind==='roofFrame',wx=Number.isFinite(s.wx)?s.wx:0,wz=Number.isFinite(s.wz)?s.wz:0,ux=Number.isFinite(s.ux)?s.ux:0,uz=Number.isFinite(s.uz)?s.uz:0;
-   // Declared start: a third of the wind and half the flow, and 3 m/s up for a roof piece the uplift tore off.
-   this.pending.push({r,c,vx:.3*wx+.5*ux,vy:roof?3:0,vz:.3*wz+.5*uz,age:0});r.failedCount++;if(c.kind==='wall')r.wallsFailed++;
+  // A part leaves its building with the building's velocity: the building is static, so at rest. The wind and the water
+  // that tore it off then load it like any other body (rigidEnvironmentalLoad). It used to start with a third of the
+  // wind, half the flow and 3 m/s up for a roof part: a velocity nothing had given it, and a throw upward.
+  r.onFail=c=>{
+   this.pending.push({r,c,vx:0,vy:0,vz:0,age:0});r.failedCount++;if(c.kind==='wall')r.wallsFailed++;
    c.failedAt=this.clock; // s of game time, so a review reads the order parts went in
    if(this.releaseCollider(r,c))r.collidersChanged=true;};
   return list;
@@ -119,10 +140,6 @@ export class StructuralDamage {
   r.collidersChanged=false;
   return changed;
  }
- // A failed part takes only its own collider with it. Defect: the first rigid piece of a house
- // disabled every collider of the record, so the walls still standing became walk-through. On a record's
- // first failure its shell box (one box over the whole body: Buildings.js 'house', 'shed') is swapped for
- // one slab per wall and masonry part, in the shell's own frame; each failure then drops only its part's slab.
  releaseCollider(r,c){
   let changed=this.splitColliders(r);
   if(c.collider&&!c.collider.disasterDisabled){disableCollider(c.collider);changed=true;}
@@ -183,12 +200,36 @@ export class StructuralDamage {
  }
  spawnPiece({r,c,vx,vy,vz}){
   const physics=this.app.rally.physics,f=memberFrame(c.spans),half=f.half.clone(),mass=Math.max(2,c.mass);
-  half.x=Math.max(.03,half.x);half.y=Math.max(.03,half.y);half.z=Math.max(.03,half.z);
-  const body={id:this.nextId++,kind:'structure',name:r.name+' '+c.kind,piece:c,spans:c.spans,origin:f.center.clone(),position:f.center.clone(),quaternion:f.quaternion.clone(),restInverse:f.quaternion.clone().invert(),half,mass,area:4*half.x*half.y,volume:mass/(STRENGTHS[r.material]?.solidDensity??600),height:2*half.y};
+  half.x=Math.max(MIN_HALF,half.x);half.y=Math.max(MIN_HALF,half.y);half.z=Math.max(MIN_HALF,half.z);
+  // The collider is the part's whole fitted box, the size it is drawn. It overlaps the loose parts and standing walls
+  // it met in the building by up to 2 m; the solver does not collide it with what it begins inside until it has
+  // come clear (piece() below). Pushed out instead, parts left their houses at up to 14 m/s with no load at all.
+  // What stands under the ground is not part of the collider, as for the jointed sections (fracture): a wall's fitted
+  // box reached 1 m into the soil and the ground threw the 458 kg wall 2 m up with no load. The part is drawn whole.
+  const cut=this.buriedCut(f.center,f.quaternion,half);
+  const body={id:this.nextId++,kind:'structure',name:r.name+' '+c.kind,piece:c,spans:c.spans,origin:f.center.clone(),position:f.center.clone(),quaternion:f.quaternion.clone(),restInverse:f.quaternion.clone().invert(),half,mass,area:4*half.x*half.y,volume:mass/(STRENGTHS[r.material]?.solidDensity??600),height:2*half.y,foundationCut:cut};
   body.environmentLoad=context=>rigidEnvironmentalLoad(this.owner.field,physics,body,context);
   const o=body.quaternion;
   if(!physics.wake_prop(body.id,0,new Float32Array(half.toArray()),new Float32Array([f.center.x,f.center.y,f.center.z,o.x,o.y,o.z,o.w,vx,vy,vz]),mass,.65,.05,false))return false;
-  this.bodies.set(body.id,body);return true;
+  this.piece(physics,body,r);this.bodies.set(body.id,body);return true;
+ }
+ // Shortens a box (center and half, in place) along its most upright axis until its lowest corner stands 2.5 cm above
+ // the highest ground under its corners; a box at its least thickness (MIN_HALF) is lifted by the rest instead.
+ // Returns the height cleared (m). Once per spawned part.
+ buriedCut(center,rotation,half){
+  const terrain=this.app.terrainData;if(!terrain?.heightAt)return 0;
+  const axes=[new Vector3(1,0,0),new Vector3(0,1,0),new Vector3(0,0,1)].map(a=>a.applyQuaternion(rotation));
+  let ground=-Infinity,bottom=Infinity;for(const x of [-1,1])for(const y of [-1,1])for(const z of [-1,1]){const at=new Vector3(x*half.x,y*half.y,z*half.z).applyQuaternion(rotation).add(center);bottom=Math.min(bottom,at.y);ground=Math.max(ground,terrain.heightAt(at.x,at.z));}
+  const cut=Math.max(0,ground+.025-bottom);if(!cut)return 0;
+  const vertical=axes.map(a=>Math.abs(a.y)),j=vertical.indexOf(Math.max(...vertical)),shift=cut/(2*Math.max(.01,vertical[j])),take=Math.min(shift,half.getComponent(j)-MIN_HALF);
+  half.setComponent(j,half.getComponent(j)-take);center.addScaledVector(axes[j],Math.sign(axes[j].y)*(2*shift-take));return cut;
+ }
+ // Every loose body of a record is named to the solver as a piece of it, before its first step (structures.rs):
+ // a piece does not collide with another piece of its structure, or a standing box, that it begins inside, until it
+ // has come clear of it. Breaking adds no energy (docs/disaster-damage.md). A build without the call cannot run silently.
+ piece(physics,body,r){
+  if(physics.set_structure_piece)physics.set_structure_piece(body.id,r.scatterIndex);
+  else if(physics.add_structure_joint)throw new Error('This physics build cannot name structure pieces (set_structure_piece): rebuild the WASM');
  }
  hidePiece({r,c,vx,vy,vz}){
   const [x,y,z]=c.center;
@@ -197,16 +238,27 @@ export class StructuralDamage {
   const event={x,y,z,vx,vy,vz,size:Math.max(c.hi[0]-c.lo[0],c.hi[1]-c.lo[1],c.hi[2]-c.lo[2]),mass:c.mass,area:c.area,kind:c.kind,material:c.spans[0]?.member?.material??r.material,record:r.name};
   for(const fn of this.debrisSinks)fn(event);
  }
+ // A failed record with no free rigid body (the village spent the budget first) still fails: its load path and
+ // colliders go at once, and its skin leaves through the debris hook carrying the local flow, as a large house
+ // piece does past PIECE_WAIT. Restore brings both back (restoreSpans, initialColliders).
+ washAway(r,s){
+  r.broken=true;for(const c of r.colliders)disableCollider(c);
+  const mat=STRENGTHS[r.material]??STRENGTHS.timber,h=r.half,mass=8*h.x*h.y*h.z*mat.density; // kg, bulk density
+  this.hidePiece({r,c:{center:r.center.toArray(),lo:r.lo.toArray(),hi:r.hi.toArray(),spans:r.spans,mass,area:4*h.y*Math.max(h.x,h.z),kind:'section'},vx:s.ux,vy:0,vz:s.uz});
+  return true;
+ }
  fractureLegacy(r){
   // Imported unstructured meshes retain their declared legacy coarse proxy.
   // Four sectors inside a geometrically clipped 10 m imported cell. Coarse rigid
   // proxies approximate assemblies; imported surfaces have no internal cut caps.
   const bins=[[],[],[],[]];for(const s of r.spans){const b=spanBounds([s]),i=(b.center.x>r.center.x?1:0)+(b.center.z>r.center.z?2:0);bins[i].push(s);}
-  const used=bins.filter(x=>x.length);if(this.bodies.size+used.length>this.bodyBudget){this.deferred++;return false;}
+  const used=bins.filter(x=>x.length);if(this.bodies.size+used.length>this.bodyBudget){r.starved=true;this.deferred++;return false;}
   const proxies=used.map(spans=>({spans,proxy:fragmentProxy(spanBounds(spans),this.app.terrainData)}));if(proxies.some(p=>!p.proxy)){this.deferred++;return false;}
   const created=[];for(const {spans,proxy:b} of proxies){const half=b.half,volume=8*half.x*half.y*half.z,mass=Math.max(2,volume*(STRENGTHS[r.material]?.density??65));
    const body={id:this.nextId++,kind:'structure',name:r.name,origin:b.center.clone(),position:b.center.clone(),quaternion:new Quaternion(),spans,half,mass,area:4*half.y*Math.max(half.x,half.z),volume:mass/(STRENGTHS[r.material]?.solidDensity??600),height:2*half.y,foundationCut:b.cut};
-   if(!this.app.rally.physics.wake_prop(body.id,0,new Float32Array([half.x,half.y,half.z]),new Float32Array([...body.position.toArray(),0,0,0,1,0,0,0]),mass,.65,.05,false)){for(const b of created)this.app.rally.physics.sleep_prop(b.id);this.deferred++;return false;}created.push(body);
+   // Loaded like the parts and members (drag in every direction at its load points), not the point path's sideways-only water drag.
+   body.environmentLoad=context=>rigidEnvironmentalLoad(this.owner.field,this.app.rally.physics,body,context);
+   if(!this.app.rally.physics.wake_prop(body.id,0,new Float32Array([half.x,half.y,half.z]),new Float32Array([...body.position.toArray(),0,0,0,1,0,0,0]),mass,.65,.05,false)){for(const b of created)this.app.rally.physics.sleep_prop(b.id);this.deferred++;return false;}this.piece(this.app.rally.physics,body,r);created.push(body);
   }
   for(const b of created)this.bodies.set(b.id,b);r.broken=true;for(const c of r.colliders)disableCollider(c);return true;
  }
@@ -216,41 +268,52 @@ export class StructuralDamage {
   if(!physics.add_structure_joint)return false;
   // Authored rest geometry and terrain are unchanged across budget deferrals and
   // Restore. Build the material description once, not every exposed frame.
-  const members=r.memberDescriptions??=(materialMembers(r,terrain)),created=[],jointIds=[],anchorId=this.nextId++;
+  const members=r.memberDescriptions??=(materialMembers(r,terrain,{mass:PIECE_MASS,size:PIECE_SIZE})),created=[],jointIds=[],anchorId=this.nextId++;
   const projectedCount=members.reduce((n,m)=>n+(!m.module&&m.material!=='masonry'&&m.length>1.5?2:1),0);
-  if(this.bodies.size+projectedCount>this.bodyBudget){this.deferred++;return false;}
+  if(this.bodies.size+projectedCount>this.bodyBudget){r.starved=true;this.deferred++;return false;}
   if(!physics.add_structure_anchor(anchorId,new Float32Array([...r.center.toArray(),0,0,0,1])))return false;
-  const rollback=()=>{for(const id of jointIds){physics.remove_structure_joint(id);this.joints.delete(id);}for(const body of created)physics.sleep_prop(body.id);physics.remove_structure_anchor(anchorId);this.deferred++;return false;};
+  const rollback=()=>{for(const id of jointIds){physics.remove_structure_joint(id);this.joints.delete(id);}if(r.piles)for(const p of r.piles)p.joints.length=0;for(const body of created)physics.sleep_prop(body.id);physics.remove_structure_anchor(anchorId);this.deferred++;return false;};
   for(const member of members){member.record=r;member.sections=[];member.severed=false;
    const count=!member.module&&member.material!=='masonry'&&member.length>1.5?2:1;
    member.grounded=false;
    for(let k=0;k<count;k++){
-    const half=member.half.clone(),center=member.center.clone(),rotation=member.quaternion.clone();
-    half.x/=count;center.addScaledVector(member.axes[0],count===2?(k===0?-1:1)*member.half.x*.5:0);
-    half.x=Math.max(.025,half.x);half.y=Math.max(.025,half.y);half.z=Math.max(.018,half.z);
+    // Whether the member stands on the ground is asked of its fitted box (a pier bay's pile reaches the bed); what
+    // collides is its solid box (MaterialMembers solidBox), the size of its own wood, not of every vertex it holds.
+    const section=box=>{const half=box.half.clone(),center=box.center.clone();half.x/=count;center.addScaledVector(member.axes[0],count===2?(k===0?-1:1)*box.half.x*.5:0);half.x=Math.max(MIN_HALF,half.x);half.y=Math.max(MIN_HALF,half.y);half.z=Math.max(MIN_HALF,half.z);return {half,center};};
+    const rotation=member.quaternion.clone(),{half,center}=section(member.solid??member),fitted=section(member);
     const initialVolume=8*half.x*half.y*half.z;
     // Clip authored buried foundations out of the collision proxy, preserving the
     // authored skin through its separate rest transform. No body pose is teleported.
     const axes=[new Vector3(1,0,0),new Vector3(0,1,0),new Vector3(0,0,1)].map(v=>v.applyQuaternion(rotation));
-    let ground=-Infinity,bottom=Infinity;for(const x of [-1,1])for(const y of [-1,1])for(const z of [-1,1]){const at=new Vector3(x*half.x,y*half.y,z*half.z).applyQuaternion(rotation).add(center);bottom=Math.min(bottom,at.y);ground=Math.max(ground,terrain.heightAt(at.x,at.z));}
-    if(bottom<=ground+.2)member.grounded=true;
+    const reach=(box,out)=>{out.ground=-Infinity;out.bottom=Infinity;for(const x of [-1,1])for(const y of [-1,1])for(const z of [-1,1]){const at=new Vector3(x*box.half.x,y*box.half.y,z*box.half.z).applyQuaternion(rotation).add(box.center);out.bottom=Math.min(out.bottom,at.y);out.ground=Math.max(out.ground,terrain.heightAt(at.x,at.z));}return out;};
+    const stands=reach(fitted,{});if(stands.bottom<=stands.ground+.2)member.grounded=true;
+    const {ground,bottom}=reach({half,center},{});
     const cut=Math.max(0,ground+.025-bottom),vertical=axes.map(a=>Math.abs(a.y)),j=vertical.indexOf(Math.max(...vertical));
-    if(cut>0){const shift=cut/(2*Math.max(.01,vertical[j]));half.setComponent(j,half.getComponent(j)-shift);center.addScaledVector(axes[j],Math.sign(axes[j].y)*shift);}
-    if(Math.min(half.x,half.y,half.z)<.012)continue;
+    // A box already at its least thickness is lifted clear of the ground by what cannot be cut (a few centimetres).
+    if(cut>0){const shift=cut/(2*Math.max(.01,vertical[j])),take=Math.min(shift,half.getComponent(j)-MIN_HALF);half.setComponent(j,half.getComponent(j)-take);center.addScaledVector(axes[j],Math.sign(axes[j].y)*(2*shift-take));}
     const fraction=Math.min(1,8*half.x*half.y*half.z/initialVolume),mass=Math.max(.5,member.mass/count*fraction);
-    const body={id:this.nextId++,kind:'structure',name:r.name,member,origin:center.clone(),position:center.clone(),quaternion:rotation,restQuaternion:rotation.clone(),half,mass,area:member.area/count,volume:member.volume/count*fraction,height:2*axes.reduce((v,a,i)=>v+Math.abs(a.y)*half.getComponent(i),0),foundationCut:cut};
+    const body={id:this.nextId++,kind:'structure',name:r.name,member,origin:center.clone(),position:center.clone(),quaternion:rotation,restQuaternion:rotation.clone(),half,mass,area:member.area/count,volume:member.volume/count*fraction,height:2*axes.reduce((v,a,i)=>v+Math.abs(a.y)*half.getComponent(i),0),foundationCut:cut,faces:[4*half.y*half.z,4*half.x*half.z,4*half.x*half.y]};
     body.environmentLoad=context=>rigidEnvironmentalLoad(this.owner.field,physics,body,context);
     if(!physics.wake_prop(body.id,0,new Float32Array(half.toArray()),new Float32Array([...center.toArray(),...rotation.toArray(),0,0,0]),mass,.65,.02,false))return rollback();
-    member.sections.push(body);created.push(body);
+    this.piece(physics,body,r);member.sections.push(body);created.push(body);
    }
   }
   const useful=members.filter(m=>m.sections.length);if(!useful.length)return rollback();
   // Member and anchor connection strengths scatter per run too (force and moment capacity).
   const strength=m=>capacityFactor(this.owner.runSeed,STREAM.member,r.scatterIndex*4096+members.indexOf(m),CAPACITY_COV[m.material]??CAPACITY_COV.timber);
-  const connect=(a,b,point,parameters,member=null,factor=1)=>{parameters[2]*=factor;parameters[3]*=factor;const id=this.nextId++;if(!physics.add_structure_joint(id,a,b,new Float32Array(point.toArray()),new Float32Array(parameters)))return false;jointIds.push(id);this.joints.set(id,{id,record:r,member,broken:false});if(member)member.joint=id;return true;};
+  const connect=(a,b,point,parameters,member=null,factor=1,pile=null)=>{parameters[2]*=factor;parameters[3]*=factor;const id=this.nextId++;if(!physics.add_structure_joint(id,a,b,new Float32Array(point.toArray()),new Float32Array(parameters)))return false;jointIds.push(id);this.joints.set(id,{id,record:r,member,broken:false,a,b,pile});if(member)member.joint=id;if(pile)pile.joints.push(id);return true;};
   for(const m of useful)if(m.sections.length===2&&!connect(m.sections[0].id,m.sections[1].id,m.center,beamConnection(m),m,strength(m)))return rollback();
-  let foundations=useful.filter(m=>m.grounded);if(!foundations.length)foundations=[useful.reduce((a,b)=>a.center.y-a.half.y<b.center.y-b.half.y?a:b)];
-  const connected=new Set();for(const m of foundations){const body=m.sections.reduce((a,b)=>a.position.y<b.position.y?a:b),point=body.position.clone();point.y-=Math.min(body.half.x,body.half.y);
+  const connected=new Set();
+  // A deck bay rests on the caps of the piles under it, held at each by that cap's own fasteners (the bay's root
+  // capacity per cap): it leaves its piles when those connections fail, and a pile that fails takes only its own
+  // (checkPiles). This replaces one root at the bay's lowest point: with its piles out the bay reaches no ground.
+  // A bay bears on its caps: the connection has one force limit, so each cap's carries the bay's share of its own
+  // weight on top of its fasteners, and only what lifts or drags the bay off works against the fasteners.
+  if(r.piles?.length)for(const m of useful){const caps=r.piles.filter(p=>!p.failed&&distanceTo(capPoint.set(p.x,p.top,p.z),m)<=CAP_REACH),factor=strength(m);
+   for(const p of caps){capPoint.set(p.x,p.top,p.z);const body=m.sections.reduce((a,b)=>a.position.distanceToSquared(capPoint)<b.position.distanceToSquared(capPoint)?a:b),parameters=beamConnection(m,true);parameters[2]+=m.mass*GRAVITY/caps.length/factor;
+    if(!connect(anchorId,body.id,capPoint,parameters,null,factor,p))return rollback();connected.add(m);}}
+  let foundations=connected.size?[]:useful.filter(m=>m.grounded);if(!connected.size&&!foundations.length)foundations=[useful.reduce((a,b)=>a.center.y-a.half.y<b.center.y-b.half.y?a:b)];
+  for(const m of foundations){const body=m.sections.reduce((a,b)=>a.position.y<b.position.y?a:b),point=body.position.clone();point.y-=Math.min(body.half.x,body.half.y);
    if(!connect(anchorId,body.id,point,beamConnection(m,true),null,strength(m)))return rollback();connected.add(m);}
   // A nearest-surface spanning tree transfers every member's load into actual
   // foundations. Extra touching neighbours supply alternate load paths.
@@ -258,11 +321,46 @@ export class StructuralDamage {
    const c=nearestConnection(a,b),pick=m=>m.sections.reduce((a,b)=>a.position.distanceToSquared(c.point)<b.position.distanceToSquared(c.point)?a:b);
    const parameters=[2e-6,4e-5,Math.min(a.forceCapacity,b.forceCapacity),Math.min(a.momentCapacity,b.momentCapacity),Math.max(a.relaxation,b.relaxation)];
    if(!connect(pick(a).id,pick(b).id,c.point,parameters))return false;edges.add(key);return true;};
-  while(connected.size<useful.length){let best=null;for(const a of connected)for(const b of useful)if(!connected.has(b)){const gap=nearestConnection(a,b).gap;if(!best||gap<best.gap)best={a,b,gap};}if(!link(best.a,best.b))return rollback();connected.add(best.b);}
+  while(connected.size<useful.length){let best=null;for(const a of connected)for(const b of useful)if(!connected.has(b)){const gap=nearestConnection(a,b).gap;if(!best||gap<best.gap)best={a,b,gap};}
+   // Members standing more than 1 m from the rest of their structure are held by the anchor at their own lowest point,
+   // as a structure with no grounded member is; a connection is never longer than that. The pier's record carries two
+   // members 55 m from the pier: joined across the gap they fell at activation and broke the connection between them.
+   if(best.gap>1){const m=best.b,body=m.sections.reduce((a,b)=>a.position.y<b.position.y?a:b),point=body.position.clone();point.y-=Math.min(body.half.x,body.half.y);if(!connect(anchorId,body.id,point,beamConnection(m,true),null,strength(m)))return rollback();connected.add(m);continue;}
+   if(!link(best.a,best.b))return rollback();connected.add(best.b);}
   for(let i=0;i<useful.length;i++)for(let j=i+1;j<useful.length;j++)if(nearestConnection(useful[i],useful[j]).gap<.08&&!link(useful[i],useful[j]))return rollback();
   for(const body of created){this.bodies.set(body.id,body);if(this.app.colliders?.addBox){body.proxy=this.app.colliders.addBox(body.position,body.half,0,{solid:true,walkable:false,tag:'structural-member'});body.proxy.prop=true;}}
   this.members.push(...useful);this.anchors.push(anchorId);r.active=true;r.members=useful;r.jointIds=jointIds;r.broken=false;
-  for(const collider of r.colliders)disableCollider(collider);this.sync(physics.prop_poses());return true;
+  // Its piles stay standing (checkPiles), on the island's standing shapes.
+  for(const collider of r.colliders)if(!r.piles?.some(p=>p.collider===collider))disableCollider(collider);this.sync(physics.prop_poses());return true;
+ }
+ // Each standing pile of a broken deck, every frame: the bending moment the water's drag puts on it at the bed (PILE_CD)
+ // against what its round section carries (MaterialMembers pileMember) times the run's scatter. A 2 m surge (2 to 3 m/s
+ // over 3 m) puts about 12 kN m on a 0.3 m pile, which holds 80 kN m; a 10 m wave (10 m/s over 5 m) about 384 kN m and a
+ // 25 m wave (20 m/s over 7 m) about 3 MN m, so piers keep their piles in a surge and lose them to a large wave, as
+ // piers do. A failed pile leaves as a pole, a body of its own. With the body budget spent it waits standing, as a large
+ // part waits for a spawn token, and leaves when a body is freed: it never vanishes. Debris striking a pile is not
+ // counted yet. A pile never wakes: it is a standing shape until it fails.
+ checkPiles(){let changed=false;const field=this.owner.field,s=this.pileSample??={},seed=this.owner.runSeed;
+  for(const r of this.records){if(!r.active||!r.piles)continue;
+   for(let k=0;k<r.piles.length;k++){const p=r.piles[k];if(p.pole)continue;
+    if(!p.failed){if(p.scatterSeed!==seed){p.scatterSeed=seed;p.factor=capacityFactor(seed,STREAM.pile,r.scatterIndex*4096+k,CAPACITY_COV.timber);}
+     field.sample(p.x,.5*(p.bottom+p.top),p.z,s);const wetted=Math.min(p.length,Math.max(0,Math.min(s.height,p.top)-p.bottom));
+     p.moment=.25*SEA_WATER_DENSITY*PILE_CD*p.diameter*(s.ux*s.ux+s.uz*s.uz)*wetted*wetted;
+     if(!(p.moment>p.momentCapacity*p.factor))continue;p.failed=true;p.failedAt=this.clock;}
+    if(this.bodies.size<this.bodyBudget&&this.pole(r,p))changed=true;}}
+  return changed;}
+ // A failed pile as a body: upright where it stood, at rest, the square box of its section from its foot to its cap. Its
+ // cap connections go with it; a bay still on other caps hangs there.
+ pole(r,p){
+  const physics=this.app.rally.physics,id=this.nextId++,h=p.radius*ROUND_TO_SQUARE,half=new Vector3(h,p.length/2,h),center=new Vector3(p.x,p.bottom+p.length/2,p.z),rotation=new Quaternion();
+  if(!physics.wake_prop(id,0,new Float32Array(half.toArray()),new Float32Array([...center.toArray(),0,0,0,1,0,0,0]),p.mass,.65,.02,false))return false;
+  const body={id,kind:'structure',name:r.name,member:null,origin:center.clone(),position:center.clone(),quaternion:rotation,restQuaternion:rotation.clone(),half,mass:p.mass,area:p.diameter*p.length,volume:p.volume,height:p.length,foundationCut:0,faces:[4*half.y*half.z,4*half.x*half.z,4*half.x*half.y]};
+  body.environmentLoad=context=>rigidEnvironmentalLoad(this.owner.field,physics,body,context);this.piece(physics,body,r);
+  for(const j of p.joints){physics.remove_structure_joint(j);this.joints.delete(j);}p.joints.length=0;disableCollider(p.collider);
+  const member={spans:p.spans,record:r,sections:[body],severed:false,pole:true,center:center.clone(),half:half.clone(),material:'timber'};body.member=member;
+  this.bodies.set(id,body);this.members.push(member);p.pole=body;
+  if(this.app.colliders?.addBox){body.proxy=this.app.colliders.addBox(body.position,body.half,0,{solid:true,walkable:false,tag:'structural-member'});body.proxy.prop=true;}
+  return true;
  }
  sync(poses){
   for(let i=0;i<poses.length;i+=10){const b=this.bodies.get(poses[i]);if(!b)continue;
@@ -284,7 +382,8 @@ export class StructuralDamage {
    r.breached=false;r.floodedAt=undefined;r.wetTime=0;r.failedCount=0;r.wallsFailed=0;if(r.components)for(const c of r.components){c.failed=false;c.damage=0;c.u=0;c.failedAt=undefined;c.collider=null;}
    // The wall slabs a split added go; the shell box came back with initialColliders above.
    for(const slab of r.slabs??[]){const i=this.app.colliders.boxes.indexOf(slab);if(i>=0)this.app.colliders.boxes.splice(i,1);}
-   if(r.slabs)r.slabs.length=0;r.split=false;r.collidersChanged=false;}
+   if(r.slabs)r.slabs.length=0;r.split=false;r.collidersChanged=false;
+   if(r.piles)for(const p of r.piles){p.failed=false;p.pole=null;p.joints.length=0;p.scatterSeed=undefined;p.moment=0;}}
   this.deferred=0;this.clock=0;this.pending.length=0;this.tokens=PIECE_BURST;
  }
 

@@ -86,6 +86,11 @@ function closestAxisTriangle(a,b,t){
  return pair;
 }
 
+// See-through wing (occlude): how far it fades (People's FADE, src/people/Fade.js: a ghost stays), the hold past
+// the last hidden frame (s), the ease rate (1/s), and the lines tested: his eye, chest and hips below the eye (m)
+const WING_FADE=.85,WING_HOLD=.15,WING_EASE=12,WING_LINES=[0,-.5,-.9];
+const _from=new Vector3(),_toLens=new Vector3();
+
 export class GliderBody{
  constructor(root,flight){
   this.id='glider';this.flight=flight;this.triangles=[];this.cameraTriangles=[];this.contacts=0;this.lastContact=null;
@@ -108,6 +113,30 @@ export class GliderBody{
   // contact retains its existing sail surface and force/velocity response.
   this.cameraTree=this.cameraTriangles.length?rayTree(this.cameraTriangles):null;
   this.cameraRadius=Math.max(this.radius,...this.cameraTriangles.flatMap(t=>[t.a.length(),t.b.length(),t.c.length()]));
+  // see-through wing (occlude below): 0 solid to 1 gone; seconds since it last hid him; seconds since a camera asked
+  this.fade=0;
+  this.sinceHidden=Infinity;
+  this.unasked=Infinity;
+ }
+ occlude(lens,eye,dt=0){
+  this.unasked=0;
+  let hidden=false;
+  if(this.cameraNear(eye,lens.distanceTo(eye)+.5)){
+   for(const drop of WING_LINES){
+    _from.set(eye.x,eye.y+drop,eye.z);
+    _toLens.subVectors(lens,_from);
+    const length=_toLens.length();
+    if(length<.1)continue;
+    _toLens.multiplyScalar(1/length);
+    // 5 cm short of the lens: a sail the near plane already cuts away hides nothing
+    if(this.cameraRaycast(_from,_toLens,length)<length-.05){hidden=true;break;}
+   }
+  }
+  this.sinceHidden=hidden?0:this.sinceHidden+dt;
+  // held 0.15 s past the last hidden frame (People's hold), eased at 12 /s both ways, snapped within 0.02
+  const want=this.sinceHidden<WING_HOLD?WING_FADE:0,f=this.fade;
+  this.fade=Math.abs(want-f)<.02?want:f+(want-f)*(1-Math.exp(-dt*WING_EASE));
+  return hidden;
  }
  local(world){const f=this.flight;return new Vector3(...inverseRotate(f.quaternion,xyz(world).map((n,i)=>n-f.position[i])));}
  cameraNear(world,range=0){return Math.hypot(...xyz(world).map((n,i)=>n-this.flight.position[i]))<=this.cameraRadius+range;}

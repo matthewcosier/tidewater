@@ -6,11 +6,6 @@ import { SCENARIO_TIMEOUT_MS, untilGameTimeCheck } from './gameTime.js';
 
 const OUT = process.env.PW_OUT ?? '/tmp';
 const status = page => page.getByRole( 'status', { name: 'Disaster simulation' } );
-async function fill( page, field, value ) {
-	await field.focus();
-	await page.keyboard.press( 'ControlOrMeta+A' );
-	await page.keyboard.type( value );
-}
 async function choose( page, label, option ) {
 	await page.getByLabel( label ).focus();
 	await page.keyboard.type( option );
@@ -52,8 +47,16 @@ test( 'Village buildings lose roofs before walls, piece by piece, under a tornad
 		await page.keyboard.press( 'Enter' );
 		await expect( status( page ) ).toHaveAttribute( 'data-active', /tornado/ );
 		await choose( page, 'Disaster type', 'Tsunami' );
-		await fill( page, page.getByLabel( 'Warning lead time (s)' ), '6' );
-		await fill( page, page.getByRole( 'spinbutton', { name: 'Intensity', exact: true } ), '2' );
+		// The tsunami panel: the Warning choice, and the wave height on its logarithmic slider, 1,000 steps from 1 m to
+		// 3,000 m (src/disasters/TsunamiPanel.js): Home is 1 m and 87 steps up is 2 m.
+		await page.getByRole( 'combobox', { name: 'Warning', exact: true } ).focus();
+		await page.keyboard.type( 'None' );
+		await expect( page.getByRole( 'combobox', { name: 'Warning', exact: true } ) ).toHaveValue( 'none' );
+		const slider = page.getByRole( 'slider', { name: 'Wave height', exact: true } );
+		await slider.focus();
+		await page.keyboard.press( 'Home' );
+		for ( let k = 0; k < 87; k ++ ) await page.keyboard.press( 'ArrowRight' );
+		await expect( slider ).toHaveValue( '87' );
 		await page.getByRole( 'button', { name: 'Start disaster', exact: true } ).focus();
 		await page.keyboard.press( 'Enter' );
 		await expect( status( page ) ).toHaveAttribute( 'data-active', /tsunami/ );
@@ -66,8 +69,6 @@ test( 'Village buildings lose roofs before walls, piece by piece, under a tornad
 			expect( last.jointed, 'no village building turned into one jointed assembly' ).toBe( 0 );
 			return false;
 		}, 40 );
-		// Each part records the game time it let go (Structures.js failedAt), so the order is strict, not a tie
-		// on one poll (a single poll can report the first roof and the first wall on the same poll).
 		const roofAt = last.roofCover?.first ?? Infinity, wallAt = last.wall?.first ?? Infinity;
 		console.log( 'building parts', JSON.stringify( last ), 'first roof sheet at', roofAt, 's, first wall panel at', wallAt, 's' );
 		expect( roofAt, 'a roof sheet came off within 40 game s' ).toBeLessThan( Infinity );

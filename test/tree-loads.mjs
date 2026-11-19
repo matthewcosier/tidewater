@@ -56,7 +56,9 @@ test('Actual released native tree angular impulse uses crown inertia at the true
 });
 
 test('Actual director applies no invented world-up lever to a fallen tree aligned with uniform flow',()=>{
- const f=fixture();try{f.bodies.fall(f.bodies.trees[0]);const b=[...f.bodies.bodies.values()][0];f.sim.sleep_prop(b.id);b.quaternion.setFromAxisAngle(new Vector3(0,0,1),Math.PI/2);f.bodies.spawn(b);f.field.ambient=()=>({x:40,z:0});const d=director(f),load=loadAt(d,f.sim,b.id,1/60);assert.ok(load[0]>0);assert.ok(Math.hypot(...load.slice(3))<1e-4,`flow along the tree axis should not create a world-up torque: ${load.slice(3)}`);}finally{f.bodies.reset();f.sim.free();}
+ const f=fixture();try{f.bodies.fall(f.bodies.trees[0]);const b=[...f.bodies.bodies.values()][0];f.sim.sleep_prop(b.id);b.quaternion.setFromAxisAngle(new Vector3(0,0,1),Math.PI/2);f.bodies.spawn(b);f.field.ambient=()=>({x:40,z:0});const d=director(f),load=loadAt(d,f.sim,b.id,1/60);assert.ok(Math.hypot(...load.slice(3))<1e-4,`flow along the tree axis should not create a world-up torque: ${load.slice(3)}`);
+  // The wind's drag is integrated in the solver, not held as a force: a step of it moves the tree downwind and does not turn it.
+  f.sim.advance(1/120,0,0,0,0);const s=nativeState(f,b);assert.ok(s.v.x>0,`a 40 m/s wind along the tree moves it downwind: ${s.v.x} m/s`);assert.ok(s.w.length()<1e-3,`flow along the tree axis should not turn the tree: ${s.w.toArray()} rad/s`);}finally{f.bodies.reset();f.sim.free();}
 });
 
 import {nativeAngularVelocity} from '../src/disasters/RigidLoads.js';

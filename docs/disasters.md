@@ -24,32 +24,92 @@ Crests from 0.5 to 3,000 m are accepted without visual scaling. The extreme uppe
 
 ### Far field, inflow and hand-off (walls the ring cannot hold)
 
-The 2 km grid above is nested one-way inside an outer ring of 257 x 257 cells at 32 m (8.2 km square, `Field.js` `OUTER_GRID`), both second-order central-upwind with fixed-step accumulators (`WaterGrid.js` `advanceFixed`). A wave the ring can hold (2 m and 10 m: 60-90 s of approach inside 4 km) is launched in the ring at the warning's end. A wall is not: at 3000 m it crosses 4 km in about 3 s. Such a wave gets a far field (`Field.js` `planApproach`, `wall`) when all three hold: it is a bore at its source (H >= 0.78 d, McCowan), the ring's own approach is shorter than the drawn approach, and its crest stands above the horizon from beyond the ring edge (sqrt(2 R H) > ring edge, R = 6371 km). The far-field time is drawn per event from 25-30 s (`FAR_FIELD_BAND`, a game choice: long enough to see it come; drawn last in the seed stream so every other plan is unchanged).
-
-- **Speed.** A wall fed from behind is a bore, so its celerity is Stoker's uncapped (`crestCelerity(d, H, sustained)`): over the 90 m source depth 732 m/s at 3000 m and 106 m/s at 320 m. Capped at the dam-break 2 sqrt(g (d + H)) = 348 m/s the column had too little momentum and slumped to 1430 m within 3 s of the hand-off.
-- **Length.** The crest is a plateau 20 x (d + H) long behind the front (`LONG_WAVE`, the shallow-water limit L/h >= 20, declared): 61.8 km (84 s) at 3000 m, 8.2 km (78 s) at 320 m. The Gaussian (sigma = max(width, 192 m, 0.03 H), 1:33 width to height) shapes only the front and the back.
-- **Water speed.** Behind the front u = C (h - d) / h (`nWaveSpeed`), the Rankine-Hugoniot mass condition across a bore moving at C: 710 m/s at 3000 m (Froude 4.1), 82 m/s at 320 m (Froude 1.3). The trough ahead keeps the simple-wave relation.
-- **Drawn and sampled.** Until the hand-off (`e.launchTime` = warning + far time) the analytic wall (`farFieldAt`) is the water everywhere: people, boats, props, worker ragdolls (`RigSnapshot`) and the shader (`Water.js` `disasterFar`, the WGSL twin) read the same surface. After it, only outside the ring.
-- **Inflow.** After the hand-off the analytic wall keeps driving the ring's open boundary for the crest's length / speed (`WaterGrid.js` `inflowAt`): hard copy of h and u on the outer 2 cells, relaxation at the nesting rate on the next 6, only where the wall is drawn; elsewhere the old 8-cell sponge. `stats.boundaryVolume` keeps the budget (negative: water let in). Without it the sponge ate the wall's back and 3000 m reached the coast at 37-41% of H.
-- **Hand-off.** At launch the state written is the sea at that instant, so the accumulator's lag is cleared (`launch`). Previously, the calm ring's unspent lag (up to one 0.24 s step) was replayed on the new wall and the 3000 m face jumped 97 m (seed 2) and 161 m (seed 7) ahead of the analytic face in one frame. Now 5 m and 0 m.
-
 Measured on the real island (`test/tsunami-farfield.mjs`, `test/tsunami-mega.mjs`): hand-off height within 3%, face within 64 m (two ring cells), face speed over the next 3 s within 25% of C; the 3000 m wall keeps 3000-3525 m at every gauge to the coast and overtops the 297 m summit; 320 m keeps 279-358 m and arrives above the village roofs; 2 m and 10 m get no far field. Cost: the ring's CFL step at 3000 m is about 8 ms of CPU (u + c = 885 m/s), so the mega run takes 40-50 s of CPU per 8-12 s of game time in node; the GPU port is open.
 
 ### Coastal flooding detected (the warning's coast)
 
-`e.coastReached` (banner "Coastal flooding detected", `src/evacuation/Route.js`) means the bore is ashore at the coast the warning names: land (ground above datum) within the event's Radius of the target holding more than `INUNDATION_DEPTH` 0.1 m of water (`WaterGrid.landWithin` once at launch, `floods` per frame, allocation-free). A target with no land in its radius falls back to any wet land in the grid. It used to be any wet land in the grid: on the -90 deg heading the source line lies just north of Joey Island (Surge 2 m seed 7: launchDistance 1052 m), the plane crest's forward Gaussian tail sits on Joey's north beach (ground 0.00-0.25 m), and that beach carried 0.3-1.3 m of water at 2-6 m/s within 1 s of the launch, so the banner said "Coastal flooding detected" with the crest about 100 s from the village. Measured now (`test/tsunami-coast.mjs`, red on the old detector at 0.2 s and 0.1 s): Surge 2 m seed 7 at the Fishing village floods its shore 75.3 s after launch (sea front at the ray's shoreline 72.4 s, countdown 99.2 s); Severe 10 m seed 1 at 50.5 s (front 54.1 s, countdown 60.5 s). The beach floods on the crest's rising limb (σ at least 6 x 32 m), so the flag leads the crest countdown by up to a quarter of it. Open: the source mound still lands on Joey's north beach in one step (a fork on the source placement).
+### The wave is generated at sea
 
 ### Seeds and replay
 
-To replay one, set the one-shot `window.__app.disasters.nextSeed = n` before Start: `Disasters.start` takes it as the event's seed and as `runSeed`, then clears it; a start deferred to the frame boundary keeps it until it runs (`test/disaster-next-seed.mjs`). It is internal plumbing for the browser specs and bug reports. No panel, key or HUD shows or sets it. The Tsunami control scenario (`test/browser/disasters.spec.js`) replays Surge 2 m at the village with seed 7 and asserts the outcome physically: loose furniture moves, every footprint the water never wetted (depth over the base above 0.08 m, the structures' own exposure rule) stands untouched, and every broken building saw a load above half its scattered anchor capacity (the member model's activation ratio).
+**Reference.** The maths does not change: second-order central-upwind (Kurganov and Petrova 2007) with hydrostatic reconstruction (Audusse et al. 2004) and Heun's SSP-RK2, Manning friction, the edge sponge, the far-field inflow band (Mayer, Garapon and Sorensen 1998) and the one-way nest. `src/disasters/WaterGridGPU.js` is a pass-for-pass WGSL mirror of `WaterGrid.step`, with the CPU line each pass mirrors named in its comment. The CPU `WaterGrid` stays the reference and the node path: every node test keeps running it, and the parity test holds the two together.
+
+**Passes (one step, one compute pass, 64-thread workgroups over the n^2 cells, 1033 groups at n 257).** `slopes` (both axes' limited slopes of eta, h and the normal and tangential speeds, first order at the edge and next to water under DRY 1 mm: `WaterGrid.sweep`'s first loop), `faces` (each face's central-upwind flux once: mass, normal momentum less the left side's face pressure, tangential momentum, and the pressure difference the right side adds), `update1` (gathers its four faces and the centred bed term `-g h sEta`, saves the stage copy, positive Euler step: `stepSecond` stage one), then `slopes`, `faces`, `update2` (the Heun average), `sources` (friction, then on an un-nested grid the inflow band or the sponge: `WaterGrid.sources` / `inflowAt`), `nest` (the edge band relaxed to the parent's blended field: `nestToParent`), `pack` (previous <- state, state <- (surface, u, v, h): `WaterGrid.pack`). Per frame: `blend` (pixels = mix(previous, state, lag / step): `WaterGrid.blend`) and `rate` (the CFL rate's maximum, atomicMax on the float's bits: `WaterGrid.stableStep`). Each face is computed once and read by both its cells, so the mass a face moves leaves one cell and enters the other exactly (conservative in f32). The state is f32 on the GPU (f64 on the CPU); a lake at rest stays exactly at rest because the bed and the still depth round to the same magnitude.
+
+**Layout.** Per grid: `U` 2 n^2 vec4 (h, qx, qz, bed; then the stage copy), `S` 2 n^2 vec4 (x then z slopes), `F` 2 n^2 vec4 (x then z faces), `PK` 3 n^2 vec4 (state, previous, pixels: the same (surface, u, v, h) the CPU `pixels` holds, the layout the renderer's `disasterGridTex` reads and `Field.sample` interpolates). 6 storage bindings per pass (the engine requests 10). 257^2: 4.2 MB per grid, 8.5 MB for both. The ring's `PK` is bound read-only to the village grid's `nest` pass.
+
+**Source of truth.** The GPU `PK` pixels are the field: the renderer reads them in place (no upload: the texture becomes a storage buffer the water shader indexes, or `pack` writes the texture as a storage texture), and the CPU consumers read a copy. Launch and `addImpulse` stay on the CPU (they are one-off writes onto water at rest) and upload `U` once; the event's inflow bookkeeping (`inflow.elapsed`, `time`, `stats.steps`) stays on the host `WaterGrid`, which the GPU wrapper advances.
+
+**CPU consumers.** Every reader of `Field.waterAt` / `Field.sample` / `WaterGrid.sample` (Ragdoll, RagdollPool and RigSnapshot, Structures, Disasters, EvacuationAI, Contact, FerryShip and FerryDeck, Chairlift, Aviation, Glider, OnFootExit, Habitat, Brain, Sharks, Route) reads `pixels` through the same bilinear `sample`. In GPU mode those `pixels` are an async readback: `copyBufferToBuffer` of the pixels third of `PK` into one of two MAP_READ staging buffers, `mapAsync` resolved one or two frames later and copied into the host grid's `pixels` (same layout, so `sample`, `floods`, `landWithin` and every consumer are unchanged). Gameplay never waits on the GPU: a frame whose readback has not resolved keeps the previous field (one to two frames, 17-33 ms, late: under a body's 0.3 s surface smoothing and the 1 s ragdoll rest test). Readback: 1.06 MB per grid per frame, 2.1 MB for both (unified memory on the M-series target). `stats` that need a reduction (inundated area, min and max surface) come from the readback on the CPU, as `pack` computes them today; `positivityCorrection` and `boundaryVolume` are not kept on the GPU (named gap: a reduction pass if a test needs them in GPU mode).
+
+**Detail by distance.** Unchanged: the ring (32 m cells, 8.2 km) holds the approach and the far field, the village grid (8 m, 2 km) the coast; beyond the ring the analytic wall (`disasterFar`).
+
+**Transitions.** CPU to GPU happens at grid creation (a device exists: GPU; node or no device: CPU). Launch and an impulse upload the host state once (a readback copied before the upload is dropped by epoch, so the calm sea never lands on a just-launched wave). Stop, and the end of the last water event, destroy the GPU buffers with the grids (a readback still mapping is caught, not thrown). GPU to CPU happens mid-event in two cases, both from the last readback: a tornado starts (its wind stress is not on the GPU) and the device is lost (`device.lost`; once, for the session).
+
+**Edges.** Non-finite rate: the CPU throws; the GPU rate pass ignores NaN (atomicMax on bits) so the host checks the readback for a non-finite or zero rate and falls back. f32 positions: cell centres within 4.1 km of the origin carry 0.25 mm of rounding, the far-field crest position the same. The nest's `pn - 1.000001` clamp rounds to `pn - 1` in f32, so the GPU clamps the base cell to `pn - 2` instead (same bilinear weights).
+
+**Evidence plan.** `test/tsunami-gpu-parity.mjs` (headless WebGPU through `test/headless.mjs`): the real island, the Surge 2 m and 320 m events (seed 1) in the real `DisasterField`, both grids snapshotted in flight, then the same CFL steps on the CPU and the GPU: eta and momentum within a stated tolerance, volume within 1e-6 of the CPU's, and a closed basin (no sponge) conserving its volume to 1e-6. Then the readback path, the switch in `Field` and the before / after bench.
+
+## Rendering the flood
+
+**Reference.**
+- Bore strength is the bore Froude number Fr1 = c / sqrt(g h1). Undular (smooth crests, no roller) below 1.3-1.5,
+  breaking roller beyond, fully breaking by about 2 (Chanson 2009, Eur. J. Mech. B/Fluids 28, 191-210). The
+  renderer sees only the state behind the front, so it inverts the jump relations for a front running into still
+  water or a dry bed: Fr2 = sqrt((r + 1) / 2) (r - 1) / r with r = h2 / h1. Fr1 = 1.3 is a local Fr2 of 0.316 and
+  Fr1 = 2.0 is 0.751 (`src/disasters/FloodLook.js` derives both; `test/tsunami-render.mjs` pins them).
+- Overland flow in 2011 ran at Froude numbers of about 0.7-2 and was white and churning where supercritical
+  (Fritz et al. 2012, Geophys. Res. Lett. 39, Kesennuma survivor videos).
+- Suspended sediment in the 2004 and 2011 flows was of order 1-10 kg/m^3 (Jaffe and Gelfenbaum 2007, Sediment.
+  Geol. 200): brown-black water, opaque within centimetres. Fine sand goes into suspension at about 0.5-3 m/s of
+  depth-averaged flow in shallow water (Soulsby 1997, Dynamics of Marine Sands).
+- Declared game choices: the lip leans forward 0.35 of the jump and the roller stands 0.1 of the jump above the
+  conjugate depth (after the plunging lip in `src/ocean/Breakers.js`); sediment optics at turbidity 1 are
+  absorption (2.2, 3.0, 4.6) /m and scattering (24, 23, 21) /m, opaque within about 4 cm, the ratio giving the
+  brown-grey colour; the foam flow map cycles every 3 s.
+
+**Source of truth.** Everything is read from the solver's packed state (`WaterGrid.pack`: surface, u, v, depth)
+through `DisasterWater` (`src/disasters/Water.js`), the same texture the boats' `WaterQuery` height uses. The
+classifier and the turbidity model are one set of constants in `FloodLook.js`, emitted both as JS (tests, the
+debug stat) and as WGSL. The physics is never changed here.
+
+**What it draws.**
+1. Bore face, per vertex and per pixel: local Fr from the packed depth and velocity, the face slope as the fall of
+   the interpolated surface along the flow; breaking = Fr ramp (0.316..0.751) x face ramp (0.02..0.10 m/m) x depth
+   ramp. The jump h2 (1 - 1/r) scales the lip (vertices thrown forward along u) and the roller.
+2. Whitewater, per pixel: the breaking roller plus the churning supercritical sheet (local Fr 0.6..1.6 in shallow
+   water), as foam coverage and as aeration in the water medium.
+3. Foam streaks advected by u: a two-phase flow map on the foam pattern where the flood flows.
+4. Turbid flood: sediment absorption and scattering added to the water medium by turbidity (0 in water deeper than
+   about 30 m, 1 over flooded land, stirred in fast shallow water).
+5. Surf suppression: the shore waves' displacement, the plunging face, the roller, the surf foam and the shore
+   simulation's foam fade where a surge or drawdown of 0.4-2 m covers the sea, or any flood (0.1-0.6 m) covers the
+   beach. The run-up sheet already drops below the flood surface.
+6. Waterline per pixel: the render surface carries the wet corners' level across the cell
+   (`disasterSurface`), so the waterline is where that level meets the real terrain, not the 8 m (32 m outer) grid.
+
+**Budget.** No new passes, draws or dispatches. Per water vertex the flood now costs 4 samples of the packed state
+(it was 8: height, two 3-sample slopes, foam). Per water pixel, 3 samples plus two foam texture taps where the
+flood flows. Off (no event) every sample returns at the domain check. Measured: see Evidence.
+
+**Detail by distance.** The lip and roller follow the water mesh (fine near, coarse far, as the waves do). Foam
+pattern detail fades into coverage with the pixel footprint (the existing rule), so far water shows the colour and
+the white of the bore, near water the streaks.
+
+**Transitions.** Every term is a smoothstep ramp: the bore appears as the Froude number and the face grow and
+fades as they fall; turbidity grows as the water runs over the land; the surf fades over 0.4-2 m of surge.
+
+**Edges.** Still water has Fr 0, so the still waterline (a large surface step to a dry cell) is never a bore. A
+steady current with no face is not a bore. Depths under 0.02 m carry no face. The ratio iteration contracts (factor
+< 0.5) for every Fr, so it cannot diverge; speeds are divided by max(speed, 1e-4).
 
 ## Common force laws
 
-The shared constants are `g=9.81m/s²`, air density 1.225 kg/m³ and seawater density 1025 kg/m³. Drag is `F=.5*rho*Cd*A*|u-v|*(u-v)`, with projected area and mass belonging to each proxy. Generic debris uses Cd 1.1 in air and 1 in water. Constant-fluid quadratic drag is integrated by exact relaxation over the interval for which the force is held, so light debris cannot overshoot fluid velocity and gain energy. Avian receives that average force at its 120 Hz integration steps after body mass initialization.
+The shared constants are `g=9.81m/s²`, air density 1.225 kg/m³ and seawater density 1025 kg/m³. Drag is `F=.5*rho*Cd*A*|u-v|*(u-v)`, with projected area and mass belonging to each proxy. Generic debris uses Cd 1.1 in air and 1 in water. Drag is never a held force on a loose rigid body: it is integrated in the solver as an implicit relaxation of each load point's velocity toward the fluid's, every substep, so light debris cannot overshoot the fluid's velocity or gain energy from it (Trees and floating debris, below). The point path (`Field.acceleration`: the player's car, people, external bodies) still integrates constant-fluid quadratic drag by exact relaxation over the frame and hands Avian the average force at its 120 Hz steps.
 
 Buoyancy is `rho*g*submergedVolume`. Generic proxies use a linear submerged-height fraction; this does not integrate complex open hull sections. The boat and jetski retain their existing distributed hydrostatic/planing laws, with water-relative and air-relative velocities passed into those laws. The shared adapter does not add their buoyancy a second time. The active car similarly passes air velocity and horizontal current to its native aerodynamic and distributed water-column laws, with no second generic drag/buoyancy adapter. Its established forward drag coefficient remains; side/up projected areas use hull bounds and assumed bluff-body Cd 1.1. Native car drag now assembles its twelve anisotropic water-column loads, centre-of-mass air resistance and water rotational damping in one implicit six-degree-of-freedom solve over each actual 120 Hz held interval. It uses native computed mass, rotated inertia and centre of mass. The existing drag coefficients and explicit buoyancy/slope loads remain. This prevents the former quadratic-drag overshoot from producing runaway velocities and an enormous terrain contact search at extreme currents. Air and water are world velocities, including while the tyres ride a moving ferry. This is a stable reduced drag discretization, not a resolved transient fluid impact. The shipped car, boat and jetski pass equal-body/fluid-translation checks. A barrel reuses its actual cylinder mass and displacement from the native spawn metadata.
 
-Applied debris acceleration is capped at 45 m/s², force at 2 MN and torque at 2 MN·m. The panel distinguishes raw demand from applied load and counts cap activations. These are operating limits, not material laws. Runtime budgets are 224 structural section bodies and 512 structural connections, 40 fallen trees, 24 parked vehicles, 80 loose props and 48 external pieces. A rejected allocation leaves the original representation intact; partial structural allocation is rolled back. Deferred failures are reported.
+The held part of a loose body's load (buoyancy, a crushed crown's spring, ground shaking) is capped at 45 m/s², force at 2 MN and torque at 2 MN·m; its drag has no cap. The panel distinguishes raw demand from applied load and counts cap activations. These are operating limits, not material laws. Runtime budgets are 224 structural section bodies and 512 structural connections, 40 fallen trees, 24 parked vehicles, 80 loose props and 48 external pieces. A rejected allocation leaves the original representation intact; partial structural allocation is rolled back. Deferred failures are reported.
 
 ## Earthquake, tornado and failure
 
@@ -107,6 +167,10 @@ Restore removes all these native connections, foundation frames, bodies and walk
 
 ## People and debris contact
 
+### People caught in a tsunami (2026-10-05)
+
+### Tsunami panel
+
 Beach and ferry people receive shared wind, flood level/current and contact-supported ground loads. Adults use an assumed 72 kg, children 35 kg; projected standing area is 0.7 m² for a 1.7 m adult and scales with height squared. The assumed lateral stance threshold is 3.2 m/s² while supported. It is tested on the push the same body feels at rest, so a person's own wading drag never counts: calm sea does not tip a wader at any pace, and a 2 m/s current over 0.8 m does (see [player-water.md](player-water.md), Wading and the trip test). Static sea buoyancy alone does not knock down a wader or swimmer. Strong updraft and deep moving/rising flood can remove control. Warning, route choice and voluntary evacuation are described in [people-evacuation.md](people-evacuation.md); route status does not grant immunity from physical loads.
 
 Up to 64 articulated people use the existing solver (14 bodies and 13 joints each); the loaded beach/ferry population is 58. Missing/unloaded rigs or future overflow use a separately reported physical capsule with animated limbs, not an articulated ragdoll. Capsule dimensions come from the actual neutral pelvis height after composing its ancestor transforms in metres. A local animation translation alone is not body height: that old measurement collapsed some shipped crowd capsules while retaining their mass. Segment masses still sum to the declared total, and each receives air drag from its own projected area and mass. Solved upward contacts support the connected rig for the equivalent base-excitation load; an entirely airborne rig receives no earthquake acceleration.
@@ -119,11 +183,108 @@ The existing capsule water-entry/buoyancy law remains the only water law on a ri
 
 In the retained real-terrain 120 m/s vortex model test, the field stops at 6 s. At 60 Hz, the body enters supported repose at 8.483 s with zero interventions; a short-lived physical segment spin reaches 152.61 rad/s while resolved rotation remains below 0.1 rad per piece. Terrain penetration stays below 0.012 m, maximum joint-coordinate error is 0.143°, and the complete fixed-pose velocity solver adds no kinetic energy. With 0.1 s frames, one emergency budget intervention removes 6.548 kJ and materially changes the trajectory; repose begins at 6.8 s. Both consume the full accepted interval and complete get-up. These are model results. The ordinary-input browser replay remains physical through 13.1 simulated seconds and returns to supported walking after Stop. In that full scene the observed peak segment spin is 93.27 rad/s and nine emergency interventions remove 129.95 kJ. The inspected motion remains articulated, but the extreme scene is visibly slow and choppy. The CPU model result above therefore must not be read as a claim of smooth full-scene performance.
 
-`test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with real skeleton pose work and upload-copy transport. In the Node benchmark, the final candidate's three-second 120 m/s vortex workload costs 13.28 ms mean and 18.52 ms p95 per 1/60 s frame after 30 warm-up frames, with zero interventions or nonfinite states. Separate unforced falls complete all 58 supported get-ups within 4.367 s; the inactive contact manager then averages 0.000231 ms. The active population fixture has no inter-person contacts, covered separately above. These CPU measurements exclude rendering, scene walls and normal animation/AI outside physical rigs; they are not an FPS claim. Maintained gates are `test/articulated-contact.mjs`, `test/articulated-solver.mjs`, `test/articulated-mass.mjs`, `test/articulated-neighbors.mjs` and the existing human integration tests. Actual keyboard/contact/gangway journeys remain in `test/browser/gameplay-people.spec.js`, with browser outcomes recorded separately in the gameplay handoff.
+`test/people-budget.mjs` measures 58 actual crowd variants, 812 capsules and 754 joints with real skeleton pose work and upload-copy transport. On Apple M5 Max/Node 22.14.0, the final candidate's three-second 120 m/s vortex workload costs 13.28 ms mean and 18.52 ms p95 per 1/60 s frame after 30 warm-up frames, with zero interventions or nonfinite states. Separate unforced falls complete all 58 supported get-ups within 4.367 s; the inactive contact manager then averages 0.000231 ms. The active population fixture has no inter-person contacts, covered separately above. These CPU measurements exclude rendering, scene walls and normal animation/AI outside physical rigs; they are not an FPS claim. Maintained gates are `test/articulated-contact.mjs`, `test/articulated-solver.mjs`, `test/articulated-mass.mjs`, `test/articulated-neighbors.mjs` and the existing human integration tests. Actual keyboard/contact/gangway journeys remain in `test/browser/gameplay-people.spec.js`, with browser outcomes recorded separately in the gameplay handoff.
 
 Structural, fallen-tree, parked-vehicle and registered external box debris can hit people. The adapter sweeps contact spheres against the actual native box translation, queries native point velocity and effective inverse mass, and applies equal and opposite linear impulses with assumed restitution 0.05. The human and native solvers each use their own local contact attachment; a separate world point records the time of impact. It handles at most 3 impacts per person per frame and samples the box's final orientation. It is a post-step coupling, not continuous rotating-body collision or exact global angular-momentum conservation between the two separated final attachment points. Ordinary loose prop cylinders and cosmetic car scraps are not included in this human contact adapter. Native impulses above 20 kN s or with invalid values are rejected atomically on both sides. There is no injury or gore model.
 
 Restore captures both array-based ferry routes and vector-based beach routes without sharing mutable points. Capturing the baseline completes before any event becomes active. Each experiment restores affected poses and routes, then clears that baseline for the next experiment.
+
+## Trees and floating debris
+
+The rule: nothing the flood carries leaves the water. Wreckage churns, rolls, piles against walls and travels at the speed of the flow. It does not climb above it.
+
+### Design: the water holds what it carries
+
+**Reference.** Drag on a bluff body is `F = rho Cd A |u - v| (u - v) / 2` (Hoerner, Fluid-Dynamic Drag, 1965, ch. 3: Cd about 1.0 to 1.2 for plates and boxes; the game uses 1 in water and 1.1 in air, and each tree point's own CdA). Sea water is 1025 kg/m³ and air 1.225 kg/m³ (`src/physics/Loads.js`). For a free body that does not turn, the speed relative to the fluid decays as `v(t) = v0 / (1 + c v0 t)` with `c = rho Cd A / (2 m)`. Numbers that size the problem: the island's slatted crate is 26 kg with 0.36 m² of face, so water at 11 m/s puts 870 m/s² on it; a 17 kg lobster pot in a 30 m/s bore takes 11,000 m/s². Buoyancy is Archimedes on the water the body displaces (its material, flooded or sealed), at most g x 1025 / 500 = 20 m/s² for pine, the lightest material on the island.
+
+**Real outcome.** A body in a bore takes the flow's speed in hundredths of a second, not seconds. A crate thrown upward under water is stopped by the water and floats up at its terminal speed. A body pressed square on a wall stays there; one the flow meets at a glancing angle slides along it. A floating trunk rises and falls with the surface.
+
+**Why a held force could not do it.** The load function used to solve an implicit drag for a free body over the frame and send it as a force and torque held until the next frame. The solver runs 1/120 s steps of eight substeps and a frame runs zero to three steps; contacts change a body's velocity inside that interval and a held force does not notice. So the whole load was bounded to 45 m/s², 5% of real water drag on the crate: a body a contact threw up at 8 to 11 m/s lost 0.75 m/s a frame and left a metre of water in six frames. Without the bound the held force kept pushing a body a contact had already turned, and the 25 m flood threw bodies at 4,000 m/s. Drag in water is a stiff term: as a held force it is too weak when bounded and unstable when not.
+
+**Mechanism.** Drag leaves the load function as data, not force. Each frame `rigidEnvironmentalLoad` (`src/disasters/RigidLoads.js`) writes, per load point and per fluid, a record: the point in the body's axes (m), `rho Cd A / 2` for its wet or dry share (kg/m), a linear damping (kg/s, used by a fallen tree's crushed crown on the ground) and the fluid's velocity at the point (m/s). `Disasters.loads` sends the whole list once a frame (`set_disaster_drag`), replacing the last, as it does the loads. In the solver (`rally-physics/src/disasters.rs`, `fluid_drag`) each body's velocity is relaxed toward the fluid's at its points by one implicit solve, `(M + h sum(k B'B)) delta = h sum(k B'(u - B twist))` with `k = (rho Cd A / 2) |u - B twist| + linear`, eight times a step: once before the step's collision detection, so the speed the fluid gives a body is known when contacts are predicted, and seven times in the substeps, after the positions are integrated and before the rigid relax solve. Buoyancy, the crown's spring and ground shaking stay a force and torque held over the frame.
+
+A fluid cannot push a body into something it already touches. At each load point, along each direction into a thing the body touches or is within 1 cm of (the solver's contacts, kept up to date by how far the body has moved, and kept for a quarter of a second after the solver stops reporting them), the fluid can stop the point leaving and cannot drive it in, and the rest of its push acts only by what exceeds the contact's friction times the part the contact carries. In still fluid the rule changes nothing.
+
+**The water's vertical velocity** (`src/disasters/SurfaceRate.js`). The flood grid holds surface height, depth and depth-averaged velocity, with no vertical velocity, so a floating trunk could not follow a surface that fell away under it. The surface's material rate is `w = -div(h u) + u . grad(eta)` (continuity over a fixed bed gives the first term, the slope carried past gives the second), taken across the four cells the sampler reads at the point; below the surface it falls linearly to zero at the bed. It keeps no history per body. It belongs in the sampler: `WaterGrid.sample` can return it beside `ux` and `uz`, and `Field.sample` can add the far-field wall's own rate, which this leaves out.
+
+**The five properties, and what holds each.**
+
+| | Property | Why it holds | Test |
+|---|---|---|---|
+| P1 | A body moving through water loses its relative velocity at the quadratic rate, at any frame rate | For one point at the centre of mass the implicit step is the exact solution over the step, `v / (1 + c v h)`, and steps compose exactly; the rate depends on solver steps, never on frames | `water_slows_a_free_body_at_the_rate_of_quadratic_drag` (solver, within 2%); `test/flood-debris.mjs` "Water slows a body moving through it..." at 10, 60 and 144 frames a second (within 20%); "A crate thrown up at 10 m/s..." (the wet share is this frame's, at most 25 ms old) |
+| P2 | The fluid adds no energy; a held body stays | `(I + h S)^-1` with `S` positive semi-definite shrinks every vector, so in still fluid kinetic energy only falls; the contact rule takes out the push a contact carries | `still_fluid_never_adds_energy_to_a_tumbling_body`; `a_flow_holds_light_bodies_against_a_wall_and_the_ground_without_moving_them` (two 10 kg crates, 30 m/s, 46,000 m/s² were they free, 10 s, under 5 cm, at rest 1 s after the flow stops); "A 30 m/s flow holds a light body on a wall..." through the director |
+| P3 | No bound on drag as an acceleration | There is none. The 45 m/s² bound stays on the held force only: buoyancy is at most 20 m/s² and changes only as the body moves through its own height; the crown's spring carries half the tree's weight at its crush depth with a period well above a frame; ground shaking is the earthquake's acceleration. None depends on the body's velocity | The P1 and P2 tests run at 170 to 46,000 m/s² |
+| P4 | Sleep survives | Identical records leave a sleeping body asleep; changed or removed records wake it. Records do not depend on the frame time, so a body in a steady wind sleeps at any frame rate (before, it did not) | `steady_fluid_drag_preserves_sleep_and_a_changed_fluid_wakes_the_body`; "A body at rest in a steady wind sleeps..." |
+| P5 | The load path costs no more | The load function no longer solves or allocates (it built about thirty vectors, two 6 x 6 matrices and a closure per body per frame) | Perf, below |
+
+**Every body kind against every load path.**
+
+| Body | Drag in water and air | Buoyancy | Crown spring | Ground shaking | Point path (`Field.acceleration`) |
+|---|---|---|---|---|---|
+| Tree body | was a held force, now in the solver (nine points, each with its own CdA) | held force | held force; its damping is now a solver record | held force | no |
+| Loose building part, jointed member section, legacy proxy | was a held force, now in the solver (six face points) | held force | none | held force | no |
+| Loose prop (crate, pot, drum, fence piece) | was a held force, now in the solver | held force | none | held force | no |
+| Parked car | was a held force, now in the solver | held force (2 m³ cabin) | none | held force | no |
+| The player's car | unchanged: its own native water and air loads | unchanged | none | unchanged | yes, unchanged |
+| People and external bodies | unchanged | unchanged | none | unchanged | yes, unchanged |
+
+The tornado's wind reaches loose bodies through the same records, so light debris now takes the wind's speed in tens of milliseconds instead of at 45 m/s².
+
+**Transitions.** Entering and leaving water: a point's wet share runs from 0 to 1 over its own height, so its drag and lift come on over that height. A bore front: the grid's rate lifts a floater with the surface. Drawdown: the same rate takes it down. A contact: the push into it is carried from 1 cm out, and for a quarter of a second after the solver last reports it. The event ending, a Restore, a body put to sleep: the list is replaced whole each frame and a body's records go with it. Sleeping: P4.
+
+**Edges.** A frame with no solver step applies nothing; one with three applies 24 shares with this frame's fluid. A non-finite record is refused in the load function for that body alone (the solver refuses a whole batch for one bad number). A physics build without `set_disaster_drag` throws as soon as a body has drag, so a stale build cannot run without it. A body with no finite inertia takes drag on its centre of mass only. No threshold on a speed or a force was added.
+
+**Budget.** CPU only, no GPU work and no readback: Perf, below.
+
+### Evidence
+
+Seen failing on the code before this change (`node --test test/flood-debris.mjs`): "at 10 Hz the 37 kg crate thrown up at 10 m/s from the bed under 1 m of water rose until its lowest point was 0.41 m above the surface"; "a crate on the ground in a steady 5 m/s breeze did not fall asleep within 8 s"; and, with no vertical water velocity, "the surface at the drifter rose 1.48 m and the rate read from the grid adds up to 0.00 m". Seen failing while the contact rule was built (the solver's wall test, two 10 kg crates in a 30 m/s flow): with the push left to the contact solver one crate travelled 47 m in 10 s; with it cancelled by impulses at the contact points, 280 m; with no friction, 298 m; with nothing to stop a point leaving, 294 m; and a pot at rest on a wall was driven 12 cm into it until contacts were kept on the body's list.
+
+The real island, a tsunami at the harbour pier, every body kind (`test/helpers/flood-island.mjs`, `runFlood({ wreckage: true })`). Per kind, the count of bodies, then the worst climb of a body's lowest point above the higher of water and ground (m) / the longest moving flight beyond its free-fall time (s). Columns: wave height and seed at 60 frames a second, and the 25 m wave at 10.
+
+Before:
+
+```
+kind            H25-s1          H25-s1-10hz     H25-s2          H25-s3          H10-s1          H10-s2          H10-s3          H2-s1           H2-s2           H2-s3            (n:climb m/flight over free fall s)
+member          174:4.87/23.4   174:6.24/8.4    174:12.28/8.6   174:9.12/13.7   174:6.59/14.7   174:11.85/15.6  174:9.88/14.9   126:4.11/4.8    126:7.94/3.5    126:3.86/5.2
+part:masonry    5:0.00/0.0      4:0.00/0.0      7:0.00/0.1      3:0.00/0.0      2:0.00/0.0      -               1:0.00/0.0      -               -               -
+part:opening    2:0.00/1.5      2:0.00/0.0      1:0.00/0.0      1:0.00/0.0      1:0.00/0.0      2:0.00/0.4      2:0.00/0.0      3:0.00/0.0      4:0.00/0.0      3:0.45/4.0
+part:wall       43:0.44/0.7     44:0.50/3.8     40:6.43/2.3     46:0.41/3.4     47:0.96/0.4     48:0.37/3.6     47:0.47/2.2     44:3.74/1.5     54:0.84/0.0     37:0.37/0.0
+prop:barrel     13:0.44/1.5     13:0.39/1.2     10:0.06/0.8     9:0.05/1.4      10:2.48/0.4     10:1.38/0.8     10:1.47/1.4     13:0.00/0.0     10:0.00/0.0     13:0.00/0.0
+prop:crate      23:5.07/1.9     23:8.27/15.5    20:13.16/6.5    18:4.57/21.3    20:0.73/4.0     20:2.46/3.4     20:0.76/4.1     23:0.00/0.0     20:0.66/3.7     22:0.00/0.0
+prop:fence      24:1.69/14.8    24:0.89/12.1    33:2.83/0.9     36:1.42/21.0    33:1.16/2.6     33:1.61/9.3     33:1.20/14.7    24:1.08/0.6     30:1.01/0.6     24:1.24/0.5
+prop:trap       20:3.41/1.3     20:3.19/1.3     17:0.00/0.0     17:2.54/1.1     17:0.00/0.0     17:4.38/2.3     17:0.00/0.0     20:0.17/0.0     20:0.00/0.0     18:0.02/0.0
+tree            40:0.12/2.9     40:0.04/2.7     40:1.05/2.6     40:0.02/2.7     40:0.00/0.0     40:0.00/0.0     40:0.00/0.0     -               -               -
+vehicle         4:0.75/0.2      4:0.00/0.0      4:0.00/0.0      4:0.00/0.0      4:1.29/0.1      4:0.00/0.0      4:0.68/0.0      4:0.65/0.0      4:0.69/0.0      4:0.00/0.0
+```
+
+After:
+
+```
+kind            H25-s1          H25-s1-10hz     H25-s2          H25-s3          H10-s1          H10-s2          H10-s3          H2-s1           H2-s2           H2-s3            (n:climb m/flight over free fall s)
+member          174:22.66/22.9  174:7.35/12.4   174:13.44/3.1   174:7.99/6.7    174:16.07/20.8  174:20.01/23.6  174:13.15/5.8   126:6.02/3.7    126:9.49/16.5   126:5.42/4.7
+part:masonry    5:0.00/0.2      4:0.00/0.0      7:0.00/0.0      3:0.00/0.0      2:0.00/0.0      -               1:0.00/0.0      -               -               -
+part:opening    2:0.00/3.0      2:1.10/0.0      1:0.00/0.0      1:2.07/0.0      1:1.32/3.9      2:0.34/1.7      2:0.20/0.0      3:0.51/3.3      4:0.00/0.0      3:0.05/0.1
+part:wall       43:0.96/1.5     44:2.94/1.9     40:3.64/0.6     46:12.47/1.8    47:3.91/0.9     48:3.00/6.4     47:1.60/15.0    44:0.79/0.5     54:0.72/0.0     37:0.29/0.0
+prop:barrel     13:5.07/1.3     13:13.41/2.0    10:9.83/2.3     9:9.08/2.2      10:2.59/1.2     10:5.24/1.6     10:0.80/0.4     13:0.00/0.0     10:0.00/0.0     13:0.19/0.1
+prop:crate      23:26.37/6.2    23:35.37/3.5    20:13.12/1.5    18:10.27/5.1    20:4.66/8.2     20:6.49/8.6     20:7.16/14.3    23:0.06/0.0     20:0.89/3.7     22:1.20/0.7
+prop:fence      24:10.09/6.4    24:16.47/12.2   33:2.93/0.8     36:9.00/3.2     33:2.79/1.4     33:1.80/17.6    33:3.38/14.1    24:1.32/0.7     30:1.68/0.8     24:1.21/0.6
+prop:trap       20:4.16/1.3     20:3.46/1.1     17:2.55/0.8     17:3.43/1.9     17:0.55/0.0     17:0.02/0.2     17:0.00/0.0     20:0.00/0.0     20:0.01/0.0     18:0.04/0.0
+tree            40:3.17/2.8     40:3.08/3.2     40:6.26/2.8     40:4.92/3.3     40:0.01/0.0     40:0.17/0.5     40:0.04/0.6     -               -               -
+vehicle         4:1.97/0.5      4:1.40/0.6      4:0.00/0.0      4:0.12/0.1      4:2.55/0.2      4:0.11/0.0      4:1.20/0.3      4:0.00/0.0      4:0.00/0.0      4:0.15/0.0
+```
+
+A dash is a kind with no body in that run.
+
+The rule does not hold yet, and at 25 m the worst climbs are larger than before for crates, drums, fence pieces, members and trees. The reason is measured on the worst crate of the 25 m run (seed 1). The mechanism carries wreckage at the speed of the flow: the crate moves at 23 m/s in a 23 m/s flow, where the bounded force left it far behind the water. At the pier that flow runs up a hillside steeper than 45 degrees to more than 45 m above the sea. A body in that tongue takes the water's own vertical velocity (the crate rose at 24 to 26 m/s while fully wet), leaves the thinning tongue and travels on above it: the crate's lowest point was 1.5 to 3.5 m above the water for a second, and the climb column counts its whole rise while clear. A 538 kg tree at 21 m/s met the same slope and left it at 10 m/s upward.
+
+At 10 m crates, fence pieces and wall parts also climb higher than before (a crate 4.7 to 7.2 m against 0.7 to 2.5 m; not yet traced), while trees stay in the water (0.2 m at most). At 2 m the two are close: wall parts climb less in all three runs and parked cars in two, crates a little more (1.2 m at most against 0.7 m).
+
+Open, in order: whether the 25 m wave's run-up on that slope (23 m/s, 45 m of climb) is itself right; the water's vertical velocity under the surface on a sloping bed (it should fall to the bed's own rate, `u . grad(bed)`, not to zero); the jointed members, which climb 4 to 8 m even in the 2 m surge before this change, so their cause is not the water; the small fittings, which still become bodies of their own; and the fence break, which still kicks its pieces upward when the flood breaks a panel.
+
+### Perf
+
+The load path for 100 floating crates in a flowing tank, per frame of 1/60 s (two solver steps), on the M5 Pro while two island runs loaded it, three runs each. Before: `loads()` 1.26 to 1.40 ms and the solver 0.49 to 0.51 ms, 1.76 to 1.90 ms together. After: `loads()` 0.24 to 0.27 ms and the solver 1.16 to 1.21 ms, 1.41 to 1.48 ms together. Minor collections over 900 frames: 325 before, 43 after. The solver's share is 0.44 microseconds per body per share of drag.
 
 ## Benchmarks and provenance
 
@@ -151,6 +312,6 @@ The corrected complete native suite, including the tree mass and centre-of-mass 
 
 The final ordinary-UI 3,000 m run advances 13.033 simulated seconds, then pauses, stops and restores the island. All sampled native bodies, boats, jet skis and articulated people remain finite; Restore returns craft to their original neighbourhoods. The run loads 45 people, with at most 26 simultaneously physical. Every observed physical integration piece respects its 0.1 rad rotation and 0.15-radius near-support travel bounds, with no accepted time omitted. These are numerical and lifecycle checks.
 
-This setting is not practically playable in the measured scenario. While recording at 1,440×900, 185 rendered frames take 172.38 wall seconds, about 1.07 FPS. Articulated rigs invoke 1,285 emergency budget interventions and remove about 306.91 MJ; the observed peak segment spin is 275.55 rad/s. Median sampled scene CPU moving average is about 1.60 s, including about 1.21 s for people. Those energy losses materially alter the extreme trajectory. Neither the shallow-water model nor this reduced human solver represents validated physics for a three-kilometre wave. Ordinary-scene timings and unrecorded disaster timings are recorded separately in the recovery evidence.
+This setting is not practically playable on the tested Mac. While recording at 1,440×900, 185 rendered frames take 172.38 wall seconds, about 1.07 FPS. Articulated rigs invoke 1,285 emergency budget interventions and remove about 306.91 MJ; the observed peak segment spin is 275.55 rad/s. Median sampled scene CPU moving average is about 1.60 s, including about 1.21 s for people. Those energy losses materially alter the extreme trajectory. Neither the shallow-water model nor this reduced human solver represents validated physics for a three-kilometre wave. Ordinary-scene timings and unrecorded disaster timings are recorded separately in the recovery evidence.
 
 An unrecorded Standard 1,440×900 village tornado at 100 m/s and 180 m radius measures 5.34/4.75/4.82 FPS across three 18-second samples, with p95 frame intervals of 249.6–269.1 ms. Each reaches 224 structural bodies with roughly 9–17 active human rigs. Stop and Restore succeed without page errors. This confirms a substantial full-scene CPU cost beyond recording overhead; the current high-force destruction setting is not smooth real-time play.

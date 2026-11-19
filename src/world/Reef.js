@@ -1070,12 +1070,13 @@ export class Reef {
 
 		const T = this.terrain;
 		if ( ! T.seagrass ) return;
-		const res = T.res;
+		// row-major over the rectangular terrain domain: stride resX, gj bounded by resZ
+		const resX = T.resX, resZ = T.resZ;
 		const mask = ( x, z ) => {
 
-			const gi = Math.floor( x - T.origin ), gj = Math.floor( z - T.origin );
-			if ( gi < 0 || gj < 0 || gi >= res || gj >= res ) return 0;
-			return T.seagrass[ gj * res + gi ] / 255;
+			const gi = Math.floor( ( x - T.originX ) / T.texel ), gj = Math.floor( ( z - T.originZ ) / T.texel );
+			if ( gi < 0 || gj < 0 || gi >= resX || gj >= resZ ) return 0;
+			return T.seagrass[ gj * resX + gi ] / 255;
 
 		};
 
