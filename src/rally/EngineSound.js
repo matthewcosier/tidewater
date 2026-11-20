@@ -1,13 +1,12 @@
 // Recorded-engine playback adapted from Swift Parking's GameSound. These are
 // real local recordings; engine RPM/load, rather than road speed, drive pitch.
-// Tyres add a procedural layer on top: rolling roar and loose-surface crunch that
-// follow speed and surface, and a squeal only when a tyre really slides on a hard surface.
+// Rolling noise follows road speed and surface. Loaded, sliding tyres bring in a recorded squeal.
 // Each car's recording, idle and redline come from Vehicles.js (which test/vehicle-parity.mjs holds
 // to rally-physics/src/vehicle.rs).
 import { hardTyreSlip } from './TyreSlip.js';
 import { VEHICLES } from './Vehicles.js';
 // Wheel surface codes from the physics snapshot.
-const LOOSE = new Set( [ 0, 1, 4, 7 ] ), HARD = new Set( [ 2, 3, 5 ] );
+const LOOSE = new Set( [ 0, 1, 4, 7 ] );
 export class EngineSound {
 	constructor( disabled = false ) {
 		this.disabled = disabled;
@@ -25,7 +24,7 @@ export class EngineSound {
 		this.tyres ||= this.buildTyres();
 		this.shout ||= fetch( `${ import.meta.env.BASE_URL }rally/audio/yeet.wav` )
 			.then( response => response.arrayBuffer() ).then( data => this.ctx.decodeAudioData( data ) ).catch( () => null );
-		if ( this.vehicle === vehicle && this.source ) return;
+		if ( this.vehicle === vehicle && this.source ) { this.loadTyreSqueal(); return; }
 		this.vehicle = vehicle;
 		const request = ++ this.request;
 		this.state = 'loading';
@@ -47,22 +46,35 @@ export class EngineSound {
 			this.source.connect( this.filter ).connect( this.gain ).connect( this.ctx.destination );
 			this.source.start();
 			this.recording = ( VEHICLES[ vehicle ] || VEHICLES.aster ).sound; this.state = 'playing';
+			this.loadTyreSqueal();
 		} catch ( error ) { this.state = 'unavailable'; console.warn( 'Rally engine audio:', error.message ); }
 	}
-	// Two looping noise beds: a low roar/crunch and a narrow squeal band.
 	buildTyres() {
 		const ctx = this.ctx, length = ctx.sampleRate * 2, buffer = ctx.createBuffer( 1, length, ctx.sampleRate ), data = buffer.getChannelData( 0 );
 		let brown = 0;
 		for ( let i = 0; i < length; i ++ ) { brown = ( brown + 0.02 * ( Math.random() * 2 - 1 ) ) / 1.02; data[ i ] = brown * 3.5 + ( Math.random() * 2 - 1 ) * 0.15; }
-		const bed = ( type, frequency, q ) => {
-			const source = ctx.createBufferSource(); source.buffer = buffer; source.loop = true;
-			source.playbackRate.value = 0.7 + Math.random() * 0.6;
-			const filter = ctx.createBiquadFilter(); filter.type = type; filter.frequency.value = frequency; filter.Q.value = q;
-			const gain = ctx.createGain(); gain.gain.value = 0;
-			source.connect( filter ).connect( gain ).connect( ctx.destination ); source.start();
-			return { source, filter, gain };
-		};
-		return { roar: bed( 'lowpass', 420, 0.7 ), squeal: bed( 'bandpass', 1150, 9 ) };
+		const source = ctx.createBufferSource(); source.buffer = buffer; source.loop = true;
+		const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 420; filter.Q.value = 0.7;
+		const gain = ctx.createGain(); gain.gain.value = 0;
+		source.connect( filter ).connect( gain ).connect( ctx.destination ); source.start();
+		const squealGain = ctx.createGain(); squealGain.gain.value = 0; squealGain.connect( ctx.destination );
+		return { roar: { source, filter, gain }, squeal: { gain: squealGain } };
+	}
+	async loadTyreSqueal() {
+		const ctx = this.ctx, { squeal } = this.tyres;
+		if ( squeal.source || squeal.loading ) return;
+		squeal.loading = true;
+		try {
+			const response = await fetch( `${ import.meta.env.BASE_URL }rally/audio/tyre-squeal.wav` );
+			if ( ! response.ok ) throw new Error( `HTTP ${ response.status }` );
+			const buffer = await ctx.decodeAudioData( await response.arrayBuffer() );
+			if ( ctx.state === 'closed' ) return;
+			const source = ctx.createBufferSource();
+			source.buffer = buffer; source.loop = true;
+			source.connect( squeal.gain ); source.start();
+			squeal.source = source;
+		} catch ( error ) { console.warn( 'Rally tyre audio:', error.message ); }
+		finally { squeal.loading = false; }
 	}
 	toggle( vehicle ) {
 		this.enabled = ! this.enabled;
@@ -86,16 +98,16 @@ export class EngineSound {
 		const gain = audible ? ( 0.075 + load * 0.095 + revs * 0.04 ) * falloff * ( 1 - underwater * 0.5 ) : 0;
 		this.gain.gain.setTargetAtTime( gain, now, 0.07 );
 		this.state = audible ? 'playing' : 'muted';
-		if ( ! this.tyres || state.length < 96 ) return;
+		if ( ! this.tyres ) return;
 		// Tyres: average the loaded wheels' surface, ground speed and slide.
-		let speed = 0, slide = 0, scrub = 0, loose = 0, hard = 0, grounded = 0;
-		for ( let w = 0; w < 4; w ++ ) {
+		let speed = 0, scrub = 0, loose = 0, grounded = 0;
+		for ( let w = 0; state.length >= 96 && w < 4; w ++ ) {
 			if ( state[ 13 + w * 4 + 3 ] < 0.5 ) continue;
 			grounded ++;
 			const code = Math.round( state[ 89 + w ] ), c = 29 + w * 10;
 			scrub = Math.max( scrub, hardTyreSlip( state, w ) );
-			speed += state[ c + 8 ]; slide = Math.max( slide, HARD.has( code ) ? state[ c + 7 ] : 0 );
-			if ( LOOSE.has( code ) ) loose ++; else if ( HARD.has( code ) ) hard ++;
+			speed += state[ c + 8 ];
+			if ( LOOSE.has( code ) ) loose ++;
 		}
 		speed = grounded ? speed / grounded : 0;
 		const roll = Math.min( 1, speed / 28 );
@@ -104,9 +116,9 @@ export class EngineSound {
 		roar.gain.gain.setTargetAtTime( roarGain, now, 0.08 );
 		roar.filter.frequency.setTargetAtTime( loose ? 260 + roll * 520 : 180 + roll * 260, now, 0.1 );
 		roar.source.playbackRate.setTargetAtTime( 0.55 + roll * 0.9, now, 0.1 );
-		const squealGain = audible && hard ? scrub * 0.12 * falloff : 0;
+		const squealGain = audible && ! underwater ? scrub * 0.46 * falloff : 0;
 		squeal.gain.gain.setTargetAtTime( squealGain, now, 0.05 );
-		squeal.filter.frequency.setTargetAtTime( 950 + slide * 500 + Math.sin( now * 23 ) * 60, now, 0.05 );
+		squeal.source?.playbackRate.setTargetAtTime( 0.88 + 0.22 * scrub, now, 0.09 );
 	}
 	// The driver's shout on bailing out of the car (one shot, loaded with the engine).
 	async yeet( muted ) {

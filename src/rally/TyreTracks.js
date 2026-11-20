@@ -1,4 +1,5 @@
 import { Mesh, BufferGeometry, BufferAttribute, DynamicDrawUsage, Vector3, Quaternion } from '../engine/index.js';
+import { Colliders } from '../world/Colliders.js';
 import { Material } from '../engine/render/Material.js';
 import { LAYERS } from '../core/SceneRenderer.js';
 
@@ -140,6 +141,7 @@ r.color = vec4f( clamp( r.color.rgb / max( ground, vec3f( 1e-4 ) ), vec3f( 0.15 
 export class TyreTracks {
 	constructor( scene, terrain, capacity = CAPACITY ) {
 		this.terrain = terrain;
+		this.paving = new Colliders();
 		this.capacity = capacity;
 		this.count = 0;
 		this.cursor = 0;
@@ -177,6 +179,10 @@ export class TyreTracks {
 		scene.add( this.mesh );
 	}
 
+	setPaving( boxes ) {
+		this.paving.boxes = boxes.filter( b => b.tag === 'terminal-car' );
+	}
+
 	tick( dt ) { this.time += dt; this.material.set( 'trackTime', this.time ); }
 	reset( key = 'local' ) { this.previous.delete( key ); }
 
@@ -202,8 +208,13 @@ export class TyreTracks {
 		// floating, or the contact is under the sea surface / swash sheet at the car
 		if ( rich && ( state[ 73 ] > 0.45 || ( state[ 93 ] > - 999 && y < state[ 93 ] + 0.02 ) ) ) return null;
 		const ground = this.terrain.heightAt( x, z );
-		if ( Math.abs( y - ground ) > 0.09 ) return null;
 		let kind = rich ? Math.round( state[ 89 + wheel ] ) : this.classify( x, z );
+		let pavingY = null;
+		if ( y > ground + 0.01 && ( kind === 3 || ! rich ) ) {
+			const top = this.paving.groundHeightAt( x, z, y + 0.09 );
+			if ( top > ground && Math.abs( top - y ) <= 0.09 ) { pavingY = top; kind = 3; }
+		}
+		if ( pavingY === null && Math.abs( y - ground ) > 0.09 ) return null;
 		let wet = 0;
 		if ( kind === 7 ) { kind = 0; wet = 1; } else if ( kind === 0 ) wet = smooth( 1.35, 0.55, ground );
 		if ( ! ( kind >= 0 && kind <= 4 ) ) return null;
@@ -221,7 +232,7 @@ export class TyreTracks {
 			scrub = slide < 0.2 ? 0 : Math.max( 0.3, smooth( 0.2, 0.7, slide ) );
 		}
 		if ( HARD( kind ) && scrub < 0.02 ) return null;
-		return { x, z, load, speed, kind, ratio, slide, scrub, wet, locked: ratio < - 0.6 && ! HARD( kind ) };
+		return { x, z, pavingY, load, speed, kind, ratio, slide, scrub, wet, locked: ratio < - 0.6 && ! HARD( kind ) };
 	}
 
 	classify( x, z ) {
@@ -235,9 +246,11 @@ export class TyreTracks {
 	}
 
 	advance( old, c, state, wheel, profile ) {
-		if ( ! old ) return { x: c.x, z: c.z, edge: null, lock: 0 };
-		const dx = c.x - old.x, dz = c.z - old.z, distance = Math.hypot( dx, dz );
-		if ( distance > 4 ) return { x: c.x, z: c.z, edge: null, lock: 0 }; // teleport / reset
+		const dx = old ? c.x - old.x : 0, dz = old ? c.z - old.z : 0;
+		const distance = Math.hypot( dx, dz );
+		if ( ! old || distance > 4 || old.pavingY !== c.pavingY ) {
+			return { x: c.x, z: c.z, pavingY: c.pavingY, edge: null, lock: 0 };
+		}
 		if ( distance < 0.08 ) {
 			if ( ! old.stamped && c.kind === 3 && c.speed < 0.8 && c.ratio > 0.6 && Math.abs( state[ 15 + wheel * 4 ] ) > 4 ) {
 				// Standing burnout. Deposit the loaded footprint once at this patch;
@@ -280,7 +293,7 @@ export class TyreTracks {
 			this.segment( edge, next, c.kind, pitch );
 			edge = next;
 		}
-		return { x: c.x, z: c.z, edge, lock: c.locked ? old.lock + distance : 0 };
+		return { x: c.x, z: c.z, pavingY: c.pavingY, edge, lock: c.locked ? old.lock + distance : 0 };
 	}
 
 	// Continuous per-edge values for this contact.
@@ -289,7 +302,7 @@ export class TyreTracks {
 		const pressure = clamp( c.load / ( profile.mass * 9.81 / 4 ), 0.35, 1.6 );
 		const bite = 1 + clamp( c.ratio, 0, 1 ) * 0.45 + clamp( - c.ratio, 0, 1 ) * 0.4;
 		return {
-			strength: hard ? c.scrub : pressure, slide: c.slide, ratio: c.ratio, wet: c.wet,
+			pavingY: c.pavingY, strength: hard ? c.scrub : pressure, slide: c.slide, ratio: c.ratio, wet: c.wet,
 			depth: sinkage * ground.depth * Math.pow( pressure, 0.8 ) * bite,
 			rise: sinkage * ground.depth * ground.rise * pressure,
 			bermFrac: ground.berm * ( c.kind === 0 ? 1 - 0.65 * c.wet : 1 ),
@@ -307,12 +320,13 @@ export class TyreTracks {
 		const hw = ( cos * to.width + sin * to.patch + slide * 0.02 ) / 2 * ( 1 + 2 * bermFrac ), ax = tz, az = - tx;
 		const e = { x, z, tx, tz, ax, az, hw, g: 1 / ( 1 + 2 * bermFrac ), along, strip, slide, bermFrac, time: this.time,
 			strength: lerp( 'strength' ), ratio: lerp( 'ratio' ), wet: lerp( 'wet' ), depth: lerp( 'depth' ), rise: lerp( 'rise' ) };
-		e.left = this.ground( x - ax * hw, z - az * hw );
-		e.right = this.ground( x + ax * hw, z + az * hw );
+		e.left = this.ground( x - ax * hw, z - az * hw, to.pavingY );
+		e.right = this.ground( x + ax * hw, z + az * hw, to.pavingY );
 		return e;
 	}
 
-	ground( x, z ) {
+	ground( x, z, pavingY ) {
+		if ( pavingY != null ) return [ x, pavingY + 0.012, z, 0, 1, 0 ];
 		this.terrain.normalAt( x, z, this.normal );
 		const lift = this.terrain.roadSurfaceAt?.( x, z ) ? 0.025 : 0.012;
 		return [ x, this.terrain.heightAt( x, z ) + lift, z, this.normal.x, this.normal.y, this.normal.z ];

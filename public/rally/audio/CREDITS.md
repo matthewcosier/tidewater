@@ -37,3 +37,7 @@ the engine sounds for Tidewater's fictional vehicles.
 
 - `yeet.wav`: "Yeet Sound" by sukondi, [Freesound #553805](https://freesound.org/people/sukondi/sounds/553805/),
   Creative Commons 0. Trimmed to the voice, faded and peak-normalised to -1 dBFS.
+
+# Tyre squeal
+
+`tyre-squeal.wav` combines two CC0 outdoor recordings of sliding car tyres by Dorian Clair. The sustained sections are equalised, level-matched and crossfaded into a mono loop. To rebuild, pass the two original MP3s in order to `tools/audio/build-tyre-squeal.mjs`. [Screeching Tires #3](https://bigsoundbank.com/screeching-tires-3-s2370.html) and [Screeching Tires #4](https://bigsoundbank.com/screeching-tires-4-s2371.html)
