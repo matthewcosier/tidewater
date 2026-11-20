@@ -1,6 +1,6 @@
 // Standard Gamepad API layout. Sample once per simulation frame so menus and
 // vehicles share the same button edges, even while a physics worker is pending.
-import { ControllerMenu } from '../ui/ControllerMenu.js';
+import { ControllerMenu, DPAD } from '../ui/ControllerMenu.js';
 
 const bit = i => 1 << i;
 const axis = value => Math.abs( value || 0 ) <= 0.12 ? 0 : Math.sign( value ) * ( Math.abs( value ) - 0.12 ) / 0.88;
@@ -8,16 +8,16 @@ const value = ( pad, i ) => pad.buttons[ i ]?.value ?? ( pad.buttons[ i ]?.press
 const FACE = [ 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'View', 'Menu', 'L3', 'R3', '↑', '↓', '←', '→' ];
 
 // Each digital action uses the same gameplay command as its keyboard binding.
-const FREE = [ 13, 'KeyF', 'Free camera' ];
+const FREE = [ DPAD.down, 'KeyF', 'Free camera' ];
 const WALK = [ [ 2, 'KeyE', 'Interact' ], [ 0, 'Space', 'Jump / swim up' ], [ 10, 'ShiftLeft', 'Sprint' ],
 	[ 1, 'KeyC', 'Crouch / dive' ], [ 3, 'KeyV', 'Change view' ], FREE ];
 const ACTIONS = {
 	walk: WALK,
-	car: [ [ 2, 'KeyE', 'Leave car' ], [ 12, 'Repair', 'Repair car' ], FREE ],
+	car: [ [ 2, 'KeyE', 'Leave car' ], [ DPAD.up, 'Repair', 'Repair car' ], FREE ],
 	ferry: [ [ 0, 'KeyX', 'Stop engines' ], [ 1, 'KeyC', 'Centre wheel' ], [ 2, 'KeyE', 'Leave helm' ],
-		[ 3, 'KeyV', 'Change view' ], [ 5, 'KeyH', 'Sound horn' ], [ 12, 'KeyR', 'Toggle ramp' ],
-		[ 14, 'KeyL', 'Mooring lines' ], [ 4, 'ShiftLeft', 'Bow thruster + left stick' ] ],
-	free: [ [ 0, 'Space', 'Rise' ], [ 1, 'KeyC', 'Descend' ], [ 10, 'ShiftLeft', 'Fly faster' ], [ 13, 'KeyF', 'Leave free camera' ] ],
+		[ 3, 'KeyV', 'Change view' ], [ 5, 'KeyH', 'Sound horn' ], [ DPAD.up, 'KeyR', 'Toggle ramp' ],
+		[ DPAD.left, 'KeyL', 'Mooring lines' ], [ 4, 'ShiftLeft', 'Bow thruster + left stick' ] ],
+	free: [ [ 0, 'Space', 'Rise' ], [ 1, 'KeyC', 'Descend' ], [ 10, 'ShiftLeft', 'Fly faster' ], [ DPAD.down, 'KeyF', 'Leave free camera' ] ],
 };
 const AXES = {
 	walk: [ [ 'LS', 'Move' ] ], free: [ [ 'LS', 'Fly' ] ],
@@ -81,8 +81,8 @@ export class Controller {
 		if ( pressed || x || y || rx || ry || throttle || brake ) this.setActive( true );
 		if ( ! this.active || ! this.app.ui ) return;
 		const context = this.context();
-		const dir = Math.abs( x ) > .55 && Math.abs( x ) > Math.abs( y ) ? ( x > 0 ? 15 : 14 )
-			: Math.abs( y ) > .55 ? ( y > 0 ? 13 : 12 ) : null;
+		const dir = Math.abs( x ) > .55 && Math.abs( x ) > Math.abs( y ) ? ( x > 0 ? DPAD.right : DPAD.left )
+			: Math.abs( y ) > .55 ? ( y > 0 ? DPAD.down : DPAD.up ) : null;
 		const nav = dir !== null && dir !== this.direction ? bit( dir ) : 0;
 		this.direction = dir;
 		if ( this.menu.update( pressed | nav, context, this ) ) { this.blocked |= bits; return; }

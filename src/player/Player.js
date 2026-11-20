@@ -881,7 +881,7 @@ export class Player {
 		movementVector( inp, wish, _fwd, _right );
 		if ( inp.down( 'Space' ) ) wish.y += 1;
 		if ( inp.down( 'KeyC' ) || inp.down( 'ControlLeft' ) ) wish.y -= 1;
-		if ( wish.lengthSq() > 1 ) wish.normalize();
+		if ( ! inp.moveX && ! inp.moveY || wish.lengthSq() > 1 ) wish.normalize();
 
 		const atSurface = this.floating && p.y > surfaceY - 0.45;
 		// at the surface W along a level view keeps you on top; looking down dives

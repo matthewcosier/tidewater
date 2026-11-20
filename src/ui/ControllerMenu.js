@@ -1,5 +1,7 @@
 import './controller.css';
 
+export const DPAD = { up: 12, down: 13, left: 14, right: 15 };
+
 const choices = 'button:not(:disabled), select:not(:disabled), input:not(:disabled), [role="slider"], [role="switch"], [role="combobox"]';
 const labels = { car: 'Driving', walk: 'On foot', ferry: 'Ferry helm', free: 'Free camera' };
 const hit = ( buttons, index ) => !! ( buttons & ( 1 << index ) );
@@ -41,6 +43,23 @@ export class ControllerMenu {
 		this.dialog.showModal();
 		this.dialog.querySelector( '[data-play]' ).focus();
 	}
+	// A simulated click from the Gamepad API may start play before the browser
+	// grants Web Audio activation. A real tap or key can resume the same mix.
+	unlockSound() {
+		const audio = this.app.audio;
+		if ( audio?.ctx?.state !== 'suspended' ) return;
+		this.app.ui.ui.toast( 'Tap or press a key once to enable sound', 6000 );
+		const listeners = new AbortController();
+		const resume = event => {
+			if ( ! event.isTrusted ) return;
+			listeners.abort();
+			audio.resume();
+			const engine = this.app.rally?.sound?.ctx;
+			if ( engine?.state === 'suspended' ) engine.resume().catch( () => {} );
+		};
+		for ( const type of [ 'click', 'keydown' ] ) window.addEventListener( type, resume, { capture: true, signal: listeners.signal } );
+	}
+
 	clearFocus() {
 		this.garage = false;
 		this.app.rally?.hud?.dock?.classList.remove( 'is-pad-picker' );
@@ -56,6 +75,7 @@ export class ControllerMenu {
 		const shared = this.app.rally?.shared?.panel;
 		if ( shared && ! shared.hidden ) return shared;
 		const hud = this.app.game?.hud;
+		if ( this.app.game?.atm?.open ) return this.app.game.atm.el;
 		if ( hud?.invOpen ) return hud.inv;
 		if ( hud?.standOpen ) return hud.stand;
 		const dock = this.app.rally?.hud?.dock;
@@ -68,6 +88,7 @@ export class ControllerMenu {
 		else if ( scope === ui._menu ) ui._closeMenu( true );
 		else if ( ui._start ) scope.querySelector( '[data-back]' )?.click();
 		else if ( this.app.game?.guide?.open ) this.app.game.guide.close();
+		else if ( this.app.game?.atm?.open ) this.app.game.atm.act( 'cancel' );
 		else if ( ui.helpOpen ) ui.toggleHelp( false );
 		else if ( ui.panelOpen ) ui.togglePanel( false );
 		else if ( scope === this.app.rally?.shared?.panel ) scope.querySelector( '.rs-x' ).click();
@@ -89,8 +110,8 @@ export class ControllerMenu {
 		let at = nodes.indexOf( current );
 		this.lastScope = scope;
 		if ( ! nodes.length ) return true;
-		const shift = Number( hit( bits, 13 ) ) - Number( hit( bits, 12 ) );
-		const adjust = Number( hit( bits, 15 ) ) - Number( hit( bits, 14 ) );
+		const shift = Number( hit( bits, DPAD.down ) ) - Number( hit( bits, DPAD.up ) );
+		const adjust = Number( hit( bits, DPAD.right ) ) - Number( hit( bits, DPAD.left ) );
 		if ( at >= 0 && current.tagName === 'SELECT' && adjust ) {
 			current.selectedIndex = Math.min( current.options.length - 1, Math.max( 0, current.selectedIndex + adjust ) );
 			current.dispatchEvent( new Event( 'change', { bubbles: true } ) );
@@ -107,6 +128,7 @@ export class ControllerMenu {
 				} );
 				else {
 					selected.click();
+					if ( scope === ui.startEl && ! ui._start ) this.unlockSound();
 					if ( this.garage && selected === this.app.rally.hud.go ) this.clearFocus();
 				}
 			}

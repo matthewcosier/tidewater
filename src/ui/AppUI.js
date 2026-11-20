@@ -366,6 +366,7 @@ export class AppUI {
 				ui.setPrompt( stuck ? 'Y' : 'X', stuck ? 'Recover car' : 'Leave car' );
 			} else if ( p.mode === 'ferry-helm' ) ui.setPrompt( 'X', 'Leave helm' );
 			else if ( p.prompt?.key === 'E' ) ui.setPrompt( 'X', p.prompt.text );
+			else if ( p.prompt?.key === 'Space' ) ui.setPrompt( 'A', p.prompt.text );
 			else ui.setPrompt( '☰', 'Controls' );
 		}
 		else if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
