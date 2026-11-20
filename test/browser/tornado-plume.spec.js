@@ -1,3 +1,4 @@
+import { startAtPier } from './helpers/start-at-pier.js';
 import {test,expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
 
@@ -14,7 +15,7 @@ test('Tornado plume: transported condensate evaporates and the rendered cloud li
   await test.step('Given the real island and a stationary 100 m/s tornado in the village',async()=>{
    await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));
    await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});
-   await click('Walk instead');await click('Skip');await click('Performance');
+   await startAtPier( page );await click('Skip');await click('Performance');
    await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();await click('Collapse (H)');
    await click('Disasters');await page.getByLabel('Disaster type').selectOption('tornado');await page.getByLabel('Target location').selectOption('village');
    await page.getByRole('spinbutton',{name:'Intensity',exact:true}).fill('100');await page.getByLabel('Radius (m)').fill('180');await page.getByLabel('Speed (m/s)',{exact:true}).fill('0');await page.getByLabel('Duration (s)').fill('60');await click('View target');

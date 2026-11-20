@@ -3,6 +3,7 @@
 // ). Driven with the player's own keys from a fresh island:
 // W and Shift down the boardwalk onto the pier, the Disasters panel for the tsunami, the chairlift
 // guide and W for the base deck. The HUD prompt is read from the page, as the player sees it.
+import { startAtPier } from './helpers/start-at-pier.js';
 import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 
@@ -22,7 +23,7 @@ test.beforeEach( async ( { page }, info ) => {
 	await page.route( 'https://fonts.googleapis.com/**', r => r.fulfill( { contentType: 'text/css', body: '' } ) );
 	await page.goto( '/?scale=1&noAudio' );
 	await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120000 } );
-	await page.getByRole( 'button', { name: 'Walk instead', exact: true } ).click();
+	await startAtPier( page );
 	await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 	await page.getByRole( 'button', { name: 'Performance', exact: true } ).click();
 	await page.getByRole( 'radiogroup', { name: 'Resolution', exact: true } ).getByRole( 'radio', { name: 'Standard', exact: true } ).click();

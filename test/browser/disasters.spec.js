@@ -1,3 +1,4 @@
+import { startAtPier } from './helpers/start-at-pier.js';
 import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { SCENARIO_TIMEOUT_MS, untilGameTimeCheck } from './gameTime.js';
@@ -7,7 +8,7 @@ async function ready(page,audio=false) {
  const scale=process.env.PW_RENDER_SCALE??'0.5';
  await page.goto(`/?scale=${scale}${audio?'':'&noAudio'}`);
  await expect(page.getByRole('status', {name:'Loading Tidewater'})).toBeHidden({timeout:120000});
- await page.getByRole('button',{name:'Walk instead',exact:true}).click();
+ await startAtPier( page );
  await page.getByRole('button', {name:'Skip', exact:true}).click();
  await page.getByRole('button', {name:'Disasters', exact:true}).click();
 }

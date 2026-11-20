@@ -1,3 +1,4 @@
+import { startAtPier } from './helpers/start-at-pier.js';
 import {test,expect} from '@playwright/test';
 
 test('Active worker steps respect pause, validation, stop and reset barriers',async({page})=>{
@@ -5,7 +6,7 @@ test('Active worker steps respect pause, validation, stop and reset barriers',as
  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));
  await page.goto('/?scale=.5&noAudio');
  await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});
- await page.getByRole('button',{name:'Walk instead',exact:true}).click();await page.getByRole('button',{name:'Skip',exact:true}).click();
+ await startAtPier( page );await page.getByRole('button',{name:'Skip',exact:true}).click();
  await page.getByRole('button',{name:'Disasters',exact:true}).click();
  await expect(page.getByLabel('Playback',{exact:true})).toHaveValue('realtime');
  await page.getByLabel('Disaster type').selectOption('tornado');await page.getByLabel('Target location').selectOption('village');

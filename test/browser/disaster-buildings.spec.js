@@ -1,6 +1,7 @@
 // Buildings in a tornado and a tsunami, driven from the Disasters panel with the keyboard
 // (docs/disaster-damage.md, buildings). Telemetry is read from the running game; page.evaluate only reads
 // state and stages the review cameras for the captures.
+import { startAtPier } from './helpers/start-at-pier.js';
 import { test, expect } from '@playwright/test';
 import { SCENARIO_TIMEOUT_MS, untilGameTimeCheck } from './gameTime.js';
 
@@ -41,7 +42,7 @@ test( 'Village buildings lose roofs before walls, piece by piece, under a tornad
 		await page.route( 'https://fonts.googleapis.com/**', r => r.fulfill( { contentType: 'text/css', body: '' } ) );
 		await page.goto( `/?scale=${ process.env.PW_RENDER_SCALE ?? '0.5' }&noAudio` );
 		await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120000 } );
-		await page.getByRole( 'button', { name: 'Walk instead', exact: true } ).click();
+		await startAtPier( page );
 		await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 		await page.getByRole( 'button', { name: 'Disasters', exact: true } ).click();
 	} );
