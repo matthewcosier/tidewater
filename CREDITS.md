@@ -16,6 +16,8 @@ squashy555, Soojay, coalcon, dubminister, nathankwright, SorenF109, LaScienceMus
 tosha73, paulprit, Mrthenoronha, mwchristian95, MrFossy, BranndyBottle, JoelMcDaniel, khenshom, ramattahatta,
 RatBird and Anthousai.
 
+The eight rally car engine loops have [separate sources and licences](public/rally/audio/CREDITS.md).
+
 ## Scanned beach debris: `public/models/debris/`
 
 Photogrammetry models from [Poly Haven](https://polyhaven.com), under

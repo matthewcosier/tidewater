@@ -58,10 +58,10 @@ fading; recovery refreshes the HUD immediately so old wheel contacts are not sho
 
 ## Audio and networking
 
-Recorded audio is copied from Swift Parking: its Dodge Ram
-HEMI V8 for the Jeep and BMW M4 inline-six for the Aster. Source records and credits
-are under `public/rally/audio/`. They are licensed game recordings, not recordings
-of the exact fictional vehicles. Playback pitch/filter/gain respond to real RPM,
+Each drivable car has a distinct recorded engine loop. The Ridgeback and Aster use the
+Dodge Ram HEMI V8 and BMW M4 inline-six recordings from Swift Parking. The other six use
+field recordings of Porsche flat-sixes, a Gallardo V10, a Veyron W16 and a Beetle flat-four.
+The [audio credits](../public/rally/audio/CREDITS.md) list each recording and licence. Playback pitch/filter/gain respond to real RPM,
 throttle and camera distance. Browser interaction unlocks playback; the sound
 button and world mute are respected.
 
