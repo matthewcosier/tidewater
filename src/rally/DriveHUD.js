@@ -5,7 +5,7 @@
 import { VEHICLES } from './Vehicles.js';
 
 // The tag, idle and redline of each car come from Vehicles.js, the one car table.
-const STARTS = { beach: 'Beach', coast: 'Coastal road', town: 'Town backroad', mountain: 'Mountain summit', west: 'West beach entrance', east: 'East beach entrance', ferryRoad: 'Ferry road', ferry: 'Ferry terminal', joey: 'Joey Island terminal', joeyLoop: 'Joey Island road' };
+import { STARTS } from './StartLocations.js';
 const SURFACES = { sand: 'Sand', soil: 'Soil', rock: 'Rock', asphalt: 'Asphalt', gravel: 'Gravel', wood: 'Boardwalk', water: 'Shallows', 'wet-sand': 'Wet sand', afloat: 'Afloat' };
 // Per-wheel physics surface codes s[89..92], in code order.
 const WHEEL_SURFACES = [ 'sand', 'soil', 'rock', 'asphalt', 'gravel', 'wood', 'water', 'wet-sand' ];

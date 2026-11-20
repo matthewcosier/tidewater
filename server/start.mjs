@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { attachMultiplayer } from './multiplayer.mjs';
 
 const root = fileURLToPath( new URL( '../dist/', import.meta.url ) );
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.wav': 'audio/wav', '.glb': 'model/gltf-binary' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.wav': 'audio/wav', '.glb': 'model/gltf-binary' };
 const handler = async ( request, response ) => {
 	if ( request.method !== 'GET' && request.method !== 'HEAD' ) { response.writeHead( 405 ); response.end(); return; }
 	try {

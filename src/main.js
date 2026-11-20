@@ -57,7 +57,8 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ), ( done, total )
 		if ( app.qs.has( 'shots' ) ) window.__job = window.__bench.shots( app.qs.get( 'shots' ).split( ',' ), { tag: app.qs.get( 'tag' ) || 'shot', dt: Number( app.qs.get( 'dt' ) ) || 0, seq: Number( app.qs.get( 'seq' ) ) || 1, every: Number( app.qs.get( 'every' ) ) || 1 } );
 
 	} else app.start();
-	ui.showStartOverlay( () => {
+	ui.showStartOverlay( choice => {
+		app.startIsland( choice );
 		if ( mobile ) {
 			// The first tap starts the live mix while detailed geometry is still arriving. If the
 			// browser kills this document there, offer a retry before starting the island again.

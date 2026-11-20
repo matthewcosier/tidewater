@@ -1,8 +1,11 @@
+import { IslandStart } from '/src/ui/IslandStart.js';
 const $ = selector => document.querySelector( selector );
 const canvas = $( 'canvas' ), view = canvas.getContext( '2d', { alpha: false } );
 const controls = $( '#controls' ), lobby = $( '#lobby' );
 let ws, retry, heartbeat, playing = false, suspended = false, sound;
 let choosing = false;
+const garage = new IslandStart( $( '#garage' ), '/ui/garage/', choice => openMode( choice.mode, choice ), 'gt3rs' );
+garage.drive.disabled = garage.walk.disabled = true;
 let pendingFrame = null, decoding = false, frameEpoch = 0;
 const nextAudio = new Map(), pressed = new Map();
 function send( object ) { if ( ws?.readyState === WebSocket.OPEN ) ws.send( JSON.stringify( object ) ); }
@@ -34,7 +37,7 @@ function state( s ) {
 	controls.dataset.hostKeys = ( s.keys || [] ).join( ' ' );
 	controls.dataset.turnRate = String( s.turnRate || 0 );
 	if ( ! choosing ) $( '#status' ).textContent = s.ready ? ( playing ? ( s.driving ? s.speed + ' km/h' : 'On foot' ) : 'Mac ready' ) : 'Loading the island on the Mac…';
-	$( '#drive' ).disabled = $( '#walk' ).disabled = ! s.ready || choosing;
+	garage.drive.disabled = garage.walk.disabled = ! s.ready || choosing;
 	$( '#resume' ).hidden = ! ( s.ready && s.started );
 	$( '[data-key=KeyW]' ).textContent = s.driving ? 'Throttle' : 'Forward';
 	$( '[data-key=KeyS]' ).textContent = s.driving ? 'Brake' : 'Back';
@@ -104,28 +107,26 @@ function connect() {
 		if ( m.type === 'state' ) state( m );
 		if ( m.type === 'options' ) showChoices( m );
 		if ( m.type === 'playing' ) { choosing = false; playing = true; controls.inert = false; lobby.hidden = true; $( '#menu' ).hidden = false; }
-		if ( m.type === 'error' ) { choosing = false; $( '#status' ).textContent = m.text; $( '#drive' ).disabled = $( '#walk' ).disabled = false; }
+		if ( m.type === 'error' ) { choosing = false; $( '#status' ).textContent = m.text; garage.drive.disabled = garage.walk.disabled = false; }
 		if ( m.type === 'busy' ) $( '#status' ).textContent = 'Another phone is playing. Waiting to connect…';
 	};
 	socket.onclose = e => {
 		if ( socket !== ws ) return;
 		clearInterval( heartbeat ); choosing = false; frameEpoch ++; pendingFrame = null; nextAudio.clear(); showMenu();
-		$( '#drive' ).disabled = $( '#walk' ).disabled = true; $( '#resume' ).hidden = true;
+		garage.drive.disabled = garage.walk.disabled = true; $( '#resume' ).hidden = true;
 		if ( e.reason !== 'Controller in use' ) $( '#status' ).textContent = 'Reconnecting to the Mac…';
 		if ( ! suspended ) retry = setTimeout( connect, 1400 );
 	};
 }
-function openMode( mode ) {
+function openMode( mode, choice ) {
 	if ( choosing ) return;
 	choosing = true;
-	$( '#status' ).textContent = mode === 'gt3' ? 'Starting the GT3…' : 'Opening the island…';
+	$( '#status' ).textContent = 'Opening the island…';
 	if ( ! sound ) { const AC = window.AudioContext || window.webkitAudioContext; if ( AC ) sound = new AC(); }
 	sound?.resume().catch( () => {} );
-	$( '#drive' ).disabled = $( '#walk' ).disabled = true;
-	send( mode === 'resume' ? { type: 'resume' } : { type: 'start', mode } );
+	garage.drive.disabled = garage.walk.disabled = true;
+	send( mode === 'resume' ? { type: 'resume' } : { type: 'start', ...choice } );
 }
-$( '#drive' ).onclick = () => openMode( 'gt3' );
-$( '#walk' ).onclick = () => openMode( 'walk' );
 $( '#resume' ).onclick = () => openMode( 'resume' );
 $( '#menu' ).onclick = showMenu;
 for ( const button of controls.querySelectorAll( '[data-key]' ) ) {

@@ -10,7 +10,7 @@ test( 'The Mac steers while throttle is held and releases both keys when the pho
 		return { x: b.x + b.width / 2, y: b.y + b.height / 2, id };
 	};
 	await test.step( 'Given the phone has taken the driver seat', async () => {
-		const drive = page.getByRole( 'button', { name: 'Drive GT3', exact: true } );
+		const drive = page.getByRole( 'button', { name: 'Drive COSIER GT3 RS', exact: true } );
 		await expect( drive ).toBeEnabled( { timeout: 140000 } ); await drive.tap();
 		await expect( page.getByRole( 'button', { name: 'Throttle' } ) ).toBeVisible();
 	} );

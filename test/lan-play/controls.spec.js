@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test( 'An iPhone without WebGPU drives the Mac GT3 with sound and resumes after disconnecting', async ( { page, browser }, info ) => {
+test( 'An iPhone without WebGPU drives the selected car with sound and resumes after disconnecting', async ( { page, browser }, info ) => {
 	const resources = [], errors = [];
 	page.on( 'request', r => resources.push( r.url() ) );
 	page.on( 'pageerror', e => errors.push( e.message ) );
@@ -13,10 +13,12 @@ test( 'An iPhone without WebGPU drives the Mac GT3 with sound and resumes after 
 	await test.step( 'Given the Mac is hosting and the phone has no WebGPU', async () => {
 		await page.addInitScript( () => Object.defineProperty( navigator, 'gpu', { value: undefined } ) );
 		await page.goto( '/' );
-		await expect( button( 'Drive GT3' ) ).toBeEnabled( { timeout: 140000 } );
+		await expect( button( 'Drive COSIER GT3 RS' ) ).toBeEnabled( { timeout: 140000 } );
 	} );
-	await test.step( 'When the player taps Drive GT3 and holds Throttle', async () => {
-		await button( 'Drive GT3' ).tap();
+	await test.step( 'When the player selects the Fulmine V10 and holds Throttle', async () => {
+		await button( 'Fulmine V10' ).tap();
+		await page.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'town' );
+		await button( 'Drive Fulmine V10' ).tap();
 		await expect( button( 'Throttle' ) ).toBeVisible();
 		await hold( 'Throttle' );
 		await expect.poll( speed, { timeout: 20000 } ).toBeGreaterThan( 20 );
@@ -39,14 +41,17 @@ test( 'An iPhone without WebGPU drives the Mac GT3 with sound and resumes after 
 		try {
 			const other = await guest.newPage(); await other.goto( page.url() );
 			await expect( other.getByRole( 'status' ) ).toContainText( 'Another phone' );
-			await expect( other.getByRole( 'button', { name: 'Drive GT3' } ) ).toBeDisabled();
+			await expect( other.getByRole( 'button', { name: 'Drive COSIER GT3 RS' } ) ).toBeDisabled();
 		} finally { await guest.close(); }
 	} );
 	await test.step( 'When the first phone reconnects, it can resume the same game and explore on foot', async () => {
 		await page.reload();
 		await button( 'Resume game' ).tap();
 		await expect( button( 'Throttle' ) ).toBeVisible();
-		await button( 'Menu' ).tap(); await button( 'Explore on foot' ).tap();
+		await button( 'Menu' ).tap();
+		await button( 'Sandpiper 1600' ).tap();
+		await page.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'mountain' );
+		await button( 'Walk instead' ).tap();
 		await expect( page.getByRole( 'status' ) ).toHaveText( 'On foot' );
 		await expect( button( 'Interact' ) ).toBeVisible();
 		await page.setViewportSize( { width: 402, height: 796 } );

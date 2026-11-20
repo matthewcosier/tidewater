@@ -246,6 +246,8 @@ export class Guide {
 		if ( ! this.open ) {
 
 			this.open = true;
+			// A mouse launch can lock the camera before this first-visit dialog opens.
+			if ( document.pointerLockElement ) document.exitPointerLock();
 			this.el.classList.add( 'is-on' );
 
 		}
@@ -261,7 +263,9 @@ export class Guide {
 
 	close() {
 
-		if ( ! this.open ) return;
+		// LAN play can dismiss the scheduled intro before its first card appears.
+		if ( ! this.open && this._wait < 0 ) return;
+		this._wait = -1;
 		this.open = false;
 		this.el.classList.remove( 'is-on' );
 		if ( this.minimap ) this.minimap.highlight( [] );

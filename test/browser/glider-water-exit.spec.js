@@ -1,3 +1,4 @@
+import { startAtPier } from './helpers/start-at-pier.js';
 import {test,expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
 import {gliderVisibility,watchSwimEntry} from './helpers/glider-visibility.js';
@@ -40,7 +41,7 @@ test('Glider water recovery: a real banked ditch releases local swimming, the sw
    await page.route('https://fonts.googleapis.com/**',route=>route.fulfill({contentType:'text/css',body:''}));
    await page.goto('/?scale=1&noAudio');
    await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});
-   await click(page,'Click to explore');await click(page,'Skip');
+   await startAtPier( page );await click(page,'Skip');
    await click(page,'Performance');
    await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();
    await click(page,'Collapse (H)');await click(page,'Wind farm');

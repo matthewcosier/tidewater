@@ -1,3 +1,4 @@
+import { IslandStart } from './IslandStart.js';
 import { icon, brandMark } from './icons.js';
 
 // Tidewater UI: settings panel (tabs → folders → controls), HUD, help,
@@ -2189,20 +2190,7 @@ export class UI {
 
 	_buildStart() {
 
-		const el = this.startEl = h( 'div', 'tw-start tw-interactive', { hidden: true } );
-		el.innerHTML = `
-			<div class="tw-start-inner">
-				${ brandMark( 'tw-start-mark' ) }
-				<div class="tw-start-title">TIDEWATER</div>
-				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>Click to explore</span></button>
-				<div class="tw-start-keys">
-					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>Move</span>
-					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>Look</span>
-					<span><kbd>E</kbd>Interact</span>
-					<span><kbd>H</kbd>Settings</span>
-					<span><kbd>F1</kbd>All controls</span>
-				</div>
-			</div>`;
+		const el = this.startEl = h( 'div', 'tw-start tw-interactive', { hidden: true, tabindex: -1, role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Island start' } );
 		this.root.append( el );
 
 	}
@@ -3162,8 +3150,7 @@ export class UI {
 
 	}
 
-	// Resolves on the first click (or Enter / Space). onStart runs inside that
-	// user gesture, so it may call requestPointerLock().
+	// Starting a drive or walk is a user gesture, so audio and pointer lock can start here.
 	showStartOverlay( onStart ) {
 
 		if ( this._startPromise ) return this._startPromise;
@@ -3176,18 +3163,29 @@ export class UI {
 
 		this._startPromise = new Promise( ( resolve ) => {
 
-			const go = ( e ) => {
-
-				if ( e.type === 'keydown' ) {
-
-					if ( e.key !== 'Enter' && e.code !== 'Space' ) return;
-					e.preventDefault();
-					e.stopPropagation();
-
+			const keyboardStart = e => {
+				if ( e.key === 'Tab' ) {
+					const panel = this.garage.editor.hidden ? this.garage.picker : this.garage.editor;
+					const controls = panel.querySelectorAll( 'button:enabled, select:enabled' );
+					const first = controls[ 0 ], last = controls[ controls.length - 1 ];
+					if ( ! panel.contains( e.target ) || ( e.shiftKey ? e.target === first : e.target === last ) ) {
+						e.preventDefault();
+						e.stopPropagation();
+						( e.shiftKey ? last : first ).focus();
+					}
+					return;
 				}
+				if ( e.repeat || ( e.key !== 'Enter' && e.code !== 'Space' ) ) return;
+				if ( ( e.target !== el && el.contains( e.target ) ) || ! this.garage.editor.hidden ) return;
+				e.preventDefault();
+				e.stopPropagation();
+				// Preserve the original Enter-to-explore shortcut at the village pier.
+				this.garage.launch( 'walk', this.garage.locationEdited ? this.garage.location.value : null );
+			};
 
-				el.removeEventListener( 'click', go );
-				window.removeEventListener( 'keydown', go, true );
+			this.garage = new IslandStart( el, ( import.meta.env?.BASE_URL || '/' ) + 'ui/garage/', choice => {
+				window.removeEventListener( 'keydown', keyboardStart, true );
+				el.inert = true;
 				this._start = false;
 				this._startPromise = null;
 				this.root.classList.remove( 'is-starting' );
@@ -3201,13 +3199,15 @@ export class UI {
 				}, 700 );
 				this._overUI = false;
 				this._activity();
-				callHook( onStart );
-				resolve();
+				callHook( onStart, choice );
+				resolve( choice );
 
-			};
-
-			el.addEventListener( 'click', go );
-			window.addEventListener( 'keydown', go, true );
+			} );
+			el.querySelector( '.garage-sheet' ).insertAdjacentHTML( 'afterbegin',
+				`<div class="garage-brand">${ brandMark() }<span>TIDEWATER</span></div>` );
+			el.inert = false;
+			el.focus( { preventScroll: true } );
+			window.addEventListener( 'keydown', keyboardStart, true );
 
 		} );
 

@@ -53,10 +53,10 @@ test( 'An iPhone player can enter the island after a bounded shader warm-up', as
 			}
 		} );
 		await page.goto( '/' );
-		await expect( page.getByRole( 'button', { name: 'Click to explore' } ) ).toBeVisible( { timeout: 145_000 } );
+		await expect( page.getByRole( 'button', { name: 'Walk instead' } ) ).toBeVisible( { timeout: 145_000 } );
 	} );
 	await test.step( 'When the player taps to explore and skips the introduction', async () => {
-		await page.getByRole( 'button', { name: 'Click to explore' } ).tap();
+		await page.getByRole( 'button', { name: 'Walk instead' } ).tap();
 		const skip = page.getByRole( 'button', { name: 'Skip', exact: true } );
 		await skip.tap();
 		await expect( skip ).toBeHidden();
@@ -92,7 +92,7 @@ test( 'After an interrupted iPhone load the player can choose when to try again'
 		await retry.tap();
 	} );
 	await test.step( 'Then the island opens and the interruption marker clears', async () => {
-		await expect( page.getByRole( 'button', { name: 'Click to explore' } ) ).toBeVisible( { timeout: 145_000 } );
+		await expect( page.getByRole( 'button', { name: 'Walk instead' } ) ).toBeVisible( { timeout: 145_000 } );
 		expect( await page.evaluate( () => sessionStorage.getItem( 'tidewater.mobileLoading' ) ) ).toBeNull();
 	} );
 } );
@@ -123,10 +123,10 @@ test( 'An iPhone keeps rendering and playing audio after Explore and can enter t
 			};
 		} );
 		await page.goto( '/' );
-		await expect( page.getByRole( 'button', { name: 'Click to explore' } ) ).toBeVisible( { timeout: 150000 } );
+		await expect( page.getByRole( 'button', { name: 'Walk instead' } ) ).toBeVisible( { timeout: 150000 } );
 	} );
 	await test.step( 'When the player taps Explore and skips the introduction', async () => {
-		await page.getByRole( 'button', { name: 'Click to explore' } ).tap();
+		await page.getByRole( 'button', { name: 'Walk instead' } ).tap();
 		await page.getByRole( 'button', { name: 'Skip', exact: true } ).tap();
 	} );
 	await test.step( 'Then the walking scene stays responsive with bounded rendering and sound work', async () => {

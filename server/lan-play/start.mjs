@@ -1,3 +1,6 @@
+import { VEHICLES } from '../../src/rally/Vehicles.js';
+import { STARTS } from '../../src/rally/StartLocations.js';
+import { playerAppearance, SHIRTS, SKIN_TONES } from '../../src/player/Appearance.js';
 import { createServer as http } from 'node:http';
 import { createServer as https } from 'node:https';
 import { readFile } from 'node:fs/promises';
@@ -8,6 +11,13 @@ const host = process.env.HOST || '127.0.0.1', port = Number( process.env.PORT ||
 const gameURL = process.env.GAME_URL || 'http://127.0.0.1:5189/';
 const tls = process.env.HTTPS_CERT && process.env.HTTPS_KEY;
 const files = new Map( [ [ '/', [ 'index.html', 'text/html' ] ], [ '/controller.css', [ 'controller.css', 'text/css' ] ], [ '/controller.js', [ 'controller.js', 'text/javascript' ] ] ] );
+for ( const file of [ 'ui/IslandStart.js', 'rally/Vehicles.js', 'rally/StartLocations.js', 'player/Appearance.js', 'ui/island-start.css' ] )
+	files.set( '/src/' + file, [ '../../src/' + file, file.endsWith( '.css' ) ? 'text/css' : 'text/javascript' ] );
+const previews = [ ...Object.keys( VEHICLES ) ];
+for ( const shirt of SHIRTS.keys() ) for ( const tone of SKIN_TONES.keys() ) for ( const hat of [ 0, 1 ] )
+	previews.push( `player-${ shirt }-${ tone }-${ hat }` );
+for ( const key of previews ) files.set( '/ui/garage/' + key + '.webp', [ '../../public/ui/garage/' + key + '.webp', 'image/webp' ] );
+
 async function serve( req, res ) {
 	const entry = files.get( req.url.split( '?' )[ 0 ] );
 	if ( ! entry || ! [ 'GET', 'HEAD' ].includes( req.method ) ) { res.writeHead( 404 ).end(); return; }
@@ -74,6 +84,13 @@ sockets.on( 'connection', ws => {
 		if ( ! m || typeof m.type !== 'string' ) return;
 		ws.lastSeen = Date.now();
 		if ( m.type === 'heartbeat' || ! ready || !game ) return;
+		if ( m.type === 'start' ) {
+			// Older phone clients send just gt3 or walk.
+			if ( m.mode === 'gt3' ) m = { type: 'start', mode: 'drive', car: 'gt3rs', location: 'coast' };
+			if ( ! [ 'drive', 'walk' ].includes( m.mode ) ) return;
+			if ( ( m.mode === 'drive' || m.location ) && ( ! Object.hasOwn( VEHICLES, m.car ) || ! Object.hasOwn( STARTS, m.location ) ) ) return;
+			m.appearance = playerAppearance( m.appearance );
+		}
 		if ( pending >= 64 ) { ws.close( 1008, 'Input backlog' ); return; }
 		pending ++;
 		enqueue( async () => {
@@ -82,7 +99,7 @@ sockets.on( 'connection', ws => {
 				if ( m.type === 'start' || m.type === 'resume' ) await game.setIdle( false );
 				if ( m.type === 'resume' ) { send( ws, { type: 'playing' } ); return; }
 				await game.input( m );
-				if ( m.type === 'start' && [ 'gt3', 'walk' ].includes( m.mode ) ) {
+				if ( m.type === 'start' ) {
 					started = true; lastState = await game.state(); status(); send( ws, { type: 'playing' } );
 				}
 			} finally { pending --; }

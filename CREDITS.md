@@ -140,3 +140,5 @@ Retired electrician, CC0).
 Modified: debadged (the Khronos and 3D Commerce logos and all textures removed, the steering-wheel emblem blanked),
 re-rigged for the game's wheel pivots, recoloured with untextured materials and decimated by
 `tools/rally/import_cars.py`. It keeps its original scale.
+
+The garage portraits in `public/ui/garage/` are renders of the corresponding Tidewater player and vehicle models. The same model credits and licenses apply, including Microsoft Rocketbox (MIT) for the player and CarConcept (CC BY 4.0) for the Petrel GT.
