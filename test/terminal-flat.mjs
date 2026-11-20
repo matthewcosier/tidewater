@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import init, { RallyPhysics } from '../public/rally/rally_physics.js';
 import { TerrainData } from '../src/world/TerrainData.js';
 import { CoastalRoute } from '../src/world/CoastalRoute.js';
 import { applyTerminalSite, terminalToWorld, PLACES } from '../src/ferry/Terminal.js';
@@ -80,4 +82,39 @@ test( 'The cut behind Joey\'s yard leaves a bank, never a cliff', () => {
 		}
 	}
 	assert.equal( walls.length, 0, `${ walls.length } of ${ faces } cut steps are walls, e.g. ${ walls.slice( 0, 5 ).join( '; ' ) }` );
+} );
+
+test( 'A GT3 RS can drive through the Joey terminal junction without a launch', async t => {
+	await init( { module_or_path: await readFile( new URL( '../public/rally/rally_physics_bg.wasm', import.meta.url ) ) } );
+	// The straight downhill approach to the junction. A settled car drives the same
+	// line twice with zero steering. Measure flights from the four actual wheel contacts.
+	const start = { x: -86.5, z: 736.2 }, end = { x: -141, z: 782 };
+	const dx = end.x - start.x, dz = end.z - start.z, length = Math.hypot( dx, dz );
+	for ( const kmh of [ 70, 80 ] ) await t.test( `${ kmh } km/h`, async t => {
+		const sim = new RallyPhysics(), dt = 1 / 120;
+		try {
+			assert.ok( sim.set_terrain( terrain.heights, terrain.res, terrain.size, terrain.origin ) );
+			assert.ok( sim.set_roads( route.physicsData() ) );
+			assert.ok( sim.select_vehicle( 6 ) );
+			sim.reset( start.x, terrain.heightAt( start.x, start.z ) + 0.45, start.z, Math.atan2( dx, dz ) );
+			for ( let tick = 0; tick < 240; tick ++ ) sim.advance( dt, 0, 0, 0, 1 );
+			let state = sim.snapshot(), distance = 0, peakSpeed = 0, longestFlight = 0, airborne = 0, launches = 0;
+			for ( let tick = 0; tick < 1200 && distance < length; tick ++ ) {
+				const throttle = Math.min( 1, Math.max( 0, 0.12 + ( kmh - state[ 7 ] ) * 0.15 ) );
+				const brake = Math.min( 1, Math.max( 0, ( state[ 7 ] - kmh - 2 ) * 0.1 ) );
+				sim.advance( dt, throttle, brake, 0, 0 );
+				state = sim.snapshot();
+				distance = ( dx * ( state[ 0 ] - start.x ) + dz * ( state[ 2 ] - start.z ) ) / length;
+				peakSpeed = Math.max( peakSpeed, state[ 7 ] );
+				airborne = state[ 10 ] === 0 ? airborne + 1 : 0;
+				if ( airborne === 15 ) launches ++;
+				longestFlight = Math.max( longestFlight, airborne );
+			}
+			t.diagnostic( `${ kmh } km/h: ${ launches } launches, longest time with every wheel airborne ${ ( longestFlight * dt ).toFixed( 3 ) } s` );
+			assert.ok( distance >= length && peakSpeed >= kmh - 2, 'car completed the approach at speed' );
+			assert.equal( launches, 0, `car launched on the ${ kmh } km/h pass` );
+		} finally {
+			sim.free();
+		}
+	} );
 } );
