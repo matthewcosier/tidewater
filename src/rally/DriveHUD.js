@@ -42,6 +42,7 @@ export class DriveHUD {
 		const root = this.root = document.createElement( 'section' );
 		root.className = 'rh';
 		root.setAttribute( 'aria-label', 'Island driving' );
+		const shareButton = import.meta.env?.MODE === 'pages' ? '' : `<button type="button" class="rh-chip rh-share" aria-label="Drive together">${ TOGETHER_ICON }<span>Drive together</span></button>`;
 		const cars = Object.entries( VEHICLES ).map( ( [ value, car ] ) => `<option value="${ value }">${ car.name }</option>` ).join( '' );
 		const starts = Object.entries( STARTS ).map( ( [ value, name ] ) => `<option value="${ value }">${ name }</option>` ).join( '' );
 		root.innerHTML = `
@@ -57,7 +58,7 @@ export class DriveHUD {
 					<button type="button" class="rh-chip rh-drive-only" data-act="repair" aria-label="Repair car" aria-keyshortcuts="T"><kbd>T</kbd>Repair</button>
 					<button type="button" class="rh-chip rh-drive-only" data-act="leave" aria-label="Leave car" aria-keyshortcuts="E"><kbd>E</kbd>Leave</button>
 					<button type="button" class="rh-chip rh-icon rh-drive-only rh-sound" aria-label="Engine sound" aria-pressed="false">${ SOUND_ICON }</button>
-					<button type="button" class="rh-chip rh-share" aria-label="Drive together">${ TOGETHER_ICON }<span>Drive together</span></button>
+					${ shareButton }
 				</div>
 			</div>
 			<div class="rh-keys" role="note" aria-label="Driving keys" hidden>
@@ -113,7 +114,7 @@ export class DriveHUD {
 			if ( rally.sound.disabled ) return;
 			rally.sound.toggle( rally.vehicleKey ); rally.refreshUI(); canvas.focus();
 		} );
-		$( '.rh-share' ).addEventListener( 'click', () => rally.shared.show() );
+		$( '.rh-share' )?.addEventListener( 'click', () => rally.shared.show() );
 		addEventListener( 'keydown', event => this.onKey( event ) );
 		this.app.ui.ui.root.append( root );
 		requestAnimationFrame( time => this.frame( time ) );

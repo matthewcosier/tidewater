@@ -1,5 +1,7 @@
 # Tidewater
 
+**[Play Tidewater in your browser](https://matthewcosier.github.io/tidewater/)** with a WebGPU-capable browser. The hosted island supports solo play, including both GT3 RS cars. Shared driving and Mac-rendered phone play are available when you run the local server.
+
 This fork includes the playable island expansion, the drivable COSIER GT3 RS and [Mac-rendered LAN play](docs/lan-play.md). The [experimental builds](docs/experimental-builds.md) preserve earlier disaster, crowd and performance work.
 
 An island fishing game for the browser. Cast from the pier, the beach or your own boat, fight the fish,

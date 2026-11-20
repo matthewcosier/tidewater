@@ -1,6 +1,8 @@
 // ?bench: a seeded Math.random (imported first by main.js, before any module that draws random
 // numbers), so the world is laid out the same on every load and reference shots can be compared.
-if ( typeof location !== 'undefined' && /[?&]bench\b/.test( location.search ) ) {
+export const benchMode = import.meta.env?.MODE !== 'pages' && typeof location !== 'undefined' && new URLSearchParams( location.search ).has( 'bench' );
+
+if ( benchMode ) {
 
 	let s = 0x9e3779b9;
 	Math.random = () => {

@@ -1,3 +1,4 @@
+import { benchMode } from './core/BenchSeed.js';
 import { DisasterWater } from './disasters/Water.js';
 import { RagdollPool } from './player/workers/RagdollPool.js';
 import { SimulationPacing } from './core/SimulationPacing.js';
@@ -112,7 +113,7 @@ export class App {
 			sunAzimuth: 0, // degrees: turns the sun's daily path about the vertical
 			// game hours per real second in daylight (deep night runs faster, src/sky/DayClock.js); 0 holds the
 			// clock, as the benchmark does
-			timeSpeed: this.qs.has( 'bench' ) ? 0 : DAY_RATE,
+			timeSpeed: benchMode ? 0 : DAY_RATE,
 			exposure: 0.55,
 			renderScale: 1, // internal resolution (the temporal upscaler reconstructs the output), Performance tab
 		};

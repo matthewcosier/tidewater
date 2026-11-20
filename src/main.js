@@ -1,11 +1,11 @@
-import './core/BenchSeed.js';
+import { benchMode } from './core/BenchSeed.js';
 import { isAppleTouchDevice } from './engine/Engine.js';
 import { App } from './App.js';
 import { UI } from './ui/UI.js';
 import { AppUI } from './ui/AppUI.js';
 
 // ?bench runs in background tabs too (automation): rAF does not fire in a hidden page
-if ( /[?&]bench\b/.test( location.search ) ) {
+if ( benchMode ) {
 
 	const raf = window.requestAnimationFrame.bind( window ), caf = window.cancelAnimationFrame.bind( window );
 	window.requestAnimationFrame = ( cb ) => document.visibilityState === 'hidden' ? setTimeout( () => cb( performance.now() ), 16 ) : raf( cb );
@@ -47,7 +47,7 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ), ( done, total )
 	ui.setLoading( 1, 'Ready' );
 	await ui.hideLoader();
 	// frame-time benchmark and reference shots (see core/Bench.js): it drives the frames itself
-	if ( app.qs.has( 'bench' ) ) {
+	if ( import.meta.env.MODE !== 'pages' && benchMode ) {
 
 		window.__bench = new ( await import( './core/Bench.js' ) ).Bench( app );
 		if ( app.qs.has( 'auto' ) ) window.__job = window.__bench.auto( app.qs.get( 'auto' ), { runs: Number( app.qs.get( 'runs' ) ) || 1 } );
