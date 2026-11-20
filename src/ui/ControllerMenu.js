@@ -53,6 +53,8 @@ export class ControllerMenu {
 		if ( this.app.game?.guide?.open ) return this.app.game.guide.el;
 		if ( ui.helpOpen ) return ui.helpEl;
 		if ( ui.panelOpen ) return ui.panel;
+		const shared = this.app.rally?.shared?.panel;
+		if ( shared && ! shared.hidden ) return shared;
 		const hud = this.app.game?.hud;
 		if ( hud?.invOpen ) return hud.inv;
 		if ( hud?.standOpen ) return hud.stand;
@@ -68,6 +70,7 @@ export class ControllerMenu {
 		else if ( this.app.game?.guide?.open ) this.app.game.guide.close();
 		else if ( ui.helpOpen ) ui.toggleHelp( false );
 		else if ( ui.panelOpen ) ui.togglePanel( false );
+		else if ( scope === this.app.rally?.shared?.panel ) scope.querySelector( '.rs-x' ).click();
 		else if ( this.garage ) { this.clearFocus(); this.app.engine.domElement.focus(); }
 		else scope.querySelector( '[data-close]' )?.click();
 	}
