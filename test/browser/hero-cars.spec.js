@@ -7,6 +7,7 @@ import { test, expect } from '@playwright/test';
 // nothing intercepted in the driving path. Add a row here with every new car in Vehicles.js.
 const CARS = [
 	{ key: 'gt3rs', name: 'COSIER GT3 RS', tag: 'Rear-engine flat-six', mass: 1450, radius: 0.359 },
+	{ key: 'gt3rszry', name: 'GT3RS ZRY', tag: 'Rear-engine flat-six', mass: 1450, radius: 0.359 },
 	{ key: 'gt', name: 'Petrel GT', tag: 'Rear-drive GT', mass: 1450, radius: 0.384 },
 	{ key: 'supercar', name: 'Fulmine V10', tag: 'Mid-engine supercar', mass: 1550, radius: 0.336 },
 	{ key: 'hypercar', name: 'Corsaire W16', tag: 'Mid-engine hypercar', mass: 1995, radius: 0.348 },

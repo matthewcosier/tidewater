@@ -43,6 +43,14 @@ export const VEHICLES = {
 		idle: 900, redline: 9000, sound: 'aster-inline-six.wav',
 		hull: [ 1.90, 4.55 ], proxy: [ 1.014, 0.661, 2.286 ], plate: 1.6, camera: 7.4, cameraHeight: 2.8,
 	},
+	// The owner's own 992 GT3 RS Blender model (tools/rally/import_gt3rs_zry.mjs), on the COSIER car's
+	// physics kind and engine recording unchanged: its hubs sit on the same 2.457 m wheelbase and tracks.
+	gt3rszry: {
+		id: 6, name: 'GT3RS ZRY', tag: 'Rear-engine flat-six', file: 'gt3rs_zry',
+		mass: 1450, radius: 0.359, mount: 0.584, width: 0.305, tread: 0.09, pressure: 220000, treadPattern: 'rib', sinkage: 0.02,
+		idle: 900, redline: 9000, sound: 'aster-inline-six.wav',
+		hull: [ 1.90, 4.55 ], proxy: [ 1.041, 0.675, 2.329 ], plate: 1.6, camera: 7.4, cameraHeight: 2.8,
+	},
 	// The Lamborghini-style wedge: built in Blender by tools/rally/build_fulmine_v10.py at the Huracan
 	// EVO's proportions (4.50 x 1.93 x 1.165 m), on vehicle.rs supercar(). No V10 recording yet: it
 	// borrows the Aster's six, like the Petrel GT.
