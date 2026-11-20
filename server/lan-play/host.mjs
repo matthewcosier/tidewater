@@ -90,7 +90,8 @@ export async function openGame( url, events ) {
 				if ( await walk.isVisible() ) {
 					await page.evaluate( choice => window.__ui.garage.applyChoice( choice ), m );
 					if ( m.mode === 'drive' ) await page.locator( '.garage-drive' ).click();
-					else await walk.click();
+					else if ( m.location ) await walk.click();
+					else await page.keyboard.press( 'Enter' );
 					await page.evaluate( () => {
 						window.__app.game.guide.close();
 						if ( document.pointerLockElement ) document.exitPointerLock();
