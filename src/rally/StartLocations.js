@@ -1,0 +1,1 @@
+export const STARTS = { beach: 'Beach', coast: 'Coastal road', town: 'Town backroad', mountain: 'Mountain summit', west: 'West beach entrance', east: 'East beach entrance', ferryRoad: 'Ferry road', ferry: 'Ferry terminal', joey: 'Joey Island terminal', joeyLoop: 'Joey Island road' };

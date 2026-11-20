@@ -12,11 +12,14 @@ button:active,button.held { background:#4b687b; }
 #menu { min-height:30px; padding:2px 12px; font-size:.88rem; }
 #screen { position:relative; container-type:size; min-height:0; display:grid; place-items:center; background:#030a10; overflow:hidden; }
 canvas { position:absolute; inset:0; margin:auto; width:min(100cqw,177.7778cqh); height:auto; aspect-ratio:16/9; touch-action:none; }
-#lobby { position:absolute; inset:0; display:grid; place-items:center; background:rgb(3 14 22 / 64%); }
-.card { display:grid; gap:9px; padding:16px 20px; border:1px solid #496471; border-radius:16px; background:#112531; width:min(320px,94%); }
+#lobby { position:absolute; inset:0; overflow:auto; overscroll-behavior:contain; background:rgb(3 14 22 / 72%); padding:6px; }
+.lobby-inner { width:min(850px,100%); margin:auto; }
+#resume { margin-bottom:6px; }
+body:has(#lobby:not([hidden])) #controls { display:none; }
+body:has(#lobby:not([hidden])) main { grid-template-rows:auto minmax(0,1fr); }
 h1 { font-size:1.35rem; margin:0; }
 p { margin:0 0 3px; color:#c1d2db; font-size:.9rem; }
-#drive,.gas,#resume { color:#082326; background:#63dcd0; border-color:#70e8db; font-weight:650; }
+.gas,#resume { color:#082326; background:#63dcd0; border-color:#70e8db; font-weight:650; }
 .gas.held { background:#a0f2e9; }
 #controls,.group,.actions { display:flex; align-items:center; justify-content:space-between; gap:6px; }
 #controls { padding:8px 2px; user-select:none; }

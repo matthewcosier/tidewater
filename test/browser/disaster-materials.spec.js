@@ -8,7 +8,7 @@ test.beforeEach(async({page},info)=>{
  page.on('console',message=>{if(message.type()==='error'){logs.push({kind:'console',message:message.text()});console.error('Runtime console error:',message.text());}});
 });
 test.afterEach(async({},info)=>{await writeFile(info.outputPath('runtime-errors.json'),JSON.stringify(runtimeLogs.get(info)||[],null,2));});
-async function ready(page){await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.getByRole('button',{name:'Click to explore',exact:true}).click();await page.getByRole('button',{name:'Skip',exact:true}).click();await page.getByRole('button',{name:'Disasters',exact:true}).click();}
+async function ready(page){await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.getByRole('button',{name:'Walk instead',exact:true}).click();await page.getByRole('button',{name:'Skip',exact:true}).click();await page.getByRole('button',{name:'Disasters',exact:true}).click();}
 const status=page=>page.getByRole('status',{name:'Disaster simulation'});
 
 test('Extreme tsunami: entered3000m crest drives the shared water, survives pause and restores bounds',async({page})=>{

@@ -6,7 +6,7 @@ function mean(image,x,y,w,h){let sum=0,count=0;for(let j=Math.floor(y);j<y+h;j++
 test('Moving fighter keeps stable airframe lighting during an ordinary catapult flight',async({page},info)=>{
  const rows=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
  await test.step('Given a carrier fighter ready on the catapult',async()=>{
-  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await click(page,'Click to explore');await click(page,'Skip');
+  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await click(page,'Walk instead');await click(page,'Skip');
   await click(page,'Performance');await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();await click(page,'Collapse (H)');
   await click(page,'Aviation');await click(page,'Enter fighter');
  });

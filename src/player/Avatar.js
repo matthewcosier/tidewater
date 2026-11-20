@@ -1,3 +1,4 @@
+import { appearanceMaterial, playerAppearance } from './Appearance.js';
 import * as THREE from '../engine/index.js';
 import { SkinnedModel } from '../engine/render/Skinning.js';
 import { parseGLB } from '../engine/loaders/GLTF.js';
@@ -83,6 +84,7 @@ export class Avatar {
 		this.group.visible = false;
 		scene.add( this.group );
 		this.model = null;
+		this.appearance = playerAppearance();
 		this.source = null;
 		this.loco = [];          // [ { name, v, layer } ] by speed
 		this.actions = new Map(); // name -> layer (jumps, swim)
@@ -109,6 +111,19 @@ export class Avatar {
 
 	}
 
+	setAppearance( choice ) {
+		this.appearance = playerAppearance( choice );
+		if ( ! this.model || this.source !== 'player.glb' ) return;
+		for ( const mat of this.model.materials ) {
+			if ( ! mat.uniforms.skinTone ) continue;
+			mat.set( 'skinTone', this.appearance.tone );
+			mat.set( 'shirtStyle', this.appearance.shirt );
+		}
+		for ( const mesh of this.model.meshes ) {
+			if ( mesh.material.name === 'skinned-hat' ) mesh.visible = this.appearance.hat;
+		}
+	}
+
 	async load( urls ) {
 
 		for ( const url of urls ) {
@@ -125,7 +140,7 @@ export class Avatar {
 			}
 
 			if ( ! gltf || ! gltf.skins.length ) continue;
-			this.setup( await SkinnedModel.create( gltf, { materials: ( info ) => info.name === 'opacity' ? HAIR : null } ), gltf, url );
+			this.setup( await SkinnedModel.create( gltf, { materials: ( info ) => info.name === 'opacity' ? HAIR : url.endsWith( '/player.glb' ) ? appearanceMaterial( info.name ) : null } ), gltf, url );
 			return;
 
 		}
@@ -254,6 +269,7 @@ export class Avatar {
 		this.neckH = neck >= 0 ? W[ neck * 16 + 13 ] : 1.5;
 		this.eyeAboveNeck = head >= 0 && neck >= 0 ? W[ head * 16 + 13 ] - W[ neck * 16 + 13 ] + 0.09 : 0.17;
 		this.model = model;
+		this.setAppearance( this.appearance );
 		this.group.add( model.group );
 		// the ski vest (src/jetski/Vest.js): worn on the ski and after a throw while he is in the water or tumbling
 		this.vest = null;

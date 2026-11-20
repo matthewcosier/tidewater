@@ -22,7 +22,7 @@ test.beforeEach( async ( { page }, info ) => {
 	await page.route( 'https://fonts.googleapis.com/**', r => r.fulfill( { contentType: 'text/css', body: '' } ) );
 	await page.goto( '/?scale=1&noAudio' );
 	await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120000 } );
-	await page.getByRole( 'button', { name: 'Click to explore', exact: true } ).click();
+	await page.getByRole( 'button', { name: 'Walk instead', exact: true } ).click();
 	await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 	await page.getByRole( 'button', { name: 'Performance', exact: true } ).click();
 	await page.getByRole( 'radiogroup', { name: 'Resolution', exact: true } ).getByRole( 'radio', { name: 'Standard', exact: true } ).click();

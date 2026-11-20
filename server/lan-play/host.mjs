@@ -34,7 +34,7 @@ export async function openGame( url, events ) {
 		} );
 		const capture = { format: 'jpeg', quality: 72, maxWidth: width, maxHeight: height, everyNthFrame: 1 };
 		await cdp.send( 'Page.startScreencast', capture );
-		await page.getByRole( 'button', { name: 'Click to explore' } ).waitFor( { timeout: 180000 } );
+		await page.getByRole( 'button', { name: 'Walk instead', exact: true } ).waitFor( { timeout: 180000 } );
 		let idle = false, picker = null;
 		async function setIdle( value ) {
 			if ( value === idle ) return;
@@ -84,25 +84,24 @@ export async function openGame( url, events ) {
 					window.dispatchEvent( new MouseEvent( 'mousemove', { movementX: x, movementY: y } ) );
 					window.dispatchEvent( new MouseEvent( 'mouseup', { button: 2 } ) );
 				}, [ m.x, m.y ] );
-			} else if ( m.type === 'start' && [ 'gt3', 'walk' ].includes( m.mode ) ) {
+			} else if ( m.type === 'start' ) {
 				await release();
-				const start = page.getByRole( 'button', { name: 'Click to explore' } );
-				const firstStart = await start.isVisible();
-				if ( firstStart ) await start.click();
-				const skip = page.getByRole( 'button', { name: 'Skip', exact: true } );
-				if ( firstStart || await skip.isVisible() ) await skip.click( { timeout: 20000 } );
-				await page.evaluate( mode => {
-					const app = window.__app, rally = app.rally;
-					if ( mode === 'walk' ) {
-						if ( rally.active ) rally.leave();
-					} else {
-						rally.destination = 'coast';
-						if ( rally.vehicleKey !== 'gt3rs' ) rally.selectVehicle( 'gt3rs' );
-						else rally.reset();
-						if ( ! rally.active ) rally.enter();
-					}
-					app.engine.domElement.focus();
-				}, m.mode );
+				const walk = page.getByRole( 'button', { name: 'Walk instead', exact: true } );
+				if ( await walk.isVisible() ) {
+					await page.evaluate( choice => {
+						const garage = window.__ui.garage;
+						garage.appearance = choice.appearance;
+						if ( choice.mode === 'drive' ) {
+							garage.selectCar( choice.car );
+							garage.location.value = choice.location;
+						}
+					}, m );
+					if ( m.mode === 'drive' ) await page.locator( '.garage-drive' ).click();
+					else await walk.click();
+					if ( await page.evaluate( () => __app.game.guide._wait >= 0 || __app.game.guide.open ) )
+						await page.getByRole( 'button', { name: 'Skip', exact: true } ).click( { timeout: 20000 } );
+				} else await page.evaluate( choice => window.__app.startIsland( choice ), m );
+				await page.locator( '#app canvas' ).focus();
 			}
 		}
 		const state = () => page.evaluate( () => ( { driving: !!__app.rally.active, car: __app.rally.vehicleKey,

@@ -30,7 +30,7 @@ test( 'Trees bend, snap or uproot with their crowns intact under a tornado and t
 		await page.route( 'https://fonts.googleapis.com/**', r => r.fulfill( { contentType: 'text/css', body: '' } ) );
 		await page.goto( `/?scale=${ process.env.PW_RENDER_SCALE ?? '0.5' }&noAudio` );
 		await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120000 } );
-		await page.getByRole( 'button', { name: 'Click to explore', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Walk instead', exact: true } ).click();
 		await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 		await page.getByRole( 'button', { name: 'Disasters', exact: true } ).click();
 	} );
