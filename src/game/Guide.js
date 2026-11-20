@@ -301,7 +301,7 @@ export class Guide {
 		const ui = this.ui, g = this.game, app = g.app, p = app.player;
 
 		// the intro, once the start overlay is gone
-		if ( this._wait >= 0 && ! ui._start ) {
+		if ( this._wait >= 0 && ! ui._start && ! document.querySelector( 'dialog[open]' ) ) {
 
 			this._wait -= dt;
 			if ( this._wait < 0 ) this.show( 0 );

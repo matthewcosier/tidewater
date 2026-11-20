@@ -1,0 +1,23 @@
+.tw-pad-menu {
+	box-sizing: border-box; position: fixed; inset: 12px 12px auto auto; margin: 0;
+	width: min(340px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto;
+	color: #edf7fa; background: rgba(13,31,39,.97); border: 1px solid #89a6a74d;
+	border-radius: 14px; padding: 16px; font: 14px/1.4 Inter, system-ui, sans-serif;
+}
+.tw-pad-menu::backdrop { background: rgba(4,14,18,.24); }
+.tw-pad-menu header, .tw-pad-menu footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.tw-pad-menu h2 { font-size: 21px; margin: 0; }
+.tw-pad-menu small, .tw-pad-menu p { color: #b5d2cc; }
+.tw-pad-menu button { color: inherit; font: inherit; cursor: pointer; padding: 8px 11px; background: #264047; border: 1px solid #577977; border-radius: 8px; }
+.tw-pad-menu dl { display: grid; grid-template-columns: 1fr auto; margin: 12px 0; }
+.tw-pad-menu dt, .tw-pad-menu dd { padding: 5px 0; margin: 0; border-top: 1px solid #a5bfbc28; }
+.tw-pad-menu dd { text-align: right; color: #99e5cf; font-weight: 600; }
+.tw-pad-menu p { margin: 10px 0 0; font-size: 12px; }
+.using-controller .tw-root :focus { outline: 3px solid #94f2d2; outline-offset: 2px; }
+.using-controller .rh-keys, .using-controller .rh-recover, .using-controller .fy-keys,
+.using-controller .tw-start-keys > span { display: none; }
+.using-controller .rh-dock.is-driving:not(.is-pad-picker) { opacity: 0; pointer-events: none; }
+.using-controller .rh-dock.is-pad-picker { opacity: 1; pointer-events: auto; }
+.using-controller .tw-start-keys::after { content: 'D-pad  Navigate   ·   A  Select'; }
+.using-controller .gm-guide-hint { font-size: 0; }
+.using-controller .gm-guide-hint::after { content: 'A Select · B Skip'; font-size: .75rem; }

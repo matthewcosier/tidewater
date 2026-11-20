@@ -183,21 +183,8 @@ export class RallyDrive {
 		this.place( spawn );
 	}
 
-	// Standard-mapping gamepad: left stick steers, right/left triggers are throttle/brake,
-	// A or right bumper is the handbrake, Y recovers and B bails out (on press). Null without a pad.
-	gamepad() {
-		const pads = navigator.getGamepads?.() || [];
-		const pad = [ ...pads ].find( p => p && p.connected && p.mapping === 'standard' ) || [ ...pads ].find( p => p && p.connected );
-		if ( ! pad ) return null;
-		const button = i => pad.buttons[ i ]?.value ?? ( pad.buttons[ i ]?.pressed ? 1 : 0 );
-		const x = pad.axes[ 0 ] || 0, dead = 0.12;
-		const recover = button( 3 ) > 0.5 && ! this.padRecover;
-		this.padRecover = button( 3 ) > 0.5;
-		const yeet = button( 1 ) > 0.5 && ! this.padYeet;
-		this.padYeet = button( 1 ) > 0.5;
-		return { steer: Math.abs( x ) < dead ? 0 : Math.sign( x ) * ( Math.abs( x ) - dead ) / ( 1 - dead ),
-			throttle: button( 7 ), brake: button( 6 ), handbrake: button( 0 ) > 0.5 || button( 5 ) > 0.5, recover, yeet };
-	}
+	// The jet ski and the car share the same sampled steering and pedals.
+	gamepad() { return this.app.controller?.driving; }
 
 	// Disaster fractures ask here instead of rebuilding inline. A tornado frame could break a
 	// house and fell trees together, and each rebuild walks every trunk, box and cylinder on the
@@ -356,6 +343,7 @@ export class RallyDrive {
 		const pad = controls ? this.gamepad() : null;
 		if ( controls && ( input.hit( 'KeyR' ) || pad?.recover ) ) this.recover();
 		if ( controls && input.hit( 'KeyE' ) ) this.leave();
+		if ( controls && input.hit( 'Repair' ) ) this.repair();
 		if ( controls && input.hit( 'KeyJ' ) ) this.toggleAssists();
 		if ( controls && ( input.hit( 'KeyY' ) || pad?.yeet ) ) this.yeet();
 		const down = code => controls && this.active && input.down( code );

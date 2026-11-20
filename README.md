@@ -169,11 +169,17 @@ engine, steering and wheels, through steam and smoke to fire. **T** repairs.
 | Handbrake | Space | A or right bumper |
 | Recover: back on its wheels on clear ground nearby | R | Y |
 | Bail out: jump from the moving car, tumble to a stop and walk (the car rolls on) | Y | B |
-| Repair the car | T | |
-| Leave the car | E | |
-| Free camera (press again to return) | F | |
-| Show or hide the key hints | K | |
-| Look around the car (settles back behind) | Mouse or drag | |
+| Repair the car | T | D-pad up |
+| Leave the car | E | X |
+| Free camera (press again to return) | F | D-pad down |
+| Show or hide the key hints | K | View |
+| Look around the car (settles back behind) | Mouse or drag | Right stick |
+
+On a standard gamepad, **A** selects a menu item and **B** goes back. Use the D-pad or left stick to navigate, and left/right to adjust a picker. Press **Menu** during play for the bindings in your current mode, the car picker, or settings.
+
+On foot and on deck, use the **left stick** to move, **right stick** to look, **L3** to sprint, **A** to jump or swim up, **B** to crouch or dive, **X** to interact, and **Y** to change view. **D-pad down** enters or leaves the free camera. In free camera, **A/B** rise and descend.
+
+At the ferry helm, the **left stick** turns the wheel and **RT/LT** raise or lower the throttle. Hold **LB** with the stick for the bow thruster. **A** stops the engines, **B** centres the wheel, **RB** sounds the horn, **D-pad up** operates the ramp, and **D-pad left** handles mooring lines. **Y** changes view and **X** leaves the helm.
 
 The **Tidewater Spirit**, a 50 m car ferry, lies in the bay. Step onto her decks to come
 aboard, walk up to the bridge and press **E** at the wheel to take her helm: **A/D** turn the

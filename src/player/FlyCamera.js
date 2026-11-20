@@ -1,3 +1,4 @@
+import { movementVector } from '../core/Input.js';
 import * as THREE from '../engine/index.js';
 
 // Free-fly debug camera: drag (or pointer lock) to look, WASD + QE to move, Shift = fast.
@@ -48,13 +49,11 @@ export class FlyCamera {
 		this.camera.getWorldDirection( this._fwd );
 		this._right.crossVectors( this._fwd, this.camera.up ).normalize();
 		const move = new THREE.Vector3();
-		if ( inp.down( 'KeyW' ) ) move.add( this._fwd );
-		if ( inp.down( 'KeyS' ) ) move.sub( this._fwd );
-		if ( inp.down( 'KeyD' ) ) move.add( this._right );
-		if ( inp.down( 'KeyA' ) ) move.sub( this._right );
+		movementVector( inp, move, this._fwd, this._right );
 		if ( inp.down( 'KeyE' ) || inp.down( 'Space' ) ) move.y += 1;
 		if ( inp.down( 'KeyQ' ) || inp.down( 'KeyC' ) ) move.y -= 1;
-		if ( move.lengthSq() > 0 ) move.normalize().multiplyScalar( speed );
+		if ( ! inp.moveX && ! inp.moveY || move.lengthSq() > 1 ) move.normalize();
+		move.multiplyScalar( speed );
 		this.velocity.lerp( move, 1 - Math.exp( - dt * 8 ) );
 		this.camera.position.addScaledVector( this.velocity, dt );
 
