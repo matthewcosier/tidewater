@@ -181,8 +181,7 @@ export class RallyPhysics {
     set_surface_map(codes: Uint8Array): boolean;
     /**
      * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Parry rows are Z, columns are X. Keep the original samples and half-texel origin.
      */
     set_terrain(heights: Float32Array, resolution: number, size: number, origin: number): boolean;
     /**
@@ -292,10 +291,10 @@ export interface InitOutput {
     readonly rallyphysics_take_impacts: (a: number) => [number, number];
     readonly rallyphysics_update_remote: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly rallyphysics_wake_prop: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
-    readonly wasm_bindgen__closure__destroy__h44f5a62f65970bcf: (a: number, b: number) => void;
-    readonly wasm_bindgen__closure__destroy__h5cefeeeb60d29d96: (a: number, b: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89: (a: number, b: number) => void;
+    readonly wasm_bindgen_cbf4d7822a5056a6___closure__destroy___dyn_core_37ee0ce0c4cd57d5___ops__function__FnMut_____Output_______: (a: number, b: number) => void;
+    readonly wasm_bindgen_cbf4d7822a5056a6___closure__destroy___dyn_core_37ee0ce0c4cd57d5___ops__function__FnMut__wasm_bindgen_cbf4d7822a5056a6___JsValue____Output___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___: (a: number, b: number) => void;
+    readonly wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke___wasm_bindgen_cbf4d7822a5056a6___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke_______true_: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

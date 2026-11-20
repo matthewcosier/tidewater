@@ -491,8 +491,7 @@ export class RallyPhysics {
     }
     /**
      * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Parry rows are Z, columns are X. Keep the original samples and half-texel origin.
      * @param {Float32Array} heights
      * @param {number} resolution
      * @param {number} size
@@ -754,13 +753,13 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 43757, function: Function { arguments: [], shim_idx: 43758, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h44f5a62f65970bcf, wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89);
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 43242, function: Function { arguments: [], shim_idx: 43243, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen_cbf4d7822a5056a6___closure__destroy___dyn_core_37ee0ce0c4cd57d5___ops__function__FnMut_____Output_______, wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke_______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 52282, function: Function { arguments: [Externref], shim_idx: 52283, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h5cefeeeb60d29d96, wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90);
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 51658, function: Function { arguments: [Externref], shim_idx: 51659, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen_cbf4d7822a5056a6___closure__destroy___dyn_core_37ee0ce0c4cd57d5___ops__function__FnMut__wasm_bindgen_cbf4d7822a5056a6___JsValue____Output___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___, wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke___wasm_bindgen_cbf4d7822a5056a6___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___true_);
             return ret;
         },
         __wbindgen_init_externref_table: function() {
@@ -779,12 +778,12 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89(arg0, arg1) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89(arg0, arg1);
+function wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke_______true_(arg0, arg1) {
+    wasm.wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke_______true_(arg0, arg1);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90(arg0, arg1, arg2);
+function wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke___wasm_bindgen_cbf4d7822a5056a6___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___true_(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen_cbf4d7822a5056a6___convert__closures_____invoke___wasm_bindgen_cbf4d7822a5056a6___JsValue__core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_cbf4d7822a5056a6___JsError___true_(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }

@@ -1,5 +1,9 @@
 import { test } from 'node:test';
+import { LaunchCounter } from './helpers/road-launches.mjs';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import init, { RallyPhysics } from '../public/rally/rally_physics.js';
+import { terrainMaterialCodes } from '../src/rally/WorldPhysics.js';
 import { TerrainData } from '../src/world/TerrainData.js';
 import { CoastalRoute } from '../src/world/CoastalRoute.js';
 import { applyTerminalSite, PLACES } from '../src/ferry/Terminal.js';
@@ -57,4 +61,45 @@ test( 'Every crest and sag is a rolling vertical curve, never a kink', () => {
 		}
 	}
 	assert.equal( kinks.length, 0, `${ kinks.length } kinks, e.g. ${ kinks.slice( 0, 4 ).join( '; ' ) }` );
+} );
+
+// Drive the first uphill hairpin on the real circuit. The outside of the GT3 RS's
+// front bumper used to strike rising terrain 3.13 m from the centre of the road,
+// inside its 3.2 m graded shoulder. No rail or other island collider is needed.
+test( 'The uphill switchback supports a GT3 RS through the turn', async t => {
+	await init( { module_or_path: await readFile( new URL( '../public/rally/rally_physics_bg.wasm', import.meta.url ) ) } );
+	const sim = new RallyPhysics(), points = route.circuit.points, dt = 1 / 120;
+	const start = 442, finish = 534, a = points[ start ], b = points[ start + 1 ];
+	const clamp = ( n, lo, hi ) => Math.min( hi, Math.max( lo, n ) );
+	try {
+		assert.ok( sim.set_terrain( terrain.heights, terrain.res, terrain.size, terrain.origin ) );
+		assert.ok( sim.set_roads( route.physicsData() ) );
+		sim.set_surface_map( terrainMaterialCodes( terrain ) );
+		assert.ok( sim.select_vehicle( 6 ) );
+		sim.reset( a.x, terrain.heightAt( a.x, a.z ) + 0.45, a.z, Math.atan2( b.x - a.x, b.z - a.z ) );
+		for ( let tick = 0; tick < 180; tick ++ ) sim.advance( dt, 0, 0, 0, 1 );
+
+		const flights = new LaunchCounter();
+		let point = start, peakSpeed = 0;
+		for ( let tick = 0; tick < 2400 && point < finish; tick ++ ) {
+			const state = sim.snapshot(), [ x, , z, qx, qy, qz, qw, speed ] = state;
+			peakSpeed = Math.max( peakSpeed, speed );
+			flights.observe( state );
+
+			// Follow the centreline with the same speed-dependent look-ahead each run.
+			const distance = p => Math.hypot( points[ p ].x - x, points[ p ].z - z );
+			const end = Math.min( point + 24, finish + 1 );
+			for ( let j = point + 1; j < end; j ++ ) if ( distance( j ) < distance( point ) ) point = j;
+			const aim = points[ Math.min( finish, point + Math.max( 4, Math.round( Math.abs( speed ) * 0.15 ) ) ) ];
+			const fx = 2 * ( qx * qz + qy * qw ), fz = 1 - 2 * ( qx * qx + qy * qy );
+			const dx = aim.x - x, dz = aim.z - z, error = Math.atan2( fx * dz - fz * dx, fx * dx + fz * dz );
+			const throttle = clamp( ( 38 - speed ) * 0.14 + 0.09, 0, 1 ), brake = clamp( ( speed - 39 ) * 0.16, 0, 1 );
+			sim.advance( dt, throttle, brake, clamp( error * 3.4, - 1, 1 ), 0 );
+		}
+		t.diagnostic( `${ flights.count } launches, longest flight ${ ( flights.longest * dt ).toFixed( 3 ) } s, reached circuit point ${ point }` );
+		assert.equal( flights.count, 0, 'all four wheels were airborne for at least 0.125 s' );
+		assert.ok( point === finish && peakSpeed >= 36, 'car completed the turn at driving speed without a reset' );
+	} finally {
+		sim.free();
+	}
 } );
