@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { LaunchCounter } from './helpers/road-launches.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import init, { RallyPhysics } from '../public/rally/rally_physics.js';
@@ -78,13 +79,12 @@ test( 'The uphill switchback supports a GT3 RS through the turn', async t => {
 		sim.reset( a.x, terrain.heightAt( a.x, a.z ) + 0.45, a.z, Math.atan2( b.x - a.x, b.z - a.z ) );
 		for ( let tick = 0; tick < 180; tick ++ ) sim.advance( dt, 0, 0, 0, 1 );
 
-		let point = start, airborne = 0, longest = 0, launches = 0, peakSpeed = 0;
+		const flights = new LaunchCounter();
+		let point = start, peakSpeed = 0;
 		for ( let tick = 0; tick < 2400 && point < finish; tick ++ ) {
 			const state = sim.snapshot(), [ x, , z, qx, qy, qz, qw, speed ] = state;
 			peakSpeed = Math.max( peakSpeed, speed );
-			airborne = state[ 10 ] === 0 ? airborne + 1 : 0;
-			if ( airborne === 15 ) launches ++;
-			longest = Math.max( longest, airborne );
+			flights.observe( state );
 
 			// Follow the centreline with the same speed-dependent look-ahead each run.
 			const distance = p => Math.hypot( points[ p ].x - x, points[ p ].z - z );
@@ -96,8 +96,8 @@ test( 'The uphill switchback supports a GT3 RS through the turn', async t => {
 			const throttle = clamp( ( 38 - speed ) * 0.14 + 0.09, 0, 1 ), brake = clamp( ( speed - 39 ) * 0.16, 0, 1 );
 			sim.advance( dt, throttle, brake, clamp( error * 3.4, - 1, 1 ), 0 );
 		}
-		t.diagnostic( `${ launches } launches, longest flight ${ ( longest * dt ).toFixed( 3 ) } s, reached circuit point ${ point }` );
-		assert.equal( launches, 0, 'all four wheels were airborne for at least 0.125 s' );
+		t.diagnostic( `${ flights.count } launches, longest flight ${ ( flights.longest * dt ).toFixed( 3 ) } s, reached circuit point ${ point }` );
+		assert.equal( flights.count, 0, 'all four wheels were airborne for at least 0.125 s' );
 		assert.ok( point === finish && peakSpeed >= 36, 'car completed the turn at driving speed without a reset' );
 	} finally {
 		sim.free();

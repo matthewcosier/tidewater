@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { LaunchCounter } from './helpers/road-launches.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import init, { RallyPhysics } from '../public/rally/rally_physics.js';
@@ -98,21 +99,26 @@ test( 'A GT3 RS can drive through the Joey terminal junction without a launch', 
 			assert.ok( sim.select_vehicle( 6 ) );
 			sim.reset( start.x, terrain.heightAt( start.x, start.z ) + 0.45, start.z, Math.atan2( dx, dz ) );
 			for ( let tick = 0; tick < 240; tick ++ ) sim.advance( dt, 0, 0, 0, 1 );
-			let state = sim.snapshot(), distance = 0, peakSpeed = 0, longestFlight = 0, airborne = 0, launches = 0;
+			let state = sim.snapshot(), distance = 0, enteredAtSpeed = false;
+			const flights = new LaunchCounter();
 			for ( let tick = 0; tick < 1200 && distance < length; tick ++ ) {
 				const throttle = Math.min( 1, Math.max( 0, 0.12 + ( kmh - state[ 7 ] ) * 0.15 ) );
 				const brake = Math.min( 1, Math.max( 0, ( state[ 7 ] - kmh - 2 ) * 0.1 ) );
 				sim.advance( dt, throttle, brake, 0, 0 );
 				state = sim.snapshot();
 				distance = ( dx * ( state[ 0 ] - start.x ) + dz * ( state[ 2 ] - start.z ) ) / length;
-				peakSpeed = Math.max( peakSpeed, state[ 7 ] );
-				airborne = state[ 10 ] === 0 ? airborne + 1 : 0;
-				if ( airborne === 15 ) launches ++;
-				longestFlight = Math.max( longestFlight, airborne );
+				// The first snag was at station 56 m. Check the approach before contact can slow the car.
+				if ( distance >= 54 && distance < 55 ) {
+					const offset = ( dz * ( state[ 0 ] - start.x ) - dx * ( state[ 2 ] - start.z ) ) / length;
+					enteredAtSpeed ||= Math.abs( state[ 7 ] - kmh ) < 2 && Math.abs( offset ) < 0.5 &&
+						route.surfaceAt( state[ 0 ], state[ 2 ] )?.kind === 'asphalt';
+				}
+				flights.observe( state );
 			}
-			t.diagnostic( `${ kmh } km/h: ${ launches } launches, longest time with every wheel airborne ${ ( longestFlight * dt ).toFixed( 3 ) } s` );
-			assert.ok( distance >= length && peakSpeed >= kmh - 2, 'car completed the approach at speed' );
-			assert.equal( launches, 0, `car launched on the ${ kmh } km/h pass` );
+			t.diagnostic( `${ kmh } km/h: ${ flights.count } launches, longest time with every wheel airborne ${ ( flights.longest * dt ).toFixed( 3 ) } s` );
+			assert.ok( enteredAtSpeed, 'car entered the defect on its asphalt line at the target speed' );
+			assert.ok( distance >= length, 'car crossed the junction' );
+			assert.equal( flights.count, 0, `car launched on the ${ kmh } km/h pass` );
 		} finally {
 			sim.free();
 		}
