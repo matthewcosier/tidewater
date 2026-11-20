@@ -16,6 +16,8 @@ squashy555, Soojay, coalcon, dubminister, nathankwright, SorenF109, LaScienceMus
 tosha73, paulprit, Mrthenoronha, mwchristian95, MrFossy, BranndyBottle, JoelMcDaniel, khenshom, ramattahatta,
 RatBird and Anthousai.
 
+The rally cars use Dorian Clair’s CC0 recordings of sliding tyres. [Vehicle audio credits](public/rally/audio/CREDITS.md)
+
 ## Scanned beach debris: `public/models/debris/`
 
 Photogrammetry models from [Poly Haven](https://polyhaven.com), under

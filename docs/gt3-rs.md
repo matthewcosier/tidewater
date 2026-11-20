@@ -4,6 +4,14 @@ The factory white-and-red car uses the COSIER studio mesh, red wheels, side grap
 
 Choose **COSIER GT3 RS** and **Coastal road** in the vehicle picker. W accelerates, S brakes or reverses, A/D steer, Space applies the rear handbrake and E enters or leaves. Hold W and S together at rest to stage a rear-drive burnout. Release S to launch. J toggles traction and stability assistance. R recovers the car and T repairs it.
 
+## Donuts at the ferry terminal
+
+Choose either GT3 and **Ferry terminal**. From a standstill, press J to switch aids off, hold D, S and W until the rear tyres spin, then release S and keep holding W and D. Steer the other way with A for a left-hand donut.
+
+The yard’s exported collision mesh supports the tyres at 3.225 m above sea level over a 3.10 m reclaimed flat. Rubber should sit 12 mm above the supporting asphalt. Use the same oriented boxes as the wheel solver at both terminals and break the ribbon when its support height changes. Moving decks, water and unloaded wheels leave no yard marks. The existing track mesh handles distance filtering and segment recycling. Budget one existing draw and 24,000 segments.
+
+Use one short mono loop made from two outdoor recordings of four sliding tyres. The loudness follows sliding speed and wheel load, the pitch follows slip, and the existing distance attenuation applies beyond 8 m. Regaining grip, muting the car or leaving it fades the sound. Load it on entering a vehicle. The terminal regression measures the rubber height against the shipped boxes, and the Pages driving scenario measures yaw, deposited rubber and the tyre and engine signals during a player-driven donut. [Screeching Tires #3](https://bigsoundbank.com/screeching-tires-3-s2370.html) and [Screeching Tires #4](https://bigsoundbank.com/screeching-tires-4-s2371.html)
+
 ## Physics
 
 The rear wheels drive through seven gears with a 4.27 final drive. The reference mass is 1,450 kg and the redline is 9,000 rpm. In assisted driving the front tyres steer relative to the front axle's direction of travel. Above the tyre's peak slip angle, extra steering lock would otherwise scrub speed and widen the turn. High slip on a loaded, dry contact drives tyre noise, rubber deposits and smoke. The studio rig keeps the brake callipers on the steering carriers while the discs and tyres turn on their own axles.
