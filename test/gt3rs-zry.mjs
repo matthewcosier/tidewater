@@ -23,10 +23,10 @@ const withModel = async run => {
 	try { return await run( await loadModel( car.file ) ); } finally { delete globalThis.__assetFile; }
 };
 
-test( 'the picker row is the COSIER GT3 RS physics and engine under its own name', () => {
+test( 'the ZRY has its own picker entry and shares the COSIER GT3 RS physics', () => {
 	const cosier = VEHICLES.gt3rs;
 	assert.equal( car.name, 'GT3RS ZRY' );
-	for ( const key of [ 'id', 'tag', 'mass', 'radius', 'mount', 'width', 'idle', 'redline', 'sound' ] ) assert.equal( car[ key ], cosier[ key ], key );
+	for ( const key of [ 'id', 'tag', 'mass', 'radius', 'mount', 'width', 'idle', 'redline' ] ) assert.equal( car[ key ], cosier[ key ], key );
 	assert.deepEqual( car.hull, cosier.hull );
 } );
 

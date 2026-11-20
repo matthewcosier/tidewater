@@ -6,7 +6,7 @@ Choose **GT3RS ZRY** and **Coastal road** in the vehicle picker. The controls ar
 
 ## Physics
 
-The car drives on the COSIER GT3 RS's physics kind 6 without changes: the same seven-speed gearbox, 1,450 kg mass, 9,000 rpm redline, aero and wing damage, and the same engine recording. Its row in `src/rally/Vehicles.js` repeats the COSIER figures, and `test/vehicle-parity.mjs` holds both rows to `vehicle.rs`. The wheel hubs sit on kind 6's contact patches at the model's own loaded radius. The callipers stay on the steering carriers while the discs and tyres roll.
+The car drives on the COSIER GT3 RS's physics kind 6 without changes: the same seven-speed gearbox, 1,450 kg mass, 9,000 rpm redline, aero and wing damage. It has its own GT3 RS engine recording. Its row in `src/rally/Vehicles.js` repeats the COSIER figures, and `test/vehicle-parity.mjs` holds both rows to `vehicle.rs`. The wheel hubs sit on kind 6's contact patches at the model's own loaded radius. The callipers stay on the steering carriers while the discs and tyres roll.
 
 ## Assets and verification
 

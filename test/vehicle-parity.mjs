@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { VEHICLES } from '../src/rally/Vehicles.js';
 
 const rust = readFileSync( new URL( '../rally-physics/src/vehicle.rs', import.meta.url ), 'utf8' );
@@ -39,5 +40,15 @@ test( 'each car draws its wheels and its rev gauge from its own physics config',
 		}
 		// CarWater samples the sea under this footprint; a car with no row threw every frame.
 		assert.deepEqual( car.hull, physics.hull, `${ key } hull: Vehicles.js ${ car.hull }, vehicle.rs body ${ physics.hull }` );
+	}
+} );
+
+test( 'each drivable car ships a distinct engine recording', () => {
+	const recordings = new Set();
+	for ( const car of Object.values( VEHICLES ) ) {
+		const audio = readFileSync( new URL( `../public/rally/audio/${ car.sound }`, import.meta.url ) );
+		const hash = createHash( 'sha256' ).update( audio ).digest( 'hex' );
+		assert.ok( ! recordings.has( hash ), `${ car.name } reuses another car's engine recording` );
+		recordings.add( hash );
 	}
 } );
