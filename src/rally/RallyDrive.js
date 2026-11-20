@@ -121,6 +121,7 @@ export class RallyDrive {
 			this.lights[ key ] = new CarLights( this.app.localLights, car.root );
 		}
 		this.tracks = new TyreTracks( scene, terrain );
+		this.tracks.setPaving( statics );
 		this.damage = new Damage( this );
 		this.cameraColliders = new Colliders();
 		this.cameraColliders.boxes = colliders.boxes.slice();
@@ -199,6 +200,7 @@ export class RallyDrive {
 		this.trunks=trunkCylinders(this.app.vegetation,this.app.terrainData);
 		this.physics.add_cylinders(this.trunks);
 		const boxes=colliders.boxes.filter(b=>(b.solid||b.walkable)&&!b.prop&&b!==this.walkingProxy);
+		this.tracks.setPaving( boxes );
 		this.physics.add_surface_boxes(new Float32Array(boxes.flatMap(b=>[...carBox(b),b.rotY,b.tag.includes("pier")?0.8:0.65])),new Uint8Array(boxes.map(b=>b.tag==="terminal-car"?SURFACE_ASPHALT:SURFACE_WOOD)));
 		this.physics.add_cylinders(new Float32Array(colliders.cylinders.filter(c=>!c.prop&&c.yMax>c.yMin).flatMap(c=>[c.x,c.z,c.radius,c.yMin,c.yMax])));
 	}

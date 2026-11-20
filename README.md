@@ -84,7 +84,7 @@ To play this branch locally, run `npm ci` followed by `npm run dev`. The [origin
 | Mouse | Look (click to capture the mouse, Esc to release) |
 | Shift | Sprint / boat boost |
 | Space | Jump / swim up / car handbrake |
-| W + S | Hold both pedals near a standstill for a rear-drive burnout. Release S to launch. |
+| W + S | Hold both pedals near a standstill for a rear-drive burnout. Release S to launch. For a donut in either GT3, choose **Ferry terminal**, switch aids off with J, hold W + S and full steering, then release only S. |
 | J | Toggle driving aids. Switch them off for deliberate power slides. |
 | C | Crouch / dive |
 | E | Interact: board the boat, take or leave the helm, step ashore, enter or leave a car, trade with the fish buyer or the chandlery |

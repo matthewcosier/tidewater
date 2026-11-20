@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { Terminal } from '../src/ferry/Terminal.js';
+import { TERMINAL_SITE } from '../src/ferry/terminalSite.js';
+import { Colliders } from '../src/world/Colliders.js';
 import { Scene } from '../src/engine/index.js';
 import { TyreTracks } from '../src/rally/TyreTracks.js';
 import { VEHICLES } from '../src/rally/Vehicles.js';
@@ -180,4 +184,35 @@ test( 'stationary spinning rear tyres leave two contact patches without filling 
 	const p = tracks.attributes.position.array;
 	const length = Math.abs( p[ 2 ] - p[ 5 ] );
 	assert.ok( length >= 0.04 && length < 0.24, `rubber contact length ${ length.toFixed( 3 ) } m` );
+} );
+
+for ( const place of [ 'tidewater', 'joey' ] ) test( `Sliding tyres deposit rubber on the raised ${ place } ferry yard`, () => {
+	const colliders = new Colliders(), terminal = new Terminal( { colliders }, place );
+	terminal.addColliders( JSON.parse( readFileSync( new URL( '../public/ferry/terminal_colliders.json', import.meta.url ) ) ) );
+	const { x, z, yaw } = terminal.queueSpot();
+	const terrainY = terminal.position.y + TERMINAL_SITE.fill[ 0 ].height;
+	const top = colliders.groundHeightAt( x, z, terrainY + 0.25 );
+	assert.ok( top - terrainY > 0.1 );
+	const yard = { ...terrain( false ), heightAt: () => terrainY };
+	const tracks = new TyreTracks( new Scene(), yard, 128 );
+	tracks.setPaving?.( colliders.boxes );
+	for ( const rich of [ true, false ] ) {
+		const before = tracks.count;
+		const pass = ( offset, height, kind ) => {
+			for ( const step of [ 0, 0.5 ] ) tracks.emit( 'rs', car( x + offset + step, z, yaw, { rich, height, kind, slip: 1, ratio: 1 } ), VEHICLES.gt3rs );
+			tracks.reset( 'rs' );
+		};
+		pass( 0, top + 1, 3 );
+		pass( 1000, top, 3 );
+		if ( rich ) pass( 0, top, 5 );
+		assert.equal( tracks.count, before, 'air, moving decks and points beyond the pad leave no rubber' );
+		pass( 0, top, 3 );
+		assert.ok( tracks.skids > before, 'rubber reaches the raised pavement' );
+		assert.ok( vertexValues( tracks, 'position', 1, before ).every( y => Math.abs( y - top - 0.012 ) < 0.0001 ) );
+		assert.ok( vertexValues( tracks, 'normal', 1, before ).every( ny => ny === 1 ) );
+	}
+	tracks.setPaving?.( [] );
+	const before = tracks.count;
+	for ( const step of [ 0, 0.5 ] ) tracks.emit( 'rs', car( x + step, z, yaw, { rich: true, height: top, kind: 3, slip: 1 } ), VEHICLES.gt3rs );
+	assert.equal( tracks.count, before, 'removing the supporting collider stops deposition' );
 } );
