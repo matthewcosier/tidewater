@@ -209,7 +209,7 @@ npm run dev      # http://127.0.0.1:5189
 npm run build    # static build in dist/
 ```
 
-Every push to `main` deploys to GitHub Pages through `.github/workflows/deploy.yml`.
+Every push to the fork’s default branch, `playable`, deploys the single-player build to GitHub Pages. Run `npm run test:pages` to exercise the production build under the project URL before publishing.
 
 ## Project layout
 
