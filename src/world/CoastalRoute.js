@@ -304,6 +304,11 @@ export class CoastalRoute {
 		for ( let i = 0; i < path.points.length - 1; i ++ ) {
 			const a = path.points[ i ], b = path.points[ i + 1 ], length = distance( a, b );
 			const segment = { a, b, length, path, first: i === 0, last: i === path.points.length - 2 };
+			// Compare the incoming and outgoing headings over about one car length.
+			const before = path.points[ Math.max( 0, i - 4 ) ], after = path.points[ Math.min( path.points.length - 1, i + 5 ) ];
+			const incoming = distance( before, b ), outgoing = distance( a, after );
+			segment.turnX = ( after.x - a.x ) / outgoing - ( b.x - before.x ) / incoming;
+			segment.turnZ = ( after.z - a.z ) / outgoing - ( b.z - before.z ) / incoming;
 			accumulated += length; b.distance = accumulated; this.segments.push( segment );
 			for ( let x = Math.floor( ( Math.min( a.x, b.x ) - pad ) / CELL ); x <= Math.floor( ( Math.max( a.x, b.x ) + pad ) / CELL ); x ++ ) {
 				for ( let z = Math.floor( ( Math.min( a.z, b.z ) - pad ) / CELL ); z <= Math.floor( ( Math.max( a.z, b.z ) + pad ) / CELL ); z ++ ) {
@@ -351,7 +356,13 @@ export class CoastalRoute {
 		for ( const segment of this.near( wx, wz ) ) {
 			const p = this.project( segment, wx, wz ), { a, b } = segment;
 			const bank = a.bank ? a.bank + ( b.bank - a.bank ) * clamp( p.raw, 0, 1 ) : 3.5;
-			const width = p.path.halfWidth, blend = 1 - smooth( ( p.distance - width - 0.5 ) / bank );
+			const width = p.path.halfWidth;
+			// At the outside of a bend, a corner of the car sweeps over the shoulder.
+			// Extend its cut by up to a terrain cell's diagonal so interpolation from
+			// the uphill bank cannot put a step under that corner. Taper on the straights.
+			const outward = p.distance ? ( ( p.x - wx ) * segment.turnX + ( p.z - wz ) * segment.turnZ ) / p.distance : 0;
+			p.shoulder = 0.5 + ( p.path.kind === 'asphalt' ? clamp( outward * width, 0, 1 ) * Math.SQRT2 * this.terrain.texel : 0 );
+			const blend = 1 - smooth( ( p.distance - width - p.shoulder ) / bank );
 			if ( blend <= 0 ) continue;
 			p.blend = blend; p.along = a.distance + clamp( p.raw, 0, 1 ) * segment.length;
 			p.target = p.h + 0.035 * ( 1 - clamp( p.distance / width, 0, 1 ) );
@@ -372,7 +383,7 @@ export class CoastalRoute {
 		}
 		const nearest = picked[ 0 ];
 		// On the seal and its shoulder the nearest road rules, so every road keeps its profile.
-		if ( nearest.distance < nearest.path.halfWidth + 0.5 ) return { nearest, target: nearest.target, blend: nearest.blend, road: true };
+		if ( nearest.distance < nearest.path.halfWidth + nearest.shoulder ) return { nearest, target: nearest.target, blend: nearest.blend, road: true };
 		let sum = 0, weighted = 0, strongest = 0;
 		for ( const p of picked ) { sum += p.blend; weighted += p.blend * p.target; strongest = Math.max( strongest, p.blend ); }
 		return { nearest, target: weighted / sum, blend: strongest, road: false };
