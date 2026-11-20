@@ -339,7 +339,7 @@ export class AppUI {
 		if ( app.freeCam ) {
 
 			ui.setMode( 'Free camera' );
-			ui.setPrompt( 'F', app.rally?.active ? 'Return to car' : app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Dive' : 'Walk' );
+			ui.setPrompt( app.controller?.active ? ( app.controller.hints ? '↓' : null ) : 'F', app.rally?.active ? 'Return to car' : app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Dive' : 'Walk' );
 			ui.setBoatGauges( { visible: false } );
 			ui.setDepth( { visible: false } );
 			return;
@@ -359,7 +359,16 @@ export class AppUI {
 			: p.mode === 'ragdoll' ? ( p.rag?.phase === 'getup' ? 'Getting up' : p.rag?.phase === 'swim' ? 'Swimming' : 'Tumbling' )
 			: p.mode === 'swim' ? ( app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Diving' : 'Swimming' ) : 'Walking';
 		ui.setMode( mode );
-		if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
+		if ( app.controller?.active && app.controller.context() ) {
+			if ( ! app.controller.hints ) ui.setPrompt( null );
+			else if ( p.mode === 'rally' ) {
+				const stuck = app.rally.hud?.recover?.hidden === false;
+				ui.setPrompt( stuck ? 'Y' : 'X', stuck ? 'Recover car' : 'Leave car' );
+			} else if ( p.mode === 'ferry-helm' ) ui.setPrompt( 'X', 'Leave helm' );
+			else if ( p.prompt?.key === 'E' ) ui.setPrompt( 'X', p.prompt.text );
+			else ui.setPrompt( '☰', 'Controls' );
+		}
+		else if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
 		else ui.setPrompt( null );
 
 		const b = app.boatCtl;

@@ -1,3 +1,15 @@
+// Keyboard takes precedence while a movement key is held.
+export function movementAxis( input, positive, negative, stick = 0 ) {
+	return Number( input.down( positive ) ) - Number( input.down( negative ) ) || stick;
+}
+
+// Direction in a mode's local frame. Keep a light stick proportional and limit
+// diagonal travel to the same top speed as a single keyboard direction.
+export function movementVector( input, out, forward, right ) {
+	return out.copy( forward ).multiplyScalar( movementAxis( input, 'KeyW', 'KeyS', input.moveY ) )
+		.addScaledVector( right, movementAxis( input, 'KeyD', 'KeyA', input.moveX ) );
+}
+
 // Keyboard / mouse input with pointer lock support.
 export class Input {
 
@@ -6,6 +18,8 @@ export class Input {
 		this.dom = dom;
 		this.keys = new Set();
 		this.pressed = new Set();
+		this.padHeld = new Set();
+		this.padHits = new Set();
 		this.look = { x: 0, y: 0 };
 		this.wheel = 0;
 		this.mouseDown = false;
@@ -70,14 +84,14 @@ export class Input {
 
 	down( code ) {
 
-		return this.enabled && this.keys.has( code );
+		return this.enabled && ( this.keys.has( code ) || this.padHeld.has( code ) );
 
 	}
 
 	// true once per physical key press
 	hit( code ) {
 
-		return this.enabled && this.pressed.has( code );
+		return this.enabled && ( this.pressed.has( code ) || this.padHits.has( code ) );
 
 	}
 

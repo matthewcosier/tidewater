@@ -1,3 +1,4 @@
+import { movementVector } from '../core/Input.js';
 import * as THREE from '../engine/index.js';
 import { WORLD } from '../world/WorldLayout.js';
 import { HOUSE } from '../world/boat/Wheelhouse.js';
@@ -713,11 +714,8 @@ export class Player {
 		_fwd.set( - Math.sin( this.yaw ), 0, - Math.cos( this.yaw ) );
 		_right.set( - _fwd.z, 0, _fwd.x );
 		const wish = new THREE.Vector3();
-		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) wish.sub( _right );
-		if ( wish.lengthSq() > 0 ) wish.normalize();
+		movementVector( inp, wish, _fwd, _right );
+		if ( wish.lengthSq() > 1 ) wish.normalize();
 
 		const depth = this.waterH - this.position.y; // water depth at the feet
 		const wade = THREE.MathUtils.clamp( depth / 1.2, 0, 1 );
@@ -880,13 +878,10 @@ export class Player {
 		_fwd.set( 0, 0, - 1 ).applyEuler( _e.set( this.pitch, this.yaw, 0 ) );
 		_right.set( - Math.cos( this.yaw ), 0, Math.sin( this.yaw ) ).negate();
 		const wish = new THREE.Vector3();
-		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) wish.sub( _right );
+		movementVector( inp, wish, _fwd, _right );
 		if ( inp.down( 'Space' ) ) wish.y += 1;
 		if ( inp.down( 'KeyC' ) || inp.down( 'ControlLeft' ) ) wish.y -= 1;
-		if ( wish.lengthSq() > 0 ) wish.normalize();
+		if ( wish.lengthSq() > 1 ) wish.normalize();
 
 		const atSurface = this.floating && p.y > surfaceY - 0.45;
 		// at the surface W along a level view keeps you on top; looking down dives
@@ -1193,12 +1188,8 @@ export class Player {
 		const sy = Math.sin( this.deckYaw ), cy = Math.cos( this.deckYaw );
 		_fwd.set( sy, 0, cy );
 		_right.set( - cy, 0, sy );
-		_wish.set( 0, 0, 0 );
-		if ( inp.down( 'KeyW' ) ) _wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) _wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) _wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) _wish.sub( _right );
-		if ( _wish.lengthSq() > 0 ) _wish.normalize();
+		movementVector( inp, _wish, _fwd, _right );
+		if ( _wish.lengthSq() > 1 ) _wish.normalize();
 		const speed = ( inp.down( 'ShiftLeft' ) ? 2.6 : 1.6 );
 		const k = 1 - Math.exp( - 12 * dt );
 		const v = this.deckVel;

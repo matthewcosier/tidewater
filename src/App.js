@@ -11,6 +11,7 @@ import { FrameUniforms } from './engine/render/Frame.js';
 
 import { Engine } from './core/Engine.js';
 import { Input } from './core/Input.js';
+import { Controller } from './core/Controller.js';
 import { CDLOD } from './core/CDLOD.js';
 import { G } from './core/Globals.js';
 import { Profiler } from './core/Profiler.js';
@@ -152,6 +153,7 @@ export class App {
 		this.camera = camera;
 
 		this.input = new Input( engine.domElement );
+		this.controller = new Controller( this );
 		this.fly = new FlyCamera( camera, engine.domElement, this.input );
 		// every pose set is a camera cut (free-camera toggle, debug views, scripted poses): see cameraCut
 		const setPose = this.fly.setPose.bind( this.fly );
@@ -762,6 +764,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	frame( dt, wallDt = this.engine.clock.getDelta() || dt ) {
 
 		const t0 = performance.now();
+		this.controller?.update( wallDt );
 		this.input.beginFrame();
 		this.updateFPS( wallDt );
 		if ( this.disasters?.paused ) {

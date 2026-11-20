@@ -1,3 +1,4 @@
+import { movementAxis } from '../core/Input.js';
 import { Vector3, Quaternion, Euler } from '../engine/index.js';
 
 // Being aboard the ferry: walking her decks and stairs in the ship's own frame (so the player
@@ -148,12 +149,9 @@ export class FerryDeck {
 		this.yaw -= look.x * 0.0022;
 		player.pitch = Math.max( - 1.5, Math.min( 1.5, player.pitch - look.y * 0.0022 ) );
 		const sy = Math.sin( this.yaw ), cy = Math.cos( this.yaw );
-		const wish = _w.set( 0, 0, 0 );
-		if ( inp.down( 'KeyW' ) ) wish.add( _v.set( sy, 0, cy ) );
-		if ( inp.down( 'KeyS' ) ) wish.sub( _v.set( sy, 0, cy ) );
-		if ( inp.down( 'KeyD' ) ) wish.add( _v.set( - cy, 0, sy ) );
-		if ( inp.down( 'KeyA' ) ) wish.sub( _v.set( - cy, 0, sy ) );
-		if ( wish.lengthSq() > 0 ) wish.normalize();
+		const forward = movementAxis( inp, 'KeyW', 'KeyS', inp.moveY ), right = movementAxis( inp, 'KeyD', 'KeyA', inp.moveX );
+		const wish = _w.set( sy * forward - cy * right, 0, cy * forward + sy * right );
+		if ( wish.lengthSq() > 1 ) wish.normalize();
 		// the island walker's pace (Player.js): 3 m/s, 6.2 sprinting
 		const speed = inp.down( 'ShiftLeft' ) || inp.down( 'ShiftRight' ) ? 6.2 : 3.0, k = 1 - Math.exp( - 12 * dt ), v = this.vel;
 		v.x += ( wish.x * speed - v.x ) * k;
@@ -325,11 +323,11 @@ export class FerryDeck {
 		const inp = player.input, ship = this.ferry.ship;
 		const look = inp.consumeLook();
 		const shift = inp.down( 'ShiftLeft' ) || inp.down( 'ShiftRight' );
-		const steer = Number( inp.down( 'KeyD' ) || inp.down( 'ArrowRight' ) ) - Number( inp.down( 'KeyA' ) || inp.down( 'ArrowLeft' ) );
+		const steer = Number( inp.down( 'KeyD' ) || inp.down( 'ArrowRight' ) ) - Number( inp.down( 'KeyA' ) || inp.down( 'ArrowLeft' ) ) || inp.helmSteer || 0;
 		// Shift with A/D works the bow thruster; otherwise A/D turn the wheel, which stays put.
 		if ( shift ) { ship.thruster = steer; }
 		else { ship.thruster = 0; ship.wheel = Math.max( - 1, Math.min( 1, ship.wheel + steer * WHEEL_RATE * dt ) ); }
-		const lever = Number( inp.down( 'KeyW' ) || inp.down( 'ArrowUp' ) ) - Number( inp.down( 'KeyS' ) || inp.down( 'ArrowDown' ) );
+		const lever = Number( inp.down( 'KeyW' ) || inp.down( 'ArrowUp' ) ) - Number( inp.down( 'KeyS' ) || inp.down( 'ArrowDown' ) ) || inp.helmLever || 0;
 		ship.lever = Math.max( - 1, Math.min( 1, ship.lever + lever * LEVER_RATE * dt ) );
 		if ( inp.hit( 'KeyX' ) ) ship.lever = 0;
 		if ( inp.hit( 'KeyC' ) ) ship.wheel = 0;
