@@ -48,7 +48,10 @@ test( 'An iPhone without WebGPU drives the selected car with sound and resumes a
 		await page.reload();
 		await button( 'Resume game' ).tap();
 		await expect( button( 'Throttle' ) ).toBeVisible();
-		await button( 'Menu' ).tap(); await button( 'Walk instead' ).tap();
+		await button( 'Menu' ).tap();
+		await button( 'Sandpiper 1600' ).tap();
+		await page.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'mountain' );
+		await button( 'Walk instead' ).tap();
 		await expect( page.getByRole( 'status' ) ).toHaveText( 'On foot' );
 		await expect( button( 'Interact' ) ).toBeVisible();
 		await page.setViewportSize( { width: 402, height: 796 } );
