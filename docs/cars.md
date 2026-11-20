@@ -1,6 +1,7 @@
 # Island cars
 
-The Vehicle picker offers the Aster RS, Ridgeback 4x4, Petrel GT, Fulmine V10, Corsaire W16, Sandpiper 1600 and COSIER GT3 RS. The GT3 uses its own authored wheelbase, aero and damage rig. [COSIER GT3 RS](gt3-rs.md)
+The Vehicle picker offers the Aster RS, Ridgeback 4x4, Petrel GT, Fulmine V10, Corsaire W16, Sandpiper 1600, COSIER GT3 RS and GT3RS ZRY. The GT3 uses its own authored wheelbase, aero and damage rig. [COSIER GT3 RS](gt3-rs.md)
+The GT3RS ZRY is a second 992 GT3 RS model on the same physics. [GT3RS ZRY](gt3rs-zry.md)
 
 ## Reference
 

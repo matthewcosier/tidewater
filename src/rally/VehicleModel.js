@@ -8,8 +8,10 @@ import { generateMipmaps } from '../engine/gpu/Mipmaps.js';
 
 // Rally's original untextured GLBs retain their complete authored hierarchy,
 // materials and wheel pivots. Only the renderer-facing material is adapted.
+// The studio-built cars carry decal maps (the COSIER vinyl and badges, the GT3RS ZRY side graphic).
+const STUDIO_MAPS = new Set( [ 'cosier_gt3rs', 'gt3rs_zry' ] );
 export async function loadVehicle( name, withPlates = true ) {
-	const model = await loadModel( `${ import.meta.env.BASE_URL }rally/${ name }.glb`, { studioMaps: name === 'cosier_gt3rs' } );
+	const model = await loadModel( `${ import.meta.env.BASE_URL }rally/${ name }.glb`, { studioMaps: STUDIO_MAPS.has( name ) } );
 	if ( withPlates && PLATES[ name ] ) {
 		platePromise ||= loadVehicle( 'cosier_plate', false ).then( paintPlate );
 		const plate = await platePromise;

@@ -129,17 +129,17 @@ Add these to the URL, for example `?fly&noAudio`:
 
 ## Running locally
 
-The compiled physics module and the two largest new vehicle models are stored losslessly under `assets/distribution/`. `npm ci`, `npm run dev` and `npm run build` prepare the ordinary runtime files in `public/`. If installation scripts are disabled, run `npm run assets:prepare` before direct tests. Building the Rust module or rebuilding either model refreshes its distribution file. Game and server URLs stay the same.
+The compiled physics module and the largest new vehicle models are stored losslessly under `assets/distribution/`. `npm ci`, `npm run dev` and `npm run build` prepare the ordinary runtime files in `public/`. If installation scripts are disabled, run `npm run assets:prepare` before direct tests. Building the Rust module or rebuilding one of those models refreshes its distribution file. Game and server URLs stay the same.
 
 ### Driving
 
 Pick a car in the lower-left card after entering the island, the **Aster RS** (a rear-drive
 rally coupe), the **Ridgeback 4x4** (a lifted, Blender-built 4x4 with mud-terrain tyres and a
-recorded HEMI V8), the **COSIER GT3 RS** (the white-and-red Blender car with its own seven-speed gearbox), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
+recorded HEMI V8), the **COSIER GT3 RS** (the white-and-red Blender car with its own seven-speed gearbox), the **GT3RS ZRY** (a second white-and-red GT3 RS model on the same physics, with clear glass and no plates), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
 hero cars: the **Fulmine V10** (a mid-engine wedge supercar), the **Corsaire W16** (a horseshoe-grille
 hypercar) or the **Sandpiper 1600** (an open-tub beach buggy), and choose where to start: the beach, the coastal road, the town backroad,
 the mountain summit, or either beach entrance. The Cedar wagon and Ridge pickup stay parked
-near the village. All cars carry custom number plates.
+near the village. All cars except the GT3RS ZRY carry custom number plates.
 
 The road is a full circuit. A graded coastal loop runs west of the village, with textured
 asphalt, patched and crack-sealed seal, painted lines, sandy verges and steel guardrails. A
