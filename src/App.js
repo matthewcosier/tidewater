@@ -709,14 +709,16 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	startIsland( { mode, car, location, appearance } ) {
 		this.player.avatar?.setAppearance( appearance );
 		const rally = this.rally;
-		if ( mode === 'walk' ) {
+		if ( ! location ) {
 			if ( rally.active ) rally.leave();
 			return;
 		}
 		rally.destination = location;
 		if ( car === rally.vehicleKey ) rally.reset();
 		else rally.selectVehicle( car );
-		if ( ! rally.active ) rally.enter();
+		// Walking uses the same cleared spawn and the normal safe exit beside the car.
+		if ( mode === 'walk' ) rally.leave();
+		else if ( ! rally.active ) rally.enter();
 	}
 
 	start() {

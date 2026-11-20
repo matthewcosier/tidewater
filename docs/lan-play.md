@@ -4,7 +4,7 @@ The Mac opens Tidewater in a private Chromium instance. The phone receives the g
 
 The transport targets 960 × 540 and up to 30 JPEG pictures per second. One LAN WebSocket carries pictures and stereo PCM. The Mac skips stale pictures on congested connections. The phone keeps one decode in flight and bounds scheduled audio. World distances, inputs and physics use the original game.
 
-Use **Edit character** to choose your appearance. Select a car and starting location, then tap **Drive**, or choose **Walk instead**. Hold the direction controls, drag on the view to look, and tap the view to use game menus. Lifting a finger, hiding the page or disconnecting releases the controls. One phone controls each host. Rejoining preserves the island. The host pauses simulation and game audio when its controller disconnects.
+Use **Edit character** to choose your appearance. Select a car and starting location, then tap **Drive**, or choose **Walk instead** to arrive on foot at that location. Hold the direction controls, drag on the view to look, and tap the view to use game menus. Lifting a finger, hiding the page or disconnecting releases the controls. One phone controls each host. Rejoining preserves the island. The host pauses simulation and game audio when its controller disconnects.
 
 Verify sustained pictures on a phone profile with WebGPU unavailable, audible game samples, simultaneous steering and throttle, release on disconnect and reconnection.
 

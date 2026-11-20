@@ -2505,7 +2505,7 @@ body {
 	display: grid;
 	place-items: center;
 	padding: var(--tw-5);
-	background: radial-gradient(ellipse 80% 70% at 50% 55%, rgba(3, 10, 16, 0.12), rgba(3, 10, 16, 0.7));
+	background: linear-gradient(110deg, #0a242cce, #0e252bb5), url("/ui/keyart-720.jpg") center/cover;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	cursor: default;

@@ -3164,11 +3164,23 @@ export class UI {
 		this._startPromise = new Promise( ( resolve ) => {
 
 			const keyboardStart = e => {
+				if ( e.key === 'Tab' ) {
+					const panel = this.garage.editor.hidden ? this.garage.picker : this.garage.editor;
+					const controls = panel.querySelectorAll( 'button:enabled, select:enabled' );
+					const first = controls[ 0 ], last = controls[ controls.length - 1 ];
+					if ( ! panel.contains( e.target ) || ( e.shiftKey ? e.target === first : e.target === last ) ) {
+						e.preventDefault();
+						e.stopPropagation();
+						( e.shiftKey ? last : first ).focus();
+					}
+					return;
+				}
 				if ( e.repeat || ( e.key !== 'Enter' && e.code !== 'Space' ) ) return;
 				if ( ( e.target !== el && el.contains( e.target ) ) || ! this.garage.editor.hidden ) return;
 				e.preventDefault();
 				e.stopPropagation();
-				this.garage.walk.click();
+				// Preserve the original Enter-to-explore shortcut at the village pier.
+				this.garage.launch( 'walk', this.garage.locationEdited ? this.garage.location.value : null );
 			};
 
 			this.garage = new IslandStart( el, ( import.meta.env?.BASE_URL || '/' ) + 'ui/garage/', choice => {
@@ -3191,6 +3203,8 @@ export class UI {
 				resolve( choice );
 
 			} );
+			el.querySelector( '.garage-sheet' ).insertAdjacentHTML( 'afterbegin',
+				`<div class="garage-brand">${ brandMark() }<span>TIDEWATER</span></div>` );
 			el.inert = false;
 			el.focus( { preventScroll: true } );
 			window.addEventListener( 'keydown', keyboardStart, true );

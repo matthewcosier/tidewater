@@ -88,7 +88,7 @@ sockets.on( 'connection', ws => {
 			// Older phone clients send just gt3 or walk.
 			if ( m.mode === 'gt3' ) m = { type: 'start', mode: 'drive', car: 'gt3rs', location: 'coast' };
 			if ( ! [ 'drive', 'walk' ].includes( m.mode ) ) return;
-			if ( m.mode === 'drive' && ( ! Object.hasOwn( VEHICLES, m.car ) || ! Object.hasOwn( STARTS, m.location ) ) ) return;
+			if ( ( m.mode === 'drive' || m.location ) && ( ! Object.hasOwn( VEHICLES, m.car ) || ! Object.hasOwn( STARTS, m.location ) ) ) return;
 			m.appearance = playerAppearance( m.appearance );
 		}
 		if ( pending >= 64 ) { ws.close( 1008, 'Input backlog' ); return; }

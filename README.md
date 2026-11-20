@@ -79,7 +79,7 @@ To play this branch locally, run `npm ci` followed by `npm run dev`. The [origin
 
 | Key | Action |
 |---|---|
-| Choose a car and **Drive**, or **Walk instead** | Enter the island after shader warm-up. Enter outside the garage controls starts on foot. If iOS interrupted the last load, tap **Load island again** to retry. |
+| Choose a car and **Drive**, or **Walk instead** | Enter the island after shader warm-up. Enter before choosing a location keeps the village-pier walking shortcut. If iOS interrupted the last load, tap **Load island again** to retry. |
 | W A S D | Move on foot. In a car, W accelerates, S brakes or reverses, and A/D steer. |
 | Mouse | Look (click to capture the mouse, Esc to release) |
 | Shift | Sprint / boat boost |
@@ -135,7 +135,7 @@ The compiled physics module and the largest new vehicle models are stored lossle
 
 ### Driving
 
-At the start, choose **Edit character** for skin tone, shirt and hat. Choose a location and a car to start in the driver’s seat, or walk onto the island. Your appearance is remembered in this browser. The garage and the lower-left vehicle picker offer the **Aster RS** (a rear-drive
+At the start, choose **Edit character** for skin tone, shirt and hat. Choose a location and a car to start in the driver’s seat, or walk at that location beside the car. Your appearance is remembered in this browser. The garage and the lower-left vehicle picker offer the **Aster RS** (a rear-drive
 rally coupe), the **Ridgeback 4x4** (a lifted, Blender-built 4x4 with mud-terrain tyres and a
 recorded HEMI V8), the **COSIER GT3 RS** (the white-and-red Blender car with its own seven-speed gearbox), the **GT3RS ZRY** (a second white-and-red GT3 RS model on the same physics, with clear glass and no plates), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
 hero cars: the **Fulmine V10** (a mid-engine wedge supercar), the **Corsaire W16** (a horseshoe-grille

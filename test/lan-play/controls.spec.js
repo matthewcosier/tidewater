@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test( 'An iPhone without WebGPU drives the Mac GT3 with sound and resumes after disconnecting', async ( { page, browser }, info ) => {
+test( 'An iPhone without WebGPU drives the selected car with sound and resumes after disconnecting', async ( { page, browser }, info ) => {
 	const resources = [], errors = [];
 	page.on( 'request', r => resources.push( r.url() ) );
 	page.on( 'pageerror', e => errors.push( e.message ) );
@@ -15,8 +15,10 @@ test( 'An iPhone without WebGPU drives the Mac GT3 with sound and resumes after 
 		await page.goto( '/' );
 		await expect( button( 'Drive COSIER GT3 RS' ) ).toBeEnabled( { timeout: 140000 } );
 	} );
-	await test.step( 'When the player taps Drive COSIER GT3 RS and holds Throttle', async () => {
-		await button( 'Drive COSIER GT3 RS' ).tap();
+	await test.step( 'When the player selects the Fulmine V10 and holds Throttle', async () => {
+		await button( 'Fulmine V10' ).tap();
+		await page.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'town' );
+		await button( 'Drive Fulmine V10' ).tap();
 		await expect( button( 'Throttle' ) ).toBeVisible();
 		await hold( 'Throttle' );
 		await expect.poll( speed, { timeout: 20000 } ).toBeGreaterThan( 20 );

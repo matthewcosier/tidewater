@@ -15,13 +15,18 @@ test( 'A visitor can drive the ZRY from the static island site', async ( { page,
 		await page.goto( './' );
 		await page.getByRole( 'button', { name: 'Walk instead' } ).waitFor( { timeout: 100_000 } );
 		const picker = page.getByRole( 'region', { name: 'Island garage' } );
-		await picker.getByRole( 'button', { name: 'Edit character' } ).click();
+		await page.screenshot( { path: test.info().outputPath( 'garage.png' ) } );
+		await page.keyboard.press( 'Tab' );
+		await expect( picker.getByRole( 'button', { name: 'Edit character' } ) ).toBeFocused();
+		await page.keyboard.press( 'Space' );
 		const editor = page.getByRole( 'region', { name: 'Character appearance' } );
 		await editor.getByRole( 'combobox', { name: 'Shirt' } ).selectOption( '1' );
 		await editor.getByRole( 'combobox', { name: 'Skin tone' } ).selectOption( '2' );
 		await editor.getByRole( 'combobox', { name: 'Field hat' } ).selectOption( 'off' );
 		await expect( editor.getByRole( 'img' ) ).toHaveAttribute( 'src', /player-1-2-1\.webp$/ );
-		await editor.getByRole( 'button', { name: 'Done' } ).click();
+		await page.screenshot( { path: test.info().outputPath( 'character.png' ) } );
+		await editor.getByRole( 'button', { name: 'Done' } ).focus();
+		await page.keyboard.press( 'Enter' );
 		await picker.getByRole( 'button', { name: 'GT3RS ZRY', exact: true } ).click();
 		await picker.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'town' );
 		await picker.getByRole( 'button', { name: 'Drive GT3RS ZRY', exact: true } ).click();
@@ -45,9 +50,27 @@ test( 'A visitor can drive the ZRY from the static island site', async ( { page,
 			return { hat: avatar.model.meshes.find( m => m.material.name === 'skinned-hat' ).visible,
 				shirt: body.uniforms.shirtStyle.value, tone: body.uniforms.skinTone.value };
 		} );
+		await page.evaluate( () => new Promise( resolve => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) ) );
+		await page.screenshot( { path: test.info().outputPath( 'on-foot.png' ) } );
 		expect( look ).toMatchObject( { hat: false, shirt: 1, tone: 2 } );
 		expect( badAssets ).toEqual( [] );
 		expect( errors ).toEqual( [] );
 		expect( sockets ).toEqual( [] );
 	} );
+	await test.step( 'Returning on foot arrives beside the chosen car at the new location', async () => {
+		await page.reload();
+		const garage = page.getByRole( 'region', { name: 'Island garage' } );
+		await garage.waitFor( { timeout: 100000 } );
+		await garage.getByRole( 'button', { name: 'Sandpiper 1600', exact: true } ).click();
+		await garage.getByRole( 'combobox', { name: 'Start location' } ).selectOption( 'mountain' );
+		await garage.getByRole( 'button', { name: 'Walk instead' } ).click();
+		const spawn = await page.evaluate( () => {
+			const { player, rally, terrainData } = __app, spot = terrainData.roads.spawn( 'mountain' );
+			return { mode: player.mode, car: rally.vehicleKey, distance: Math.hypot( player.position.x - spot.x, player.position.z - spot.z ),
+				appearance: player.avatar.appearance };
+		} );
+		expect( spawn ).toMatchObject( { mode: 'walk', car: 'buggy', appearance: { shirt: 1, tone: 2, hat: false } } );
+		expect( spawn.distance ).toBeLessThan( 22 );
+	} );
+
 } );

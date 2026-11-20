@@ -88,18 +88,13 @@ export async function openGame( url, events ) {
 				await release();
 				const walk = page.getByRole( 'button', { name: 'Walk instead', exact: true } );
 				if ( await walk.isVisible() ) {
-					await page.evaluate( choice => {
-						const garage = window.__ui.garage;
-						garage.appearance = choice.appearance;
-						if ( choice.mode === 'drive' ) {
-							garage.selectCar( choice.car );
-							garage.location.value = choice.location;
-						}
-					}, m );
+					await page.evaluate( choice => window.__ui.garage.applyChoice( choice ), m );
 					if ( m.mode === 'drive' ) await page.locator( '.garage-drive' ).click();
 					else await walk.click();
-					if ( await page.evaluate( () => __app.game.guide._wait >= 0 || __app.game.guide.open ) )
-						await page.getByRole( 'button', { name: 'Skip', exact: true } ).click( { timeout: 20000 } );
+					await page.evaluate( () => {
+						window.__app.game.guide.close();
+						if ( document.pointerLockElement ) document.exitPointerLock();
+					} );
 				} else await page.evaluate( choice => window.__app.startIsland( choice ), m );
 				await page.locator( '#app canvas' ).focus();
 			}

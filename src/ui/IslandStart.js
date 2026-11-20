@@ -33,7 +33,7 @@ export class IslandStart {
 						<label>Skin tone<select data-look="tone">${ options( SKIN_TONES ) }</select></label>
 						<label>Shirt<select data-look="shirt">${ options( SHIRTS ) }</select></label>
 						<label>Field hat<select data-look="hat"><option value="on">Wear hat</option><option value="off">Take off</option></select></label>
-						<button type="button" class="garage-done">Done</button>
+						<button type="button" class="garage-done" data-back>Done</button>
 					</div>
 				</section>
 			</div>`;
@@ -59,19 +59,33 @@ export class IslandStart {
 			this.editor.hidden = true; this.picker.hidden = false;
 			this.edit.focus();
 		};
+		this.editor.addEventListener( 'keydown', event => {
+			if ( event.key === 'Escape' ) {
+				event.stopPropagation();
+				get( '.garage-done' ).click();
+			}
+		} );
 		this.editor.addEventListener( 'change', event => {
 			const { look } = event.target.dataset;
 			if ( ! look ) return;
 			this.appearance[ look ] = look === 'hat' ? event.target.value === 'on' : Number( event.target.value );
 			this.updatePortrait();
 		} );
-		for ( const [ button, mode ] of [ [ this.drive, 'drive' ], [ this.walk, 'walk' ] ] ) {
-			button.onclick = () => {
-				try { localStorage.setItem( STORAGE, JSON.stringify( this.appearance ) ); } catch { /* storage disabled */ }
-				onStart( { mode, car: this.car, location: this.location.value, appearance: { ...this.appearance } } );
-			};
-		}
+		this.locationEdited = false;
+		this.location.addEventListener( 'change', () => { this.locationEdited = true; } );
+		this.launch = ( mode, location = this.location.value ) => {
+			try { localStorage.setItem( STORAGE, JSON.stringify( this.appearance ) ); } catch { /* storage disabled */ }
+			onStart( { mode, car: this.car, location, appearance: { ...this.appearance } } );
+		};
+		this.drive.onclick = () => this.launch( 'drive' );
+		this.walk.onclick = () => this.launch( 'walk' );
 		this.selectCar( defaultCar );
+	}
+
+	applyChoice( choice ) {
+		this.appearance = playerAppearance( choice.appearance );
+		if ( choice.car ) this.selectCar( choice.car );
+		if ( choice.location ) this.location.value = choice.location;
 	}
 
 	selectCar( key ) {
