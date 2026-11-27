@@ -32,7 +32,7 @@ const STYLE = `
 .tw-world-panel.tw-glass{background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,0) 40%),var(--tw-glass-dense)}
 .tw-world-panel :focus-visible{outline:2px solid var(--tw-sun);outline-offset:3px}
 .tw-world-panel[hidden]{display:none!important}
-body:has(.tw-root.is-starting) .tw-world-tools,body:has(.tw-root.is-starting) .tw-world-panel,body:has(.tw-root.is-photo) .tw-world-tools,body:has(.tw-root.is-photo) .tw-world-panel{display:none!important}
+body:has(.tw-root.is-starting) .tw-world-tools,body:has(.tw-root.is-starting) .tw-world-panel,body:has(.tw-root.is-photo) .tw-world-tools,body:has(.tw-root.is-photo) .tw-world-panel,body:has(.tw-act-btn) .tw-world-tools{display:none!important}
 /* The "Take a car" card (.rh, src/rally/DriveHUD.js) shares the bottom-left corner with an open
    panel and showed through under it (the dark strip under the tsunami panel). The
    panel owns the left column while it is open; the card returns when it closes. */
@@ -58,8 +58,8 @@ body:has(.fy-board:not([hidden])) .disaster-warning{top:64px;width:max-content;m
  /* Narrow screens: the character fills the lower half, so the hint moves under the tools strip
 ; it hides while a panel is open, so it never meets the panel. */
  body .evac-guidance,body:has(.tw-root.is-third) .evac-guidance{top:calc(var(--tw-world-tools-y,106px) + 46px);bottom:auto;left:12px;transform:none;max-width:calc(100vw - 24px);text-align:center}
- body:has(.tw-world-panel:not([hidden])) :is(.av-hud,.av-reticle,.gl-hud,.gl-reticle,.evac-guidance,.tw-prompt,.gm-map,.gm-pin,.tw-rail){visibility:hidden;pointer-events:none}
- body:has(.av-hud:not([hidden]),.gl-hud:not([hidden])) :is(.gm-map,.gm-pin,.tw-prompt,.evac-guidance){visibility:hidden;pointer-events:none}
+ body:has(.tw-world-panel:not([hidden])) :is(.av-hud,.gl-hud,.gl-reticle,.evac-guidance,.tw-prompt,.gm-map,.gm-pin,.gm-coach,.tw-rail){visibility:hidden;pointer-events:none}
+ body:has(.av-hud:not([hidden]),.gl-hud:not([hidden])) :is(.gm-map,.gm-pin,.gm-coach,.tw-prompt,.evac-guidance){visibility:hidden;pointer-events:none}
 }
 `;
 
@@ -217,7 +217,7 @@ export function addWorldTool( app, { id, label, panel = null, onOpen = null, onC
 			button.setAttribute( 'aria-expanded', 'false' );
 			if ( panel.contains( document.activeElement ) ) document.activeElement.blur();
 			onClose?.();
-			if ( focus ) button.focus();
+			if ( focus ) ( app.radialMenu?.launcher || button ).focus();
 
 		},
 		toggle() {

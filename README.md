@@ -4,10 +4,12 @@
 
 This fork includes the playable island expansion, the drivable COSIER GT3 RS and [Mac-rendered LAN play](docs/lan-play.md). The [experimental builds](docs/experimental-builds.md) preserve earlier disaster, crowd and performance work.
 
-An island fishing game for the browser. Cast from the pier, the beach or your own boat, fight the fish,
-sell your catch to Joe at the fish stand, and spend it on better gear at Marta's chandlery. Around it is a
-real-time tropical island and ocean: swim the reef, drive the boat out to deep water, and watch a humpback
-breach. It runs directly on WebGPU and WGSL with its own small rendering engine, no framework.
+An open-world two-island holiday sandbox for the browser. You have just landed for your getaway and can do
+anything you like: drive cars across 9.4 km of coastal highways, mountain switchbacks and a 637 m suspension
+bridge, ride rocket jetskis across the bay, fly a jet off the offshore carrier, hang glide off the volcano,
+take the mountain chairlift, helm the car ferry, stir up a storm, swim the coral reef, or cast a line for
+fish off the pier and sell your catch in the village. It runs directly on WebGPU and WGSL with its own small
+rendering engine, no framework.
 
 To play this branch locally, run `npm ci` followed by `npm run dev`. The [original Tidewater demo](https://dgreenheck.github.io/tidewater/) is hosted by the upstream project.
 
@@ -87,17 +89,20 @@ To play this branch locally, run `npm ci` followed by `npm run dev`. The [origin
 | W + S | Hold both pedals near a standstill for a rear-drive burnout. Release S to launch. For a donut in either GT3, choose **Ferry terminal**, switch aids off with J, hold W + S and full steering, then release only S. |
 | J | Toggle driving aids. Switch them off for deliberate power slides. |
 | C | Crouch / dive |
-| E | Interact: board the boat, take or leave the helm, step ashore, enter or leave a car, trade with the fish buyer or the chandlery |
-| V | Boat camera at the helm (1st / 3rd person) |
-| R | Take out / put away the fishing rod, or recover the car while driving |
+| M | Open the **Activity Wheel** (hold and flick to pick, or tap to click / use `1`-`8` and arrow keys; `Esc` closes). Launches cars, highways, jetskis, boats, ferry, F/A-18 Hornet, hang glider, chairlift, weather/disasters, and landmarks. |
+| W / S + Arrows + A / D (in F/A-18 Hornet) | W/S throttle (hold W on the catapult to launch), Arrows pitch and roll, A/D rudder, G landing gear, H arrestor hook, V flaps, B / Space wheel brake, C cockpit / chase view, R reset launch, E leave aircraft. |
+| G | Recall your last ride on foot or in the water (in water: pulls the jetski alongside and climbs aboard; on land: delivers your car onto clear ground ahead). On a jetski: pick up/drop off mate. In the Kestrel: landing gear. |
+| E | Interact: enter or leave any vehicle (car, jetski, fishing boat, ferry helm, carrier jet, hang glider, chairlift), trade with locals, use ATMs |
+| V | Camera view (1st / 3rd person on foot or at the helm) |
+| R | Within 8 s of a jetski wipeout or car yeet: quick re-mount; otherwise equip/stow the fishing rod on foot, or recover the car while driving |
 | Left mouse | Hold to wind up, release to cast · strike when a fish takes the bait · hold to reel |
 | Right mouse | Reel an empty line in |
-| I or Tab | Cooler / fish hold and the fish log |
+| I | Cooler / fish hold and the fish log |
+| `` ` `` (Backquote) | Toggle the quick car selector dock on foot |
 | F | Free camera |
-| Left, Right, Home, End on the world tools strip | Move along the strip; Enter opens a tool, Escape closes its panel |
 | L | Flashlight |
 | T | Pause time (in a car: repair) |
-| M | Mute |
+| U | Mute |
 | H | Settings panel |
 | P | Photo mode |
 | F1 or ? | All controls |

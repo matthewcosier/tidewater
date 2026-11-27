@@ -530,7 +530,7 @@ export class Player {
 		const bp = this.boat.toWorld( this.boat.model.boardPoint, _v );
 		const d = Math.hypot( bp.x - this.position.x, bp.z - this.position.z );
 		const dy = Math.abs( bp.y - this.position.y );
-		return d < 4.2 && dy < 3.2;
+		return d < ( this.mode === 'swim' ? 6.2 : 5.5 ) && dy < 3.4;
 
 	}
 

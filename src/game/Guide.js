@@ -68,39 +68,39 @@ const row = ( keys, text ) => `<div class="gm-guide-row"><span class="k">${ keys
 const CARDS = [
 	{
 		eyebrow: 'Welcome to Tidewater',
-		title: 'Fish the island, sell your catch',
-		body: `<p>Catch fish from the <b>beach</b>, the <b>pier</b> or your <b>boat</b>. Different fish bite in the shallows, around the pier, over the reef and out in deep water, and they change with the time of day.</p>
-			<p>Sell your catch to <b>Joe</b> at the fish stand by the pier, then spend the money on upgrades from <b>Marta</b> at the chandlery by the boathouse: stronger line, a faster reel, a bigger hold, a fish finder and lights for fishing at night.</p>`,
+		title: 'Your island holiday starts here',
+		body: `<p>You've just landed with the family on <b>Tidewater Island</b> and <b>Joey Island</b>. There is no script: explore at your own pace and do whatever you feel like.</p>
+			<p>Drive eight cars across <b>9.4 km</b> of coastal highways and the <b>637 m suspension bridge</b>, shred the bay on a <b>rocket jetski</b>, launch an <b>F/A-18 Hornet</b> from the aircraft carrier, <b>hang glide</b> off the volcano, take the <b>car ferry</b>, fish the reef, or stir up a storm.</p>`,
 	},
 	{
-		eyebrow: 'Fishing',
-		title: 'Cast, strike, reel',
+		eyebrow: 'Activity Wheel & Rides',
+		title: 'Jump straight into anything',
 		body: `<div class="gm-guide-list">
-			${ row( k( 'R' ), 'Take out the rod (by the water or on the boat)' ) }
-			${ row( k( 'Hold', 'LMB' ), 'Wind up, release to cast. Hold longer to cast farther' ) }
-			${ row( k( 'LMB' ), 'Strike when the bobber is <b>pulled under</b> (dips are only nibbles)' ) }
-			${ row( k( 'Hold', 'LMB' ), 'Reel in. <b>Let go when the tension turns red</b>, or the line snaps' ) }
-			${ row( k( 'RMB' ), 'Reel an empty line back in' ) }
-			${ row( k( 'I' ), 'Your cooler and fish log' ) }
+			${ row( k( 'M' ), 'Hold to flick or tap to open the <b>Activity Wheel</b> (cars, jetskis, flights, weather, places)' ) }
+			${ row( k( 'E' ), 'Enter or leave any vehicle, board the ferry, or talk to locals' ) }
+			${ row( k( 'G' ), 'Recall your last car or jetski right beside you (on land or in the water)' ) }
+			${ row( k( 'R' ), 'Quick hop back on after a wipeout · equip fishing rod on foot · recover car while driving' ) }
+			${ row( k( 'V' ) + k( 'F' ), '1st / 3rd person view · Free camera' ) }
 		</div>`,
 	},
 	{
-		eyebrow: 'Getting around',
-		title: 'Joe and Marta',
+		eyebrow: 'Around the Islands',
+		title: 'Village, bridge & Joey Island',
 		body: `<div class="gm-guide-list">
-			${ row( k( 'W', 'A', 'S', 'D' ), 'Move, mouse to look, <kbd>Shift</kbd> to run' ) }
-			${ row( k( 'E' ), 'Board the boat, take the helm, talk to Joe and Marta' ) }
-			${ row( k( 'F1' ), 'All controls, and this guide again' ) }
+			${ row( k( 'W', 'A', 'S', 'D' ), 'Move, mouse to look, <kbd>Shift</kbd> to run or tuck' ) }
+			${ row( k( 'I' ), 'Cooler and fish log (whenever you feel like fishing)' ) }
+			${ row( k( 'F1' ), 'All controls, and this holiday guide again' ) }
 		</div>
 		<div class="gm-guide-where">
 			<div class="is-joe"><i></i><span><b>Joe</b> · fish stand by the pier</span><em data-where="joe"></em></div>
 			<div class="is-marta"><i></i><span><b>Marta</b> · chandlery by the boathouse</span><em data-where="marta"></em></div>
 		</div>
-		<p style="margin:0;color:var(--tw-ink-3);font-size:var(--tw-fs-sm)">Both are marked on the map in the lower right.</p>`,
+		<p style="margin:0;color:var(--tw-ink-3);font-size:var(--tw-fs-sm)">Cars, jetskis, the suspension bridge, ferry terminal, and village shops are all marked on the map.</p>`,
 	},
 ];
 
 const TIPS = {
+	welcome: 'Holiday mode: hold <kbd>M</kbd> for the <b>Activity Wheel</b>, <kbd>E</kbd> to hop in anything, <kbd>G</kbd> to call your ride back.',
 	rodOut: 'Hold the <b>left mouse button</b> to wind up and release to cast. Try deeper water, around the pier or over the reef.',
 	nibble: 'The bobber is dipping: something is <b>nibbling</b>. Wait until it is <b>pulled under</b>, then click to strike.',
 	fishOn: '<b>Hold the left mouse button</b> to reel. When the tension needle nears the <b>red</b>, let go until it settles, then reel again.',
@@ -173,7 +173,9 @@ export class Guide {
 
 		this.open = false;
 		this.step = 0;
-		this._wait = this.seen.intro ? - 1 : 0.8; // seconds after the start overlay before the intro
+		// Never block arrival with a forced modal: greet the player once with a non-blocking holiday tip instead.
+		this._wait = - 1;
+		this._welcomeWait = this.seen.welcome ? - 1 : 0.9;
 		this._coachT = 0;
 		this._queue = [];
 		this._whereT = 0;
@@ -240,7 +242,7 @@ export class Guide {
 		this.title.textContent = c.title;
 		this.body.innerHTML = c.body;
 		this.dots.forEach( ( d, j ) => d.classList.toggle( 'is-on', j === i ) );
-		this.nextBtn.textContent = i === CARDS.length - 1 ? 'Let\'s fish' : 'Next';
+		this.nextBtn.textContent = i === CARDS.length - 1 ? 'Start holiday' : 'Next';
 		if ( this.minimap ) this.minimap.highlight( i === CARDS.length - 1 ? [ 'joe', 'marta' ] : [] );
 		this._whereT = 0;
 		if ( ! this.open ) {
@@ -300,7 +302,13 @@ export class Guide {
 
 		const ui = this.ui, g = this.game, app = g.app, p = app.player;
 
-		// the intro, once the start overlay is gone
+		// Non-blocking holiday arrival hint once the start overlay is dismissed
+		if ( this._welcomeWait >= 0 && ! ui._start ) {
+
+			this._welcomeWait -= dt;
+			if ( this._welcomeWait < 0 ) this.tip( 'welcome' );
+
+		}
 		if ( this._wait >= 0 && ! ui._start ) {
 
 			this._wait -= dt;
@@ -357,8 +365,9 @@ export class Guide {
 		prev.fight = !! g.fight;
 		prev.lastCatch = lc;
 
-		// the coach card: one tip at a time, ~7 s each (not over the catch card or a panel)
-		const busy = g.hud && ( g.hud.catchOpen || g.hud.invOpen || g.hud.standOpen );
+		// the coach card: one tip at a time, ~7 s each (not over a vehicle HUD, radial wheel, catch card, or panel)
+		const busy = ( g.hud && ( g.hud.catchOpen || g.hud.invOpen || g.hud.standOpen ) )
+			|| app.aviation?.active || app.glider?.active || app.rally?.active || app.radialMenu?.open;
 		if ( this._current ) {
 
 			this._coachT -= dt;

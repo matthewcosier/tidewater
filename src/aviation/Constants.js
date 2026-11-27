@@ -3,6 +3,8 @@
 // not performance data for any real aircraft or carrier. See docs/aviation.md.
 export { GRAVITY, AIR_DENSITY, SEA_WATER_DENSITY } from '../physics/Loads.js';
 export const STEP=1/120;
+export const AIRCRAFT_NAME=Object.freeze({full:'F/A-18 Hornet',short:'Hornet'});
+export const APPROACH=Object.freeze({distance:620,glideDeg:3.5,speed:68});
 export const AIRCRAFT=Object.freeze({mass:17000,area:48,span:13.6,chord:3.8,
  inertia:[130000,190000,52000],maxThrust:140000,cl0:0.15,clAlpha:4.3,
  flapLift:0.65,stallAlpha:0.31,cd0:0.026,efficiency:0.8,

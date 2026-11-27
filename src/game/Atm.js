@@ -700,6 +700,21 @@ export class AtmNetwork {
 
 	}
 
+	near( pos, range = 18 ) {
+
+		if ( ! pos || ! this.sites ) return false;
+		const r2 = range * range;
+		for ( let i = 0; i < this.sites.length; i ++ ) {
+
+			const s = this.sites[ i ].position;
+			const dx = pos.x - s.x, dz = pos.z - s.z;
+			if ( dx * dx + dz * dz <= r2 ) return true;
+
+		}
+		return false;
+
+	}
+
 	// $ markers on the minimap while an ATM is on the map (none on the rim: they'd crowd it)
 	markers() {
 

@@ -32,7 +32,7 @@ export class Disasters {
   app.boatCtl.disasterForces=(body,F,T)=>this.craft(body,F,T,6,body.disasterDt);
   app.jetskis.ctl.disasterForces=(body,F,T)=>this.craft(body,F,T,1.6,body.disasterDt);
   this.ui=new DisasterControls(this);this.visuals();this.refresh();
-  window.addEventListener('keydown',e=>{if(e.code==='KeyM'&&!e.repeat&&!/INPUT|SELECT|TEXTAREA/.test(e.target?.tagName??'')&&(this.paused||!app.audio)){if(app.audio)app.audio.setMuted(!app.audio.muted);else this.globalMuted=!this.globalMuted;this.refresh();}});
+  window.addEventListener('keydown',e=>{if(e.code==='KeyU'&&!e.repeat&&!/INPUT|SELECT|TEXTAREA/.test(e.target?.tagName??'')&&(this.paused||!app.audio)){if(app.audio)app.audio.setMuted(!app.audio.muted);else this.globalMuted=!this.globalMuted;this.refresh();}});
  }
  registerExternal(adapter){this.external.add(adapter);return ()=>this.external.delete(adapter);}
  addBody(options){return this.bodies.addExternal(options);}

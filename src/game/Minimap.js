@@ -1,4 +1,5 @@
 import { WORLD } from '../world/WorldLayout.js';
+import { BRIDGE } from '../world/StraitBridge.js';
 import { STAND } from './FishStand.js';
 import { CHANDLERY } from './Chandlery.js';
 
@@ -37,6 +38,9 @@ const CSS = /* css */`
 .gm-mk.is-joe > i { background: var(--tw-sun); }
 .gm-mk.is-marta > i { background: var(--tw-aqua); }
 .gm-mk.is-boat > i { background: #f2efe6; }
+.gm-mk.is-car > i { background: #6fe3d4; }
+.gm-mk.is-jetski > i { background: #ff9c6e; }
+.gm-mk.is-bridge > i { background: #e05a3a; color: #fff; }
 .gm-mk.is-driver > i { background: var(--driver-color); color: #102126; }
 .gm-mk > b { position: absolute; left: 0; top: 0; width: 0; height: 0; border-left: calc(5 * var(--tw-u)) solid transparent; border-right: calc(5 * var(--tw-u)) solid transparent;
 	border-bottom: calc(7 * var(--tw-u)) solid rgba(255,255,255,0.9); margin: calc(-19 * var(--tw-u)) 0 0 calc(-5 * var(--tw-u)); transform-origin: calc(5 * var(--tw-u)) calc(19 * var(--tw-u)); display: none; }
@@ -69,6 +73,9 @@ const ICON = {
 	fish: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 12c3-4 7-6 11-6 3 0 5 2 7 4l-2 2 2 2c-2 2-4 4-7 4-4 0-8-2-11-6Zm12-1.2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z"/></svg>',
 	anchor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><path d="M12 7v13M7 11h10M4 14c1 4 4 6 8 6s7-2 8-6"/></svg>',
 	boat: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v9H6l6-9Zm1 2 5 7h-5V5ZM3 14h18l-3 5H6l-3-5Z"/></svg>',
+	car: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 12l1.6-4.4A2 2 0 0 1 8.5 6.3h7a2 2 0 0 1 1.9 1.3L19 12h1.5v5.5h-2a1.8 1.8 0 0 1-3.5 0H9a1.8 1.8 0 0 1-3.5 0h-2V12H5Z"/></svg>',
+	jetski: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 15c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"/><path d="M5 10l4-3h5l5 3"/></svg>',
+	bridge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M3 16h18M7 6v10M17 6v10M3 13c2-2 4-5 4-7 2 4 8 4 10 0 0 2 2 5 4 7"/></svg>',
 };
 
 const h = ( tag, cls, html ) => {
@@ -125,13 +132,31 @@ export class Minimap {
 
 		};
 
+		const carPos = { x: 0, z: 0 }, skiPos = { x: 0, z: 0 }, boatPos = { x: 0, z: 0 };
+		const [ bx, bz ] = BRIDGE.worldXZ( BRIDGE.LENGTH * 0.5, 0 );
+		const bridgePos = { x: bx, z: bz }, joePos = { x: STAND.x, z: STAND.z }, martaPos = { x: CHANDLERY.x, z: CHANDLERY.z };
 		this.markers = [
-			{ id: 'joe', ...mk( 'joe', ICON.fish ), pos: () => ( { x: STAND.x, z: STAND.z } ) },
-			{ id: 'marta', ...mk( 'marta', ICON.anchor ), pos: () => ( { x: CHANDLERY.x, z: CHANDLERY.z } ) },
+			{ id: 'car', ...mk( 'car', ICON.car ), pos: () => {
+				const p = game.app.rally?.model?.root?.position;
+				if ( ! p ) return null;
+				carPos.x = p.x; carPos.z = p.z;
+				return carPos;
+			}, hideWhen: () => !! game.app.rally?.active },
+			{ id: 'jetski', ...mk( 'jetski', ICON.jetski ), pos: () => {
+				const js = game.app.jetskis, p = js?.live ? js.ctl?.position || js.live.position : null;
+				if ( ! p ) return null;
+				skiPos.x = p.x; skiPos.z = p.z;
+				return skiPos;
+			}, hideWhen: () => !! game.app.jetskis?.riding },
+			{ id: 'bridge', ...mk( 'bridge', ICON.bridge ), pos: () => bridgePos },
+			{ id: 'joe', ...mk( 'joe', ICON.fish ), pos: () => joePos },
+			{ id: 'marta', ...mk( 'marta', ICON.anchor ), pos: () => martaPos },
 			{ id: 'boat', ...mk( 'boat', ICON.boat ), pos: () => {
 
 				const b = game.app.boatCtl;
-				return b ? { x: b.position.x, z: b.position.z } : null;
+				if ( ! b ) return null;
+				boatPos.x = b.position.x; boatPos.z = b.position.z;
+				return boatPos;
 
 			}, hideWhen: () => {
 
@@ -289,6 +314,17 @@ export class Minimap {
 			const r = Math.max( 1.5, p.radius * 0.8 * PPM );
 			ctx.fillRect( cx - r, cy - r, 2 * r, 2 * r );
 
+		}
+
+		// the 637 m strait suspension bridge
+		{
+			const [ x0, y0 ] = P( BRIDGE.P0[ 0 ], BRIDGE.P0[ 1 ] ), [ x1, y1 ] = P( BRIDGE.P1[ 0 ], BRIDGE.P1[ 1 ] );
+			ctx.strokeStyle = '#d6482b';
+			ctx.lineWidth = Math.max( 2.2, 8 * PPM );
+			ctx.beginPath();
+			ctx.moveTo( x0, y0 );
+			ctx.lineTo( x1, y1 );
+			ctx.stroke();
 		}
 
 		// the pier and its head

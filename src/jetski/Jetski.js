@@ -356,12 +356,12 @@ export class Jetskis {
 	offer( player ) {
 
 		if ( performance.now() - ( this.leftAt || - 1e9 ) < 500 ) return null;
-		let best = null, bd = 3.2;
+		let best = null, bd = player.mode === 'swim' ? 6.5 : 4.5;
 		for ( const s of this.skis ) {
 
 			const p = s === this.live ? this.ctl.position : s.position;
 			const d = Math.hypot( p.x - player.position.x, p.z - player.position.z );
-			if ( d < bd && Math.abs( p.y - player.position.y ) < 2.5 ) { bd = d; best = s; }
+			if ( d < bd && Math.abs( p.y - player.position.y ) < 3.0 ) { bd = d; best = s; }
 
 		}
 
@@ -385,8 +385,10 @@ export class Jetskis {
 		c.driven = true;
 		c.engineOn = true;
 		c.capsized = false;
+		c.disembarkBrake = 0;
 		p.mode = 'jetski';
 		p.velocity.set( 0, 0, 0 );
+		app.vehicleRecall?.clearRemount();
 		// a throw left unfinished (mounted again before he splashed down) must not keep him drawn in the air in his
 		// tumble, with the camera on that spot instead of the ski (rideFrame and camera read this.thrown)
 		this.thrown = null;
@@ -402,6 +404,9 @@ export class Jetskis {
 		this.leftAt = performance.now(); // the same E must not offer the ski straight back this frame
 		c.driven = false;
 		c.engineOn = false; // the lanyard comes off with him
+		c.disembarkBrake = 2.5; // engage water-braking so the ski settles alongside instead of planing away
+		c.velocity.multiplyScalar( 0.45 );
+		app.vehicleRecall?.noteExit( 'jetski', { wipeout: false } );
 		const side = _s.set( 1, 0, 0 ).applyQuaternion( c.quaternion ).setY( 0 ).normalize();
 		const out = _v.copy( c.position ).addScaledVector( side, 1.1 );
 		const water = this.waterLevel();
@@ -459,10 +464,12 @@ export class Jetskis {
 		// and gone now, not faded out over the throw (the prompt's CSS fade would hang it mid-screen as he flies)
 		const ui = app.ui?.ui, pe = ui?.promptEl;
 		if ( pe ) { pe.style.transition = 'none'; ui.setPrompt( null ); void pe.offsetWidth; pe.style.transition = ''; }
+		c.disembarkBrake = 3.2;
+		app.vehicleRecall?.noteExit( 'jetski', { wipeout: true } );
 		this.metrics.crashes ++;
 		this.mate?.throw(); // the back-seat mate goes too, on her own arc
 		this.shake = 1;
-		app.ui?.ui?.toast?.( 'Wiped out! Swim back and press E' );
+		app.ui?.ui?.toast?.( 'Wiped out! Press R to hop back on, or G to call the ski' );
 
 	}
 

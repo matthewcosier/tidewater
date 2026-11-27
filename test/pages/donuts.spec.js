@@ -11,7 +11,7 @@ test( 'A GT3 donut leaves rubber and sounds louder than the engine at the ferry 
 		await page.goto( './' );
 		await page.getByRole( 'button', { name: 'Click to explore' } ).waitFor( { timeout: 100_000 } );
 		await page.keyboard.press( 'Enter' );
-		await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
+		await page.keyboard.press( 'Backquote' );
 		await page.getByLabel( 'Vehicle', { exact: true } ).selectOption( 'gt3rs' );
 		await page.getByLabel( 'Start at', { exact: true } ).selectOption( 'ferry' );
 		await page.getByRole( 'button', { name: 'Drive COSIER GT3 RS' } ).click();

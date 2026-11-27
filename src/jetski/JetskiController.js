@@ -242,6 +242,7 @@ export class JetskiController {
 		this.leanLat = 0; this.leanFwd = 0;
 		this.rpm = 0; this.rev = 0; this.engineOn = false;
 		this.driven = false; // rider aboard
+		this.disembarkBrake = 0; // seconds of lanyard cut-off water braking after dismount or wipeout
 		this.wakeComp = 0; // 0..1: how much of its own wake depression to add back (the wake's output level)
 
 		// outputs
@@ -623,6 +624,19 @@ export class JetskiController {
 		const app = 0.5 * RHO * S.appendage * u * au * wetD;
 		this.drag.appendage = Math.abs( app );
 		fluid.point(.5*RHO*S.appendage*au*wetD,this.toWorld(_v.set(0,-.22,-1.2),_c2),fwd,flow);
+
+		// Lanyard cut-off water braking: when the rider steps off or wipes out, hull drag and
+		// lanyard kill-switch drogue arrest forward glide so the ski stays nearby in the water.
+		if ( this.disembarkBrake > 0 ) {
+
+			this.disembarkBrake = Math.max( 0, this.disembarkBrake - h );
+			if ( ! this.driven && wetD > 0 ) fluid.isotropic( 560 * wetD, comW, flow );
+
+		} else if ( ! this.driven && wetD > 0 ) {
+
+			fluid.isotropic( 95 * wetD, comW, flow );
+
+		}
 
 		// ---- air drag (rider + ski)
 		const cda = ( this.driven ? S.airCdA - ( S.airCdA - S.airCdATuck ) * Math.max( this.leanFwd, 0 ) : 0.35 ) + S.mateCdA * ( this.massMate || 0 ) / S.massMate;
