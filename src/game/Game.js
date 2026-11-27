@@ -179,9 +179,12 @@ export class Game {
 
 		// the ATMs (made on the first frame, once the Joey village is placed)
 		if ( ! this.atm ) this.atm = new AtmNetwork( this );
+		// vehicle recall (G) and post-wipeout quick remount (R) run before rod equip
+		const remounted = app.vehicleRecall?.quickRemountPrompt?.();
+		app.vehicleRecall?.update();
 		const can = this.canFish;
-		// aboard the ferry the rod comes out only on an open deck
-		if ( inp.hit( 'KeyR' ) && can && ! this.fight && ( rod.equipped || p.mode !== 'ferry' || p.vessel?.fishable?.( p ) ) ) {
+		// aboard the ferry the rod comes out only on an open deck (not while a quick-remount R is live)
+		if ( inp.hit( 'KeyR' ) && can && ! this.fight && ! remounted && ! app.radialMenu?.open && ( rod.equipped || p.mode !== 'ferry' || p.vessel?.fishable?.( p ) ) ) {
 
 			rod.equip( ! rod.equipped );
 			if ( ! rod.equipped ) this.cancelLine();
@@ -197,7 +200,7 @@ export class Game {
 
 		}
 
-		if ( ! app.rally?.active && this.hud && ( inp.hit( 'KeyI' ) || inp.hit( 'Tab' ) ) ) this.hud.toggleInventory();
+		if ( ! app.rally?.active && ! app.radialMenu?.open && this.hud && inp.hit( 'KeyI' ) ) this.hud.toggleInventory();
 		if ( this.hud && inp.hit( 'Escape' ) ) {
 
 			this.hud.toggleInventory( false );
@@ -291,13 +294,13 @@ export class Game {
 		this.updateVendors( inp, p );
 		this.atm.update( dt, inp, p );
 
-		// your parked car: walk up to it and get in (not on the E that just got you out)
+		// your parked car: walk up to it and get in (generous 4.5 m door reach around 5 m vehicles)
 		const rally = app.rally, car = rally?.model?.root.position;
 		if ( car && ! rally.active && ! rally.bailout?.active && ! app.freeCam && ( p.mode === 'walk' || p.mode === 'ferry' ) &&
-			Math.hypot( p.position.x - car.x, p.position.z - car.z ) < 2.4 && Math.abs( p.position.y - car.y ) < 1.5 &&
+			Math.hypot( p.position.x - car.x, p.position.z - car.z ) < 4.5 && Math.abs( p.position.y - car.y ) < 2.2 &&
 			performance.now() - ( rally.leftAt || 0 ) > 400 && ! p.prompt && ! rod.equipped ) {
 
-			p.prompt = { key: 'E', text: 'Get in' };
+			p.prompt = { key: 'E', text: `Drive ${ rally.profile?.name || 'car' }` };
 			if ( inp.hit( 'KeyE' ) ) rally.enter();
 
 		}
@@ -319,6 +322,21 @@ export class Game {
 		} );
 		if ( this.minimap ) this.minimap.update( dt );
 		if ( this.guide ) this.guide.update( dt );
+
+	}
+
+	nearVendor( pos, range = 14 ) {
+
+		if ( ! pos || ! this.vendors ) return false;
+		const r2 = range * range;
+		for ( let i = 0; i < this.vendors.length; i ++ ) {
+
+			const v = this.vendors[ i ];
+			const dx = pos.x - v.x, dz = pos.z - v.z;
+			if ( dx * dx + dz * dz <= r2 ) return true;
+
+		}
+		return false;
 
 	}
 

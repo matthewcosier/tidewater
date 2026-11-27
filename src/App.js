@@ -44,6 +44,8 @@ import { Whale } from './world/marine/Whale.js';
 import { DolphinPod } from './world/marine/Dolphin.js';
 import { Sharks } from './world/marine/Sharks.js';
 import { addWorldTool } from './ui/WorldTools.js';
+import { RadialMenu } from './ui/RadialMenu.js';
+import { VehicleRecall } from './player/VehicleRecall.js';
 import { Aviation } from './aviation/Aviation.js';
 import { Glider } from './glider/Glider.js';
 import { prepareGliderSite } from './glider/Site.js';
@@ -496,6 +498,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		await this.sharks.load();
 		addWorldTool(this,{id:'sharks',label:'Watch sharks',onActivate:()=>this.sharks.watch()});
 		addWorldTool(this,{id:'shark-bite',label:'Shark bite demo',onActivate:()=>this.sharks.demonstrateBite()});
+		this.vehicleRecall = new VehicleRecall( this );
+		this.radialMenu = new RadialMenu( this );
 
 		// ---- compile pipelines asynchronously (keeps the page responsive), then prime a few
 		// frames behind the loading screen so any remaining first-use stalls happen there
@@ -819,7 +823,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		}
 
-		if ( this.input.hit( 'KeyM' ) && this.audio ) {
+		if ( this.input.hit( 'KeyU' ) && this.audio ) {
 
 			this.audio.setMuted( ! this.audio.muted );
 			if ( this.ui ) this.ui.ui.toast( this.audio.muted ? 'Sound off' : 'Sound on' );

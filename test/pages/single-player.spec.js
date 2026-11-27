@@ -15,10 +15,10 @@ test( 'A visitor can drive the ZRY from the static island site', async ( { page,
 		await page.goto( './' );
 		await page.getByRole( 'button', { name: 'Click to explore' } ).waitFor( { timeout: 100_000 } );
 		await page.keyboard.press( 'Enter' );
-		await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 		await expect( page.getByRole( 'button', { name: 'Drive together' } ) ).toHaveCount( 0 );
 	} );
 	await test.step( 'When they choose the ZRY and accelerate on the coastal road', async () => {
+		await page.keyboard.press( 'Backquote' );
 		await page.getByLabel( 'Vehicle', { exact: true } ).selectOption( 'gt3rszry' );
 		await page.getByLabel( 'Start at', { exact: true } ).selectOption( 'coast' );
 		await page.getByRole( 'button', { name: 'Drive GT3RS ZRY', exact: true } ).click();

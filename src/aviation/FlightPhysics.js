@@ -1,7 +1,9 @@
-import { GRAVITY as G,AIR_DENSITY,SEA_WATER_DENSITY,AIRCRAFT as A,CARRIER,STEP } from './Constants.js';
+import { GRAVITY as G,AIR_DENSITY,SEA_WATER_DENSITY,AIRCRAFT as A,CARRIER,APPROACH,STEP } from './Constants.js';
 import {add,sub,mul,dot,cross,length,unit,rotate,inverseRotate,poseQ,qmul,advanceQ,attitude,clamp,finiteState} from './Math.js';
 import {insideDeck} from './CarrierPhysics.js';
 import {dynamicPressure} from '../physics/Loads.js';
+
+export function approachAlpha(){const q=0.5*AIR_DENSITY*APPROACH.speed*APPROACH.speed;return (A.mass*G/(q*A.area)-A.cl0-A.flapLift)/A.clAlpha;}
 
 export function coefficientLoads(speed,{density=AIR_DENSITY,area=A.area,cl,cd}){const q=dynamicPressure(speed,density);return {q,lift:q*area*cl,drag:q*area*cd};}
 
@@ -66,9 +68,9 @@ export class FlightPhysics {
   this.engine=0;this.gear=1;this.hook=0;this.flaps=0.6;this.catapult=null;this.cable=null;this.crashAge=0;this.time=0;this.accumulator=0;this.metrics=EMPTY_METRICS();this.lastHook=null;this.approachStart=null;this.groundedLast=true;this.everAirborne=false;this.lastImpact=null;this.launchCount=0;
  }
  startApproach(env={}){
-  this.reset();const distance=620,glide=3.5*Math.PI/180,speed=68;
+  this.reset();const distance=APPROACH.distance,glide=APPROACH.glideDeg*Math.PI/180,speed=APPROACH.speed;
   this.position=this.carrier.fromRunway(0,-distance,1.88+distance*Math.tan(glide));
-  const q=0.5*AIR_DENSITY*speed*speed,alpha=(A.mass*G/(q*A.area)-A.cl0-A.flapLift)/A.clAlpha;
+  const alpha=approachAlpha();
   this.quaternion=qmul(this.carrier.quaternion,poseQ(CARRIER.runwayHeading,alpha-glide));
   const horizontal=rotate(this.carrier.quaternion,rotate(poseQ(CARRIER.runwayHeading),[0,0,speed*Math.cos(glide)]));
   // Far-field approach velocity follows carrier translation, not omega cross a

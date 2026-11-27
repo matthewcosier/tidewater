@@ -2150,30 +2150,33 @@ export class UI {
 						${ row( k( 'C' ), 'Crouch, dive' ) }
 					</section>
 					<section>
-						<h3>Interact</h3>
-						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade, enter or leave a car</small>' ) }
+						<h3>Interact &amp; Rides</h3>
+						${ row( k( 'M' ), 'Activity Wheel<small>Hold to flick or tap: cars, jetskis, flights, weather, landmarks</small>' ) }
+						${ row( k( 'E' ), 'Interact<small>Enter or leave any vehicle, board ferry, talk to locals</small>' ) }
+						${ row( k( 'W' ) + k( 'S' ), 'F/A-18 Hornet<small>Throttle · Arrows fly · A/D rudder · G gear · H hook · V flaps · B/Space brake · C view · R reset</small>' ) }
+						${ row( k( 'G' ), 'Recall last ride<small>Deliver car nearby or call jetski in water (in jet: gear)</small>' ) }
 						${ row( k( 'V' ), 'Camera<small>1st / 3rd person, on foot and at the helm</small>' ) }
 						${ row( k( 'B' ), 'Whistle<small>Call the cockatoo back to your shoulder</small>' ) }
-						${ row( k( 'R' ), 'Take out / put away rod<small>In a car: recover</small>' ) }
+						${ row( k( 'R' ), 'Quick re-mount / Rod<small>After wipeout: hop back on · On foot: fishing rod · In car: recover</small>' ) }
 						${ row( k( 'LMB' ), 'Cast, strike, reel<small>Hold to wind up / reel</small>' ) }
 						${ row( k( 'RMB' ), 'Reel in an empty line' ) }
 						${ row( k( 'I' ), 'Cooler and fish log' ) }
 						${ row( k( 'F' ), 'Free camera' ) }
 						${ row( k( 'T' ), 'Pause time<small>In a car: repair</small>' ) }
 						${ row( k( 'L' ), 'Flashlight' ) }
-						${ row( k( 'M' ), 'Mute' ) }
+						${ row( k( 'U' ), 'Mute' ) }
 					</section>
 					<section>
 						<h3>Interface</h3>
 						${ row( k( 'H' ), 'Settings panel' ) }
 						${ row( k( 'P' ), 'Photo mode<small>Hides all interface</small>' ) }
 						${ row( k( 'F1' ) + k( '?' ), 'This sheet' ) }
-						${ row( k( 'Esc' ), 'Release the mouse' ) }
+						${ row( k( 'Esc' ), 'Release the mouse / close wheel' ) }
 					</section>
 				</div>
 				<div class="tw-help-guide">
-					<span><b>How to play:</b> catch fish, sell them to Joe at the fish stand by the pier, and buy upgrades from Marta at the chandlery by the boathouse. Both are on the map (lower right).</span>
-					<button type="button" class="gm-btn is-ghost tw-help-replay">Replay the guide</button>
+					<span><b>Island Holiday:</b> hold <kbd>Tab</kbd> or <kbd>Q</kbd> to jump into cars, jetskis, the carrier jet, hang glider, chairlift, ferry, disasters, or landmarks. Press <kbd>G</kbd> any time to summon your last ride.</span>
+					<button type="button" class="gm-btn is-ghost tw-help-replay">Holiday guide</button>
 				</div>
 			</div>`;
 		el.querySelector( '.tw-help-close' ).addEventListener( 'click', () => this.toggleHelp( false ) );
@@ -2198,9 +2201,9 @@ export class UI {
 				<div class="tw-start-keys">
 					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>Move</span>
 					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>Look</span>
+					<span><kbd>M</kbd>Activities</span>
 					<span><kbd>E</kbd>Interact</span>
-					<span><kbd>H</kbd>Settings</span>
-					<span><kbd>F1</kbd>All controls</span>
+					<span><kbd>G</kbd>Recall ride</span>
 				</div>
 			</div>`;
 		this.root.append( el );

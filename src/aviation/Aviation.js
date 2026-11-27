@@ -4,8 +4,8 @@ import {CarrierPhysics} from './CarrierPhysics.js';
 import {CarrierDeck,PARKED_FIGHTERS} from './CarrierDeck.js';
 import {localAircraftExit,entryRescue} from './OnFootExit.js';
 import {FlightPhysics,NOSE_STRUT} from './FlightPhysics.js';
-import {AviationPanel} from './AviationPanel.js';
-import {CARRIER,STEP} from './Constants.js';
+import {FlightHud} from './FlightHud.js';
+import {AIRCRAFT_NAME,CARRIER,STEP} from './Constants.js';
 import {add,sub,mul,dot,cross,unit,rotate,clamp,length} from './Math.js';
 
 export const FIGHTER_KEYS=Object.freeze({
@@ -63,7 +63,7 @@ export class Aviation{
   // Do not silently substitute boxes if an authored model is missing: loading
   // failure is actionable and the rest of the island may continue through App.
   const [carrier,jet]=await Promise.all([loadModel(`${base}aviation/carrier.glb`),loadModel(`${base}aviation/fighter.glb`)]);
-  this.carrierModel=carrier;this.jetModel=jet;this.modelParts=carrier.parts+jet.parts;carrier.root.name='Tidewater carrier';jet.root.name='Kestrel fighter';this.app.scene.add(carrier.root);this.app.scene.add(jet.root);
+  this.carrierModel=carrier;this.jetModel=jet;this.modelParts=carrier.parts+jet.parts;carrier.root.name='Tidewater carrier';jet.root.name=AIRCRAFT_NAME.full;this.app.scene.add(carrier.root);this.app.scene.add(jet.root);
   this.basePivots=new Map();for(const[name,node]of jet.pivots)this.basePivots.set(name,{q:node.quaternion.clone(),p:node.position.clone()});
   this.parked=[];
   for(const [x,z,yaw]of PARKED_FIGHTERS){
@@ -73,7 +73,7 @@ export class Aviation{
   // query shortage uses the shared analytical/grid surface, never another owner.
   try{this.waterSlot=this.app.query.allocate('aviationWater',11);}catch(error){this.waterSlot=-1;this.lastError=error.message;}
   this.unregisterDisaster=this.app.disasters?.registerExternal?.({before:()=>this.captureDisasterState()});
-  this.app.player.groundProviders?.add(this.deckSupport);this.panel=new AviationPanel(this);this.syncModels();this.queueQueries();this.panel.update(0);
+  this.app.player.groundProviders?.add(this.deckSupport);this.hud=new FlightHud(this);this.syncModels();this.queueQueries();this.hud.update(0);
  }
  sample(x,y,z){return this.app.disasters?.field?.sample(x,y,z)||{wx:0,wy:0,wz:0,ux:0,uz:0,height:0};}
  waterHeight(x,z,station=10){
@@ -97,7 +97,7 @@ export class Aviation{
   this.active=true;this.camReady=false;app.input.keys.clear();app.input.pressed.clear();app.input.consumeLook();app.cameraCut();return true;
  }
  visit(view=this.inspectView){if(!this.takeControl())return false;this.pilot=false;this.camReady=false;this.camMode='chase';this.inspectView=['carrier','deck','bridge','fighter'].includes(view)?view:'carrier';this.inspectYaw=this.inspectView==='bridge'?-.9:-.75;this.inspectPitch=this.inspectView==='deck'?.62:this.inspectView==='bridge'?.18:.37;this.app.cameraCut();}
- enter(){if(!this.takeControl())return false;this.pilot=true;this.camReady=false;this.app.player.mode='aviation';this.app.cameraCut();this.panel?.syncControls();}
+ enter(){if(!this.takeControl())return false;this.pilot=true;this.camReady=false;this.app.player.mode='aviation';this.app.cameraCut();this.hud?.invalidate();this.hud?.update(0);return true;}
  offer(player){
   if(this.active||!this.jetModel||this.app.chairlift?.active||this.flight.phase==='crashed'||this.flight.phase==='ditched')return null;
   const p=player.position,f=this.flight.position,dx=p.x-f[0],dz=p.z-f[2];
@@ -105,8 +105,8 @@ export class Aviation{
   this.entryOffer||={text:'Fly the jet',act:()=>this.enter()};
   return this.entryOffer;
  }
- approach(){if(!this.takeControl())return false;this.flight.startApproach(this.flightEnv);this.pilot=true;this.camReady=false;this.camMode='chase';this.app.cameraCut();this.panel?.syncControls();}
- reset(){this.flight.reset();this.waterImpactSeen=null;this.camReady=false;this.app.cameraCut();this.panel?.syncControls();this.syncModels();}
+ approach(){if(!this.takeControl())return false;this.flight.startApproach(this.flightEnv);this.pilot=true;this.camReady=false;this.camMode='chase';this.app.cameraCut();this.hud?.invalidate();this.hud?.update(0);return true;}
+ reset(){this.flight.reset();this.waterImpactSeen=null;this.camReady=false;this.app.cameraCut();this.syncModels();this.hud?.invalidate();this.hud?.update(0);}
  captureDisasterState(){
   if(this.disasterSnapshot)return;
   const flight=Object.fromEntries(Object.entries(this.flight).filter(([key])=>key!=='carrier'));
@@ -120,14 +120,14 @@ export class Aviation{
   // the controller mode from our captured state, even after repeated events.
   if(this.active&&this.app.player){const p=this.app.player;p.mode='aviation';p.position.fromArray(this.pilot?this.flight.position:this.carrier.world([0,18,0]));p.velocity.set(0,0,0);p.prompt=null;this.app.freeCam=false;this.app.input?.keys?.clear();this.app.input?.pressed?.clear();}
   this.app.cameraCut?.();
-  this.accumulator=0;this.flight.accumulator=0;this.waterImpactSeen=null;this.camReady=false;this.syncModels();this.panel?.syncControls();this.panel?.update(0);
+  this.accumulator=0;this.flight.accumulator=0;this.waterImpactSeen=null;this.camReady=false;this.syncModels();this.hud?.invalidate();this.hud?.update(0);
  }
  leave(){
   if(!this.active)return;const app=this.app,p=app.player;
   const local=this.pilot&&['ready','arrested','touchdown','crashed','ditched'].includes(this.flight.phase)?localAircraftExit(app,this.flight,{sideOffset:4,provider:this.deckSupport,waterAt:(x,z)=>this.waterHeight(x,z)}):null;
   const destination=local||entryRescue(app,this.savedPlayer);this.lastExit=local?'local':'rescue';this.active=false;this.pilot=false;
   p.resumeOnFoot(destination);this.savedPlayer=null;
-  this.flight.controls.throttle=0;this.flight.controls.brake=true;app.camera.up.set(0,1,0);app.input.keys.clear();app.input.pressed.clear();app.input.consumeLook();this.camReady=false;this.panel?.update(0);app.cameraCut();
+  this.flight.controls.throttle=0;this.flight.controls.brake=true;app.camera.up.set(0,1,0);app.input.keys.clear();app.input.pressed.clear();app.input.consumeLook();this.camReady=false;this.hud?.update(0);app.cameraCut();
  }
  walkDeck(){
   if(this.app.chairlift?.active)return false;
@@ -136,14 +136,30 @@ export class Aviation{
   // few steps away (was mid-deck at x -17, z 0, facing the bow).
   const position=this.carrier.world([-4,CARRIER.deckY,24]);
   app.player.resumeOnFoot({position,velocity:this.deckSupport.velocityAt(position),yaw:this.carrier.heading-Math.PI/2,pitch:0,waterHeight:this.waterHeight(position[0],position[2]),grounded:true,provider:this.deckSupport});
-  app.input.keys.clear();app.input.pressed.clear();app.input.consumeLook();this.panel?.update(0);app.cameraCut();
+  app.input.keys.clear();app.input.pressed.clear();app.input.consumeLook();this.hud?.update(0);app.cameraCut();
  }
 
- toggleCamera(){this.camMode=this.camMode==='cockpit'?'chase':'cockpit';this.camReady=false;this.app.cameraCut();this.panel?.syncControls();}
+ toggleCamera(){this.camMode=this.camMode==='cockpit'?'chase':'cockpit';this.camReady=false;this.app.cameraCut();this.hud?.invalidate();this.hud?.update(0);}
+ // Unified command door shared by keyboard hotkeys, the Activity Wheel, and the micro shortcut strip.
+ command(name){
+  const f=this.flight,c=f.controls;
+  switch(name){
+   case 'gear':c.gear=!c.gear;if(f.auto)f.auto.gearDone=true;break;
+   case 'hook':c.hook=!c.hook;break;
+   case 'flaps':c.flaps=c.flaps<.3?.6:c.flaps<.9?1:0;if(f.auto)f.auto.flapsDone=true;break;
+   case 'brake':c.brake=!c.brake;break;
+   case 'camera':this.toggleCamera();return;
+   case 'reset':this.reset();return;
+   case 'approach':this.approach();return;
+   case 'leave':this.leave();return;
+   default:return;
+  }
+  this.hud?.invalidate();this.hud?.update(0);
+ }
  controls(dt){
   const i=this.app.input,f=this.flight,c=f.controls,K=FIGHTER_KEYS;
   if(this.active&&i.hit(K.leave)){
-   this.leave();
+   this.command('leave');
    return;
   }
   if(!this.pilot)return;
@@ -162,18 +178,10 @@ export class Aviation{
    if(up)c.throttle=clamp(c.throttle+dt*THROTTLE_RATE,0,1);
    if(down)c.throttle=clamp(c.throttle-dt*THROTTLE_RATE,0,1);
   }
-  const gear=i.hit(K.gear),hook=i.hit(K.hook),flaps=i.hit(K.flaps),brake=i.hit(K.brake);
-  // Taking the gear or flaps by hand ends the launch housekeeping for them.
-  if(gear){
-   c.gear=!c.gear;
-   if(f.auto)f.auto.gearDone=true;
-  }
-  if(hook)c.hook=!c.hook;
-  if(flaps){
-   c.flaps=c.flaps<.3?.6:c.flaps<.9?1:0;
-   if(f.auto)f.auto.flapsDone=true;
-  }
-  if(brake)c.brake=!c.brake;
+  if(i.hit(K.gear))this.command('gear');
+  if(i.hit(K.hook))this.command('hook');
+  if(i.hit(K.flaps))this.command('flaps');
+  if(i.hit(K.brake))this.command('brake');
   if(i.down(K.holdBrake)){
    if(this.brakeSaved===undefined)this.brakeSaved=c.brake;
    c.brake=true;
@@ -181,9 +189,8 @@ export class Aviation{
    c.brake=this.brakeSaved;
    this.brakeSaved=undefined;
   }
-  if(i.hit(K.reset))this.reset();
-  if(i.hit(K.camera))this.toggleCamera();
-  if(gear||hook||flaps||brake||up||down)this.panel?.syncControls();
+  if(i.hit(K.reset))this.command('reset');
+  if(i.hit(K.camera))this.command('camera');
  }
  update(dt){
   if(!this.jetModel)return;
@@ -196,7 +203,7 @@ export class Aviation{
   // receiving water service bounds it to 0.25 m and preserves paired volume.
   const hit=this.flight.lastImpact;
   if(hit&&hit!==this.waterImpactSeen){this.waterImpactSeen=hit;this.app.disasters?.field?.water?.addImpulse?.(hit.x,hit.z,12,Math.min(.25,Math.sqrt(hit.energy/1e8)*.25));}
-  this.panel?.update(dt);
+  this.hud?.update(dt);
  }
  syncModels(){if(!this.jetModel)return;const f=this.flight;
   this.carrierModel.root.position.fromArray(this.carrier.position);this.carrierModel.root.quaternion.fromArray(this.carrier.quaternion);this.jetModel.root.position.fromArray(f.position);this.jetModel.root.quaternion.fromArray(f.quaternion);

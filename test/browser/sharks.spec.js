@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { pickWheel } from './helpers/wheel.js';
 
 // Maintained Given/When/Then scenarios on the actual local island. The only mocked
 // boundary is an external font CDN. Every When uses a real visible product control;
@@ -98,18 +99,17 @@ test( 'Sharks respond to a real tsunami current, freeze on pause and reset with 
 test( 'Watching sharks preserves active fighter controls and works after leaving aviation', async ( { page } ) => {
  await test.step( 'Given a player at the fighter controls', async () => {
   await island( page );
-  await page.getByRole( 'button', { name: 'Aviation', exact: true } ).click();
-  await page.getByRole( 'button', { name: 'Enter fighter', exact: true } ).click();
+  await pickWheel( page, 'Air', 'F/A-18 Hornet', 'Fly Hornet' );
  } );
  await test.step( 'When I choose Watch sharks then the active cockpit keeps control', async () => {
-  await page.getByRole( 'button', { name: 'Watch sharks', exact: true } ).click();
+  await pickWheel( page, 'Water', 'Watch Sharks' );
   await expect( page.getByText( 'Leave the vehicle controls before watching sharks.', { exact: true } ) ).toBeVisible();
   expect( await page.evaluate( () => ( { active: window.__app.aviation.active, mode: window.__app.player.mode, free: window.__app.freeCam } ) ) ).toEqual( { active: true, mode: 'aviation', free: false } );
   expect( ( await sharks( page ) ).observing ).toBe( false );
  } );
  await test.step( 'When I leave aviation and choose Watch sharks then observation opens', async () => {
-  await page.getByRole( 'button', { name: 'Leave aviation', exact: true } ).click();
-  await page.getByRole( 'button', { name: 'Watch sharks', exact: true } ).click();
+  await page.getByRole( 'status', { name: 'Flight instruments' } ).getByRole( 'button', { name: 'Leave aviation', exact: true } ).click();
+  await pickWheel( page, 'Water', 'Watch Sharks' );
   expect( ( await sharks( page ) ).observing ).toBe( true );
  } );
 } );

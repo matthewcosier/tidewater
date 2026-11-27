@@ -1,14 +1,15 @@
 import {test,expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
 import {decodePNG} from '../png-read.mjs';
+import {pickWheel} from './helpers/wheel.js';
 const click=(p,name)=>p.getByRole('button',{name,exact:true}).click();
 function mean(image,x,y,w,h){let sum=0,count=0;for(let j=Math.floor(y);j<y+h;j++)for(let i=Math.floor(x);i<x+w;i++){if(i<0||j<0||i>=image.width||j>=image.height)continue;const k=(j*image.width+i)*4;sum+=.2126*image.data[k]+.7152*image.data[k+1]+.0722*image.data[k+2];count++;}return sum/count;}
 test('Moving fighter keeps stable airframe lighting during an ordinary catapult flight',async({page},info)=>{
  const rows=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
  await test.step('Given a carrier fighter ready on the catapult',async()=>{
-  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await click(page,'Click to explore');await click(page,'Skip');
+  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await click(page,'Click to explore');
   await click(page,'Performance');await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();await click(page,'Collapse (H)');
-  await click(page,'Aviation');await click(page,'Enter fighter');
+  await pickWheel(page,'Air','F/A-18 Hornet','Fly Hornet');
  });
  await test.step('When I hold W to launch, pull up to a positive climb and release the pitch control',async()=>{
   await page.keyboard.down('w');await expect.poll(()=>page.evaluate(()=>window.__app.aviation.flight.metrics.speed),{timeout:30000}).toBeGreaterThan(55);await page.keyboard.down('ArrowDown');await expect(page.getByRole('status',{name:'Flight instruments'})).toHaveAttribute('data-phase','airborne',{timeout:30000});

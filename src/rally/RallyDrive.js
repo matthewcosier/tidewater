@@ -283,6 +283,7 @@ export class RallyDrive {
 		this.app.freeCam = false;
 		this.active = true;
 		this.coasting = false;
+		this.app.vehicleRecall?.clearRemount();
 		player.mode = 'rally';
 		player.prompt = null;
 		player.velocity.set( 0, 0, 0 );
@@ -311,6 +312,7 @@ export class RallyDrive {
 		this.active = false;
 		this.app.freeCam = false;
 		this.coasting = true; this.coastTime = 0;
+		this.app.vehicleRecall?.noteExit( 'car', { wipeout: true } );
 		this.restoreLens();
 		this.bailout.start( head, velocity, side );
 		if ( this.app.settings.bailShout !== false ) this.sound.yeet( !! this.app.audio?.muted );
@@ -325,6 +327,7 @@ export class RallyDrive {
 		const { player, terrainData: terrain, colliders, input } = this.app;
 		this.active = false;
 		this.leftAt = performance.now();
+		this.app.vehicleRecall?.noteExit( 'car', { wipeout: false } );
 		this.restoreLens();
 		this.app.freeCam = false;
 		// Safe dry ground next to the car, falling back to the beach after a dunk.

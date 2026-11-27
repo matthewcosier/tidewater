@@ -71,9 +71,9 @@ def paint():
  mat('Black',(.015,.021,.023),.1,.7);mat('Rubber',(.019,.023,.026),0,.9);mat('Orange',(.94,.25,.035),0,.5);mat('AircraftGrey',(.38,.46,.49),.35,.46);mat('AircraftLight',(.5,.58,.60),.3,.5)
  mat('Canopy',(.11,.32,.38),.65,.11,.48);mat('GreenLight',(.12,.9,.4),0,.4,1,3);mat('RedLight',(1,.075,.035),0,.4,1,3);mat('WarmLight',(.94,.8,.47),0,.4,1,2)
 
-def text_mesh(content,point,size,m,rotation=(math.pi/2,0,0),group='Static'):
+def text_mesh(content,point,size,m,rotation=(math.pi/2,0,0),group='Static',extrude=.001):
  # Use Blender text only as a modelling tool; converted geometry is batched.
- data=bpy.data.curves.new('Deck lettering','FONT');data.body=content;data.align_x='CENTER';data.size=size;data.extrude=.001
+ data=bpy.data.curves.new('Deck lettering','FONT');data.body=content;data.align_x='CENTER';data.size=size;data.extrude=extrude
  obj=bpy.data.objects.new(content,data);bpy.context.collection.objects.link(obj);obj.location=cv(point);obj.rotation_euler=rotation;bpy.context.view_layer.objects.active=obj;obj.select_set(True);bpy.ops.object.convert(target='MESH');bpy.context.view_layer.update()
  verts=[]
  for v in obj.data.vertices:
@@ -200,62 +200,258 @@ def airfoil(name,sign,stations,y,m,group='Static'):
   base=i*step;f.append(tuple([base+j for j in range(n+1)]+[base+n+1+j for j in reversed(range(n+1))]))
  mesh(name,v,f,m,group)
 
+# Single-seat F/A-18E, NAVAIR's 60.3 ft by 44.9 ft reference, scaled to
+# the game's 18.35 m by 13.68 m envelope. Stations and hardware are in metres.
+def fighter_shell(name, sections, material, group='Static'):
+ # A closed loft, including end caps. Each section has matching perimeter vertices.
+ n=len(sections[0])
+ faces=[tuple(reversed(range(n))),tuple(range((len(sections)-1)*n,len(sections)*n))]
+ faces.extend((j*n+i,j*n+(i+1)%n,(j+1)*n+(i+1)%n,(j+1)*n+i)
+              for j in range(len(sections)-1) for i in range(n))
+ mesh(name,[v for section in sections for v in section],faces,material,group)
+
+
 def fighter():
- loft('Shaped fuselage',[(-8.6,.45,.5,.0),(-7.5,1.08,.75,.02),(-5.8,1.33,.87,.05),(-3.5,1.52,.93,.1),(-1,1.43,.86,.09),(1,1.08,.75,.12),(3,.87,.7,.15),(5,.69,.6,.16),(6.5,.52,.44,.17),(8,.28,.26,.12),(9.2,.015,.025,.04)],'AircraftGrey')
- # Upper chine shoulders join twin intake roots with the wing and fuselage.
- for s in [-1,1]:
-  prism('Leading edge root extension',[(s*.7,5.1),(s*1.45,2.6),(s*2.25,.6),(s*2,-1.7),(s*.8,-2)],-.05,.27,'AircraftLight')
-  airfoil('Main wing',s,[(1.1,2.2,-2.8),(1.8,1.66,-2.77),(3.8,-.06,-3.12),(6.45,-2.31,-3.69),(6.8,-2.6,-4.4)],0,'AircraftLight')
-  pivot('Aileron'+('R'if s>0 else'L'),(s*5.1,-.025,-3.5));airfoil('Aileron',s,[(3.8,-3.15,-4.14),(6.45,-3.72,-4.42)],-.035,'AircraftGrey','Aileron'+('R'if s>0 else'L'))
-  pivot('Flap'+('R'if s>0 else'L'),(s*2.5,-.04,-2.9));airfoil('Trailing flap',s,[(1.8,-2.8,-3.55),(3.8,-3.15,-4.15)],-.04,'HullPanelGrey','Flap'+('R'if s>0 else'L'))
-  pivot('Elevator'+('R'if s>0 else'L'),(s*2.3,.2,-6.5));airfoil('Tailplane',s,[(.8,-5.2,-8.15),(2.4,-5.9,-8.2),(3.6,-7.1,-8.4)],.17,'AircraftLight','Elevator'+('R'if s>0 else'L'))
-  # Canted twin tail fins, with separately hinged rudder trailing edges.
-  fin=[(s*1.03,.55,-4.8),(s*1.55,3.35,-6.4),(s*2.02,3.65,-7.7),(s*1.63,.75,-8.2)]
-  vv=[(x+s*t,y,z)for t in [-.05,.05]for x,y,z in fin];mesh('Canted tail fin',vv,[(0,1,2,3),(4,7,6,5),(0,4,5,1),(1,5,6,2),(2,6,7,3),(3,7,4,0)],'AircraftGrey')
-  name='Rudder'+('R'if s>0 else'L');pivot(name,(s*1.65,2,-7.5));mesh('Rudder',[(s*1.5,1,-7.65),(s*1.89,3.4,-7.56),(s*2.02,3.65,-7.85),(s*1.66,.8,-8.27)],[(0,1,2,3)],'AircraftLight',name)
-  # Hollow intake lips, diverter ramp and dark recessed duct.
-  x=s*1.2
-  intake_duct(s)
-  rod('Intake upper lip',(x-s*.43,.15,2.86),(x+s*.57,.1,2.55),.055,'BrightMetal')
-  box('Diverter plate',(s*.9,-.2,2.35),(.04,1,1.25),'SteelDark')
-  # Nozzles have overlapping metal petals and an internal turbine shadow.
-  centre=(s*.7,0,-8.1)
-  rod('Exhaust dark opening',(s*.7,0,-7.23),(s*.7,0,-7.26),.4,'Black',n=24)
-  ring('Exhaust collar',centre,.46,.07,'BrightMetal',normal=(0,0,1),n=24,k=5)
-  for i in range(16):
-   a=math.tau*i/16;b=math.tau*(i+1)/16
-   v=[(s*.7+r*math.cos(t),r*math.sin(t),z)for r,z in[(.47,-7.85),(.38,-8.6)]for t in[a,b]];mesh('Nozzle petal',v,[(0,1,3,2)],'SteelDark'if i%2 else'BrightMetal')
-  # Access panel seams and rivets are geometry, retained in exported render.
-  for z in [-5.5,-3.5,-1.4,1.2]:rod('Fuselage panel seam',(s*1.24,.46,z),(s*1.3,.12,z),.011,'SteelDark',n=5)
-  for z in [-3,-2,-1,0,1]:ellipsoid('Fastener',(s*1.45,.15,z),(.026,.015,.026),'BrightMetal',n=6,k=4)
-  ring('Wing insignia',(s*4.5,.075,-2.6),.38,.085,'WhiteMarking',n=24,k=4);ring('Wing insignia inner',(s*4.5,.08,-2.6),.16,.06,'SafetyRed',n=20,k=4)
-  ellipsoid('Navigation lamp',(s*6.8,.08,-3.1),(.08,.07,.2),'GreenLight'if s>0 else'RedLight',n=10,k=5)
- # Transparent swept canopy, separate frame, ejection seat and visible cockpit.
- loft('Canopy',[ (1.25,.35,.17,.87),(1.8,.58,.52,1.05),(2.65,.61,.76,1.06),(3.6,.55,.69,1.0),(4.5,.39,.45,.93),(5.05,.1,.12,.82)],'Canopy',n=32)
- for s in [-1,1]:
-  pts=[(s*.3,.92,1.35),(s*.6,1.05,2),(s*.6,1.15,3),(s*.49,1.07,4),(s*.15,.9,5)]
-  for i in range(len(pts)-1):rod('Canopy sill',pts[i],pts[i+1],.048,'SteelDark')
- rod('Canopy rear bow',(-.54,1.17,1.9),(0,1.66,1.9),.04,'SteelDark');rod('Canopy rear bow',(0,1.66,1.9),(.54,1.17,1.9),.04,'SteelDark')
- box('Cockpit floor',(0,.65,2.8),(.9,.12,2.8),'Black');box('Seat back',(0,1.15,2.1),(.6,.8,.3),'Black');box('Seat cushion',(0,.91,2.53),(.61,.16,.6),'Rubber');box('Headrest',(0,1.64,2.1),(.4,.28,.2),'Rubber')
- box('Instrument coaming',(0,1.05,3.65),(.82,.28,.6),'Black');box('Instrument screen',(0,1.17,3.42),(.36,.12,.05),'GreenLight');rod('Control stick',(0,.87,2.95),(0,1.18,2.95),.04,'SteelDark')
- for s in [-1,1]:rod('Harness',(s*.19,1.51,2.31),(s*.12,.96,2.65),.04,'SafetyYellow')
- # Three independently animated retractable gear assemblies, detailed struts,
- # torque links, hubs and tyre toroids. Wheel ground tangency is exactly y=-2.
- for name,x,z,piv in [('GearNose',0,5.3,(0,-.55,4.9)),('GearLeft',-2.65,-1.7,(-1.7,-.5,-1.7)),('GearRight',2.65,-1.7,(1.7,-.5,-1.7))]:
-  pivot(name,piv);radius=.36 if x==0 else .45;cy=-2+radius
-  rod('Oleo outer',piv,(x,-1.25,z),.115,'SteelGrey',name,n=12);rod('Oleo piston',(x,-1.05,z),(x,cy,z),.065,'BrightMetal',name,n=12)
-  rod('Gear scissor',(x,-.95,z+.16),(x,-1.26,z+.33),.045,'SteelDark',name);rod('Gear scissor',(x,-1.26,z+.33),(x,-1.55,z+.13),.04,'SteelDark',name)
-  rod('Axle',(x-.22,cy,z),(x+.22,cy,z),.07,'BrightMetal',name)
-  ring('Tyre',(x,cy,z),radius*.75,radius*.25,'Rubber',normal=(1,0,0),group=name,n=24,k=8)
-  rod('Wheel hub',(x-.15,cy,z),(x+.15,cy,z),radius*.48,'SteelGrey',name,n=16)
-  for sign in [-1,1]:ring('Hub rim',(x+sign*.155,cy,z),radius*.39,.025,'BrightMetal',normal=(1,0,0),group=name,n=16,k=4)
-  box('Gear door',(piv[0]+(.3 if x>=0 else-.3),-.53,z),(.42,.06,1.4),'AircraftLight',name)
- pivot('ArrestorHook',(0,-.4,-5.8));rod('Hook shank',(0,-.4,-5.8),(0,-.5,-7.9),.065,'BrightMetal','ArrestorHook');rod('Hook shoe',(0,-.5,-7.9),(0,-.65,-7.72),.09,'SteelDark','ArrestorHook')
- # Nose sensor, vents and maintenance markings. No weapons or hardpoints.
- rod('Nose probe',(0,.04,9.05),(0,.04,9.65),.018,'BrightMetal')
- for s in [-1,1]:
-  for i in range(7):box('Cooling louvre',(s*.7,.72,-2.9+i*.18),(.45,.025,.07),'SteelDark')
- text_mesh('07',(0,.77,6),.5,'WhiteMarking',rotation=(0,0,0))
+ # Nose and cockpit chine flow aft into a broad, shallow twin-lobed engine deck.
+ # The narrow centre tail ends between the open engine cans.
+ mat('GhostGrey',(.32,.365,.405),.12,.54)
+ mat('LightGhost',(.49,.53,.55),.08,.60)
+ mat('Radome',(.26,.27,.275),.04,.65)
+ mat('Titanium',(.20,.203,.197),.68,.46)
+ mat('Graphite',(.060,.073,.084),.09,.63)
+ mat('Stencil',(.14,.175,.19),.06,.66)
+ canopy=MATS['Canopy']
+ bs=canopy.node_tree.nodes.get('Principled BSDF')
+ bs.inputs['Metallic'].default_value=.18
+ bs.inputs['Alpha'].default_value=.28
+ bs.inputs['Base Color'].default_value=(.16,.28,.29,1)
+ canopy.diffuse_color=(.16,.28,.29,.28)
+ stations=[(-8.40,.14,.09,.04),(-8.13,.38,.16,.06),(-7.80,1.12,.30,.04),
+           (-7.46,1.40,.48,.04),(-6.65,1.54,.59,.06),(-5.35,1.69,.68,.09),
+           (-3.70,1.81,.73,.10),(-2.28,1.83,.77,.09),(-1.0,1.67,.77,.10),
+           (.65,1.30,.76,.12),(1.85,.86,.70,.14),(3.25,.76,.64,.17),
+           (4.65,.70,.63,.16),(5.55,.65,.60,.13),(6.85,.55,.48,.10),
+           (7.65,.455,.39,.07),(8.45,.33,.29,.032),(9.07,.19,.16,-.01),
+           (9.53,.06,.052,-.04),(9.70,.007,.007,-.056)]
+ def skin(st,a):
+  z,w,h,y=st
+  x=math.cos(a)
+  s=math.sin(a)
+  chine=max(0,min(1,(3-z)/3,(z+8.3)/.8))
+  belly=math.copysign(abs(s)**(1-.40*chine),s)
+  valley=1-chine*.31*math.exp(-(x/.28)**2)
+  return (w*x,y+h*belly*valley,z)
+ n=48
+ # Retain shared normals along station boundaries within each paint finish.
+ rings=[[skin(st,math.tau*i/n) for i in range(n)] for st in stations]
+ faces_by_finish={}
+ for j,st in enumerate(stations[:-1]):
+  for i in range(n):
+   finish='Radome' if st[0]>=6.85 else 'LightGhost' if i>=n//2 else 'GhostGrey'
+   a=math.tau*(i+.5)/n
+   if 4.65<=st[0]<6.85 and i<n//2 and abs(math.cos(a))<.52:
+    finish='Graphite'
+   k=(i+1)%n
+   faces_by_finish.setdefault(finish,[]).append((j*n+i,j*n+k,(j+1)*n+k,(j+1)*n+i))
+ vertices=sum(rings,[])
+ for finish,faces in faces_by_finish.items():
+  used=sorted({i for face in faces for i in face})
+  index={old:new for new,old in enumerate(used)}
+  mesh('Skin',[vertices[i] for i in used],[tuple(index[i] for i in face) for face in faces],finish)
+ for st in [stations[0],stations[-1]]:
+  mesh('End cap',[skin(st,math.tau*i/n) for i in range(n)],[tuple(range(n))],'Radome' if st[0]>0 else 'GhostGrey')
+ # Fine recessed-panel boundaries follow each local cross section.
+ for z in [6.85,5.72,-2.10,-4.72,-6.92]:
+  for st,end in zip(stations,stations[1:]):
+   if st[0]<=z<=end[0]:
+    t=(z-st[0])/(end[0]-st[0])
+    section=[u+(v-u)*t for u,v in zip(st,end)]
+    points=[skin(section,math.tau*i/48) for i in range(49)]
+    mesh('Panel joint',[(x*1.003,y+.002*math.sin(math.tau*i/48),zz+d) for d in [-.006,.006] for i,(x,y,zz) in enumerate(points)],[(i,i+1,50+i,49+i) for i in range(48)],'Stencil')
+    break
+ loft('Dorsal spine',[(-6.85,.025,.025,.42),(-5.4,.34,.16,.53),(-3.5,.44,.26,.60),
+      (-1.3,.53,.35,.66),(.4,.56,.39,.72),(1.32,.55,.37,.83),(2.0,.48,.28,.90)],'GhostGrey')
+ for side,letter in [(-1,'L'),(1,'R')]:
+  # One continuous airfoil envelope from the canopy chine to the tip. The
+  # inboard stations describe the ogee. The outer panel has a straight hinge.
+  wing=[(.58,5.52,-3.24),(.74,5.22,-3.24),(.91,4.45,-3.24),(1.13,3.47,-3.24),
+        (1.41,2.46,-3.24),(1.73,1.68,-3.24),(2.04,1.20,-3.24),(2.30,1.02,-3.24),
+        (4.68,.02,-3.24),(6.71,-.96,-3.24)]
+  sections=[]
+  def half_depth(x,chord,t):
+   # The long root-extension chord is a thin chine, widest over the intake shoulders.
+   return (1-.55*max(0,min(1,(2.3-x)/1.6)))*(.042-.023*t)*chord
+  def wing_y(x,z):
+   for (xa,la,ta),(xb,lb,tb) in zip(wing,wing[1:]):
+    if xa<=x<=xb:
+     u=(x-xa)/(xb-xa)
+     le=la+(lb-la)*u
+     te=ta+(tb-ta)*u
+     t=min(1,max(0,(le-z)/(le-te)))
+     return .20-.021*x+2*math.sqrt(t*(1-t))*half_depth(x,le-te,t)-.055*(1-t)**7
+  for x,le,te in wing:
+   centre=.20-.021*x
+   chord=le-te
+   section=[]
+   for i in range(32):
+    a=math.tau*i/32
+    t=(1-math.cos(a))/2
+    thick=math.sin(a)*half_depth(x,chord,t)
+    section.append((side*x,centre+thick-.055*(1-t)**7,le-t*chord))
+   sections.append(section)
+  fighter_shell('Wing and curved leading edge root',sections,'GhostGrey')
+  for part,x0,x1,te0,te1 in [('Flap',1.60,4.66,-4.22,-4.15),('Aileron',4.68,6.71,-4.15,-3.84)]:
+   name=part+letter
+   y=.20-.021*(x0+x1)/2
+   pivot(name,(side*(x0+x1)/2,y,-3.25))
+   airfoil(part,side,[(x0,-3.25,te0),(x1,-3.25,te1)],y,'GhostGrey',name)
+  name='Elevator'+letter
+  pivot(name,(side*1.36,.04,-6.69))
+  airfoil('Stabilator',side,[(1.08,-5.16,-8.08),(1.67,-5.48,-8.49),
+          (3.91,-7.14,-8.58),(4.09,-7.37,-8.08)],.04,'GhostGrey',name)
+  def fin(y,z,offset=0):
+   return (side*(.99+.364*(y-.49)+offset),y,z)
+  # A common unswept hinge line follows the 20 degree cant of the rudder.
+  hinge=-6.57
+  sections=[]
+  for y,le,w in [(.48,-3.56,.105),(.89,-3.87,.10),(3.36,-5.27,.058),(3.65,-5.53,.042)]:
+   sections.append([fin(y,z,d*w) for z,d in [(le,0),(le-.13, .75),((le+hinge)/2,1),
+                     (hinge,.32),(hinge,-.32),((le+hinge)/2,-1),(le-.13,-.75)]])
+  fighter_shell('Canted fin',sections,'GhostGrey')
+  name='Rudder'+letter
+  pivot(name,fin(1.99,hinge-.012))
+  sections=[]
+  for y,te in [(.52,-7.24),(1.00,-7.36),(3.60,-6.93)]:
+   sections.append([fin(y,z,d) for z,d in [(hinge-.012,.029),(te,.009),(te,-.009),(hinge-.012,-.029)]])
+  fighter_shell('Rudder',sections,'GhostGrey',name)
+  ellipsoid('Fin tip antenna',fin(3.63,-6.09),(.076,.082,.66),'GhostGrey',n=20,k=8)
+  # Red flash with a narrow white keyline and dark fin cap; markings sit on both surfaces.
+  def panel(y0,y1,z0,z1,d,m):
+   mesh('Fin marking',[fin(y0,z0,d),fin(y1,z0-.19,d),fin(y1+.12,z1,d),fin(y0+.12,z1,d)],[(0,1,2,3)],m)
+  for d in [-.064,.064]:
+   panel(2.93,3.03,-5.20,-6.55,d,'WhiteMarking')
+   panel(3.03,3.27,-5.27,-6.55,d,'SafetyRed')
+  # Lettering lies in the fin plane, so both the baseline and the upright follow the skin.
+  for text,y,z,size in [('TW',2.22,-5.88,.50),('07',1.77,-5.83,.32)]:
+   key=('Static','Stencil')
+   start=len(BATCH.get(key,([],[]))[0])
+   text_mesh(text,fin(y,z,.11),size,'Stencil',rotation=(math.pi/2,0,side*math.pi/2),extrude=0)
+   vs=BATCH[key][0]
+   for i in range(start,len(vs)):
+    x,yy,zz=vs[i]
+    vs[i]=(fin(yy,zz,.106)[0],yy,zz)
+  intake_duct(side)
+  # Tip rail has a tapered nose, parallel guide shoes and paired position lights.
+  rail=[]
+  for z,w,h in [(-4.09,.055,.045),(-3.94,.093,.10),(-1.36,.098,.104),(-1.04,.072,.077),(-.77,.02,.027)]:
+   rail.append([(side*(6.74+w*math.cos(math.tau*i/8)),.066+h*math.sin(math.tau*i/8),z) for i in range(8)])
+  fighter_shell('Tip rail',rail,'AircraftLight')
+  ellipsoid('Position lamp',(side*6.796,.078,-1.50),(.047,.056,.13),'GreenLight' if side>0 else 'RedLight',n=16,k=8)
+  box('Tip formation strip',(side*6.837,.060,-2.21),(.008,.044,.51),'WarmLight')
+  def wing_pt(x,z,lift=.005):
+   return (side*x,wing_y(x,z)+lift,z)
+  for x,width in [(3.22,.006),(4.68,.012),(6.16,.005)]:
+   le=1.02-(x-2.30)*.45
+   points=[wing_pt(x+offset,le-(le+3.21)*i/16) for i in range(17) for offset in [-width,width]]
+   mesh('Panel break',points,[(i,i+1,i+3,i+2) for i in range(0,32,2)],'Stencil')
+  for z in [-.79,-1.73,-2.66]:
+   ellipsoid('Wing fold knuckle',wing_pt(4.68,z),(.046,.037,.13),'GhostGrey',n=8,k=4)
+  for x in [2.8,3.6,5.5]:
+   ellipsoid('Flap track cover',(side*x,.05,-3.18),(.073,.077,.32),'GhostGrey',n=10,k=4)
+  line('Leading edge flap hinge',[wing_pt(x,le-.15*(le-te)) for x,le,te in wing[6:]],.008,'Stencil',n=4)
+  for i in range(5):
+   x,z=.92+i*.086,2.65-i*.28
+   mesh('Bleed slot',[wing_pt(x+dx,z+dz) for dx,dz in [(-.022,-.10),(.022,-.10),(.022,.10),(-.022,.10)]],[(0,1,2,3)],'Stencil')
+  x=1.60
+  mesh('LEX fence',[wing_pt(x,z,lift) for z,lift in [(1.24,0),(.99,.13),(.68,.12),(.63,0)]],[(0,1,2,3)],'GhostGrey')
+  # Low-visibility star and bars on the port upper wing; squadron number opposite.
+  if side<0:
+   def insignia(poly,finish,h):
+    mesh('National insignia',[wing_pt(3.68+dx,-1.24+dz,h) for dx,dz in poly],[tuple(range(len(poly)))],finish)
+   def disc(r):
+    return [(r*math.cos(math.tau*i/32),r*math.sin(math.tau*i/32)) for i in range(32)]
+   insignia([(-.87,-.15),(.87,-.15),(.87,.15),(-.87,.15)],'Stencil',.009)
+   insignia([(-.81,-.105),(.81,-.105),(.81,.105),(-.81,.105)],'LightGhost',.015)
+   insignia(disc(.38),'Stencil',.024)
+   insignia([((.35 if i%2==0 else .14)*math.sin(math.pi*i/5),(.35 if i%2==0 else .14)*math.cos(math.pi*i/5)) for i in range(10)],'LightGhost',.028)
+  else:
+   start=len(BATCH['Static','Stencil'][0])
+   text_mesh('NAVY',(3.94,0,-1.67),.44,'Stencil',rotation=(0,0,math.pi),extrude=0)
+   vs=BATCH['Static','Stencil'][0]
+   for i in range(start,len(vs)):
+    x,y,z=vs[i]
+    vs[i]=(x,wing_y(x,z)+.007+y,z)
+ # Canopy has no lower glass inside the cockpit. Smooth sampled half-ellipses
+ # carry the bows and sills on the same surface as the glazing.
+ sections=[]
+ for i in range(31):
+  t=i/30
+  z=1.19+4.22*t
+  radius=max(.008,math.sin(math.pi*t)**.70)
+  w=.616*radius
+  y=.84+.12*math.sin(math.pi*t)
+  h=(1.13-.48*t)*radius
+  arc=[(w*math.cos(math.pi*j/24),y+h*math.sin(math.pi*j/24),z) for j in range(25)]
+  sections.append(arc)
+  if i==5:
+   fighter_tube('Aft canopy bow',arc,.040,'Graphite',6)
+ verts=[v for section in sections for v in section]
+ faces=[(j*25+i,(j+1)*25+i,(j+1)*25+i+1,j*25+i+1) for j in range(30) for i in range(24)]
+ mesh('Single seat bubble canopy',verts,faces,'Canopy')
+ for i in [0,-1]:
+  fighter_tube('Canopy sill',[section[i] for section in sections],.040,'Graphite',6)
+ # Keep the exterior lip, with a recessed well between the two rails.
+ for side in (-1,1):
+  fighter_shell('Cockpit sill fairing',[
+   [(side*w*f,y+h*dy,z) for f,dy in [(1,0),(.96,.48),(.86,.77),(.80,.74),(.78,-.4),(.9,-.85)]]
+   for z,w,h,y in [(1.19,.11,.09,.87),(1.67,.39,.16,.86),(2.24,.52,.17,.88),
+                   (3.25,.62,.15,.87),(4.06,.51,.15,.86),(4.84,.32,.12,.84),(5.41,.04,.06,.79)]],'GhostGrey')
+ fighter_gear()
+ pivot('ArrestorHook',(0,-.51,-5.65))
+ tip=(0,-.56,-8.33)
+ rod('Hook shank',PIVOTS['ArrestorHook'],tip,.064,'SteelDark','ArrestorHook')
+ for i in range(5):
+  t=(i+1)/7
+  z=-5.65-2.68*t
+  y=-.51-.05*t
+  rod('Hook stripe',(0,y,z),(0,y-.002,z-.12),.066,'SafetyYellow','ArrestorHook')
+ line('Forged hook shoe',[tip,(0,-.68,-8.39),(0,-.73,-8.20),(0,-.68,-8.10)],.086,'SteelDark','ArrestorHook')
+
+
+def fighter_gear():
+ for name,x,z,piv in [('GearNose',0,5.3,(0,-.48,4.58)),('GearLeft',-2.65,-1.7,(-2.81,.08,-1.7)),('GearRight',2.65,-1.7,(2.81,.08,-1.7))]:
+  pivot(name,piv)
+  nose=x==0
+  radius=.34 if nose else .45
+  cy=-2+radius
+  knee=(x*.94,-1.27,z+(.0 if nose else .53))
+  rod('Upper oleo',piv,knee,.095 if nose else .121,'SteelGrey',name,n=16)
+  rod('Swing arm',knee,(x,cy,z),.078 if nose else .104,'SteelGrey',name,n=12)
+  rod('Oleo piston',(piv[0],-.73,z-.18),(x,cy+.10,z-.02),.059,'BrightMetal',name,n=12)
+  line('Torque links',[(knee[0],-.95,knee[2]),(knee[0],-1.18,knee[2]+.21),knee],.034,'SteelDark',name)
+  line('Brake hose',[piv,(knee[0]+.10,-1.0,z+.20),(x+.10,cy,z)],.018,'Rubber',name)
+  for wx in ([-.17,.17] if nose else [x]):
+   width=.097 if nose else .132
+   ring('Carrier tyre',(wx,cy,z),radius-width,width,'Rubber',normal=(1,0,0),group=name,n=32,k=8)
+   rod('Wheel casting',(wx-width,cy,z),(wx+width,cy,z),radius*.52,'SteelGrey',name,n=20)
+   for s in [-1,1]:
+    ring('Wheel rim',(wx+s*width,cy,z),radius*.40,.024,'BrightMetal',normal=(1,0,0),group=name,n=16,k=4)
+    for i in range(8):
+     a=math.tau*i/8
+     y=cy+.27*radius*math.cos(a)
+     zz=z+.27*radius*math.sin(a)
+     if nose and s*wx<0:continue
+     rod('Hub lug',(wx+s*width,y,zz),(wx+s*(width+.015),y,zz),.016,'SteelDark',name,n=4)
+  if nose:
+   rod('Launch bar',(0,-1.37,5.31),(0,-1.78,5.94),.048,'SteelGrey',name)
+   rod('Launch bar foot',(-.13,-1.78,5.94),(.13,-1.78,5.94),.045,'SteelDark',name)
+   ellipsoid('Taxi lamp',(0,-.92,5.17),(.113,.112,.075),'BrightMetal',name,n=14,k=6)
+  sign=1 if x>=0 else -1
+  xx=piv[0]+sign*(.31 if nose else .07)
+  top=piv[1]
+  edge=-.96 if nose else -.78
+  mesh('Open gear bay door',[(xx,top,z+.69),(xx,top,z-.55),(xx+sign*.18,edge,z-.38),
+       (xx+sign*.18,edge,z+.56)],[(0,1,2,3)],'AircraftLight',name)
 
 def line(name,points,r,m,group='Static',n=6):
  for a,b in zip(points,points[1:]):rod(name,a,b,r,m,group,n)
@@ -403,94 +599,371 @@ def carrier_detail():
   for k in range(7):ring('Anchor chain link',(side*12,7+k*.45,123),.23,.07,'SteelDark',normal=(1,0,0)if k%2 else(0,0,1),n=10,k=4)
  text_mesh('TIDEWATER 07',(19.91,23,-1),1.2,'WhiteMarking',rotation=(math.pi/2,0,-math.pi/2))
 
-def intake_duct(sign):
- front=[(sign*.65,-.75,2.94),(sign*1.82,-.7,2.52),(sign*1.82,.13,2.52),(sign*.78,.25,2.94)]
- inner=[(sign*.78,-.65,2.85),(sign*1.69,-.6,2.47),(sign*1.69,.01,2.47),(sign*.85,.13,2.85)]
- back=[(sign*.92,-.53,-1.65),(sign*1.55,-.53,-1.65),(sign*1.55,.0,-1.65),(sign*.92,.0,-1.65)]
- mesh('Intake rolled lip',front+inner,[(i,(i+1)%4,(i+1)%4+4,i+4)for i in range(4)],'AircraftLight')
- mesh('Four metre recessed intake duct',inner+back,[(i,(i+1)%4,(i+1)%4+4,i+4)for i in range(4)],'SteelDark')
- mesh('Recessed compressor shadow',back,[(0,1,2,3)],'Black')
- outerback=[(sign*.74,-.8,-2.6),(sign*1.7,-.72,-2.6),(sign*1.7,.12,-2.6),(sign*.82,.18,-2.6)]
- mesh('Intake external fairing',front+outerback,[(i,(i+1)%4,(i+1)%4+4,i+4)for i in range(4)],'AircraftGrey')
- for i in range(9):
-  x=sign*(.98+i*.06);rod('Compressor stator',(x,-.49,-1.61),(x+sign*.045,-.04,-1.61),.018,'SteelGrey',n=4)
+def intake_duct(side):
+ # Rounded corners on the canted lip lead into the recessed cheek tunnel.
+ corners=[(.80,-.62),(1.63,-.68),(1.92,.02),(1.04,.17)]
+ outline=[]
+ for i,(x,y) in enumerate(corners):
+  prev=corners[i-1]
+  nxt=corners[(i+1)%4]
+  for t in [0,.25,.5,.75,1]:
+   outline.append((x+.09*((1-t)**2*(prev[0]-x)+t*t*(nxt[0]-x)),
+                   y+.09*((1-t)**2*(prev[1]-y)+t*t*(nxt[1]-y))))
+ def contour(scale,z,slant):
+  return [(side*(1.35+(x-1.35)*scale),-.25+(y+.25)*scale,z+slant*(1.35-x)) for x,y in outline]
+ def sleeve(sections,m):
+  n=len(outline)
+  mesh('Intake shell',[v for sec in sections for v in sec],
+       [(j*n+i,j*n+(i+1)%n,(j+1)*n+(i+1)%n,(j+1)*n+i) for j in range(len(sections)-1) for i in range(n)],m)
+ lip=contour(1,2.60,.46)
+ rim=contour(.90,2.59,.46)
+ sleeve([contour(.67,-3.20,0),contour(1.07,-.70,0),contour(1.04,1.65,.28),lip],'LightGhost')
+ sleeve([lip,rim,contour(.88,2.45,.42)],'GhostGrey')
+ sleeve([rim,contour(.82,1.28,.12),contour(.70,.47,0)],'Graphite')
+ mesh('Compressor shadow',contour(.70,.46,0),[tuple(range(len(lip)))],'Black')
+ for i in range(16):
+  a=math.tau*i/16
+  mesh('Compressor vane',[(side*(1.35+r*math.cos(t)),-.25+r*math.sin(t),.49+d)
+       for r,t,d in [(.058,a,0),(.245,a+.15,0),(.248,a+.33,.02),(.060,a+.16,.02)]],[(0,1,2,3)],'SteelDark')
+ mesh('Splitter plate',[(side*.78,-.58,2.96),(side*.99,.16,2.98),(side*1.04,.15,1.75),(side*.83,-.62,1.64)],[(0,1,2,3)],'LightGhost')
+ mesh('Intake danger flash',[(side*1.887,-.13,2.18),(side*1.835,-.28,1.67),(side*1.918,-.067,1.67)],[(0,1,2)],'SafetyRed')
+
 
 def fighter_detail():
- # Skin panel outlines follow the actual loft rather than floating over it.
- stations=[(-8.6,.45,.5,0),(-7.5,1.08,.75,.02),(-5.8,1.33,.87,.05),(-3.5,1.52,.93,.1),(-1,1.43,.86,.09),(1,1.08,.75,.12),(3,.87,.7,.15),(5,.69,.6,.16),(6.5,.52,.44,.17),(8,.28,.26,.12),(9.2,.015,.025,.04)]
- def skin(z,a,offset=.014):
-  for (z0,w0,h0,y0),(z1,w1,h1,y1) in zip(stations,stations[1:]):
-   if z0<=z<=z1:
-    t=(z-z0)/(z1-z0);w=w0+(w1-w0)*t;h=h0+(h1-h0)*t;y=y0+(y1-y0)*t;return((w+offset)*math.cos(a),y+(h+offset)*math.sin(a),z)
-  return (0,0,z)
- for z in [-7.35,-5.5,-3.4,-1.1,.9,5.35,6.55,7.6]:
-  line('Fuselage circumferential seam',[skin(z,a)for a in [math.tau*i/48 for i in range(49)]],.009,'SteelDark',n=4)
- for a in [.18,.72,2.42,2.96,3.85,5.58]:
-  line('Longitudinal skin seam',[skin(z,a)for z in [-7.3,-6,-5,-3.5,-2,-1,0,.9]],.008,'SteelDark',n=4)
  for side in [-1,1]:
-  # Flush access covers and distinctly inset screw heads on shoulders and wings.
-  for z in [-5.15,-2.7,-.45]:
-   a=.66 if side>0 else math.pi-.66;pts=[skin(z+dz,a+da,.022)for da,dz in [(-.17,-.36),(.17,-.36),(.17,.36),(-.17,.36),(-.17,-.36)]]
-   line('Removable inspection cover',pts,.012,'SteelDark',n=4)
-   for pt in pts[:4]:ellipsoid('Flush cover fastener',pt,(.022,.022,.022),'BrightMetal',n=6,k=4)
-  for x,lead,trail in [(2.6,.85,-3.1),(3.8,-.12,-3.48),(5.0,-1.12,-3.8)]:
-   line('Wing skin joint',[(side*x,.15,lead),(side*x,.11,(lead+trail)/2),(side*x,.045,trail)],.012,'SteelDark',n=4)
-  line('Wing leading edge inset',[(side*1.6,.06,1.98),(side*2.8,.085,.76),(side*4.8,.06,-1.08),(side*6.75,.035,-2.65)],.027,'SteelGrey',n=6)
-  line('Wing walk boundary',[(side*1.85,.14,.6),(side*2.65,.16,.0),(side*2.65,.08,-2.6),(side*1.8,.055,-2.9)],.023,'SafetyYellow',n=5)
-  text_mesh('NO STEP',(side*3.1,.20,-1.1),.20,'SteelDark',rotation=(0,0,0));text_mesh('KESTREL',(side*4.65,.18,-2.1),.33,'SteelDark',rotation=(0,0,0))
-  for x,z in [(2.25,-2.95),(3.05,-3.15),(4.45,-3.5),(5.6,-3.78)]:
-   group=('Flap'if x<3.2 else'Aileron')+('R'if side>0 else'L')
-   rod('Control surface hinge pin',(side*(x-.1),-.015,z),(side*(x+.1),-.015,z),.037,'BrightMetal',group,n=10)
-   box('Hinge fairing',(side*x,.035,z),(.18,.08,.28),'AircraftLight',group)
-  # Canted tail livery panels, cut into the fin plane with separate stencil geometry.
-  v=[(side*1.59,2.95,-6.3),(side*1.90,3.47,-7.54),(side*1.85,2.88,-7.82),(side*1.46,2.46,-6.4)]
-  mesh('Tail recognition band',v,[(0,1,2,3)],'SafetyRed')
-  line('Tail panel seam',[(side*1.2,.97,-5.36),(side*1.64,3.0,-6.68),(side*1.9,3.42,-7.52)],.015,'SteelDark')
-  text_mesh('TW',(side*1.66,2.12,-7.1),.5,'WhiteMarking',rotation=(math.pi/2,0,side*math.pi/2))
-  # Real internal nozzle walls, annular rings, turbine blades, petal actuators.
-  x=side*.7;n=24;v=[]
-  for z,r in [(-8.62,.375),(-8.1,.41),(-7.27,.38)]:
-   for i in range(n):a=math.tau*i/n;v.append((x+r*math.cos(a),r*math.sin(a),z))
-  mesh('Exhaust internal duct',v,[(j*n+i,j*n+(i+1)%n,(j+1)*n+(i+1)%n,(j+1)*n+i)for j in range(2)for i in range(n)],'SteelDark')
-  for z,r in [(-8.3,.394),(-7.75,.395),(-7.35,.382)]:ring('Inner nozzle annulus',(x,0,z),r,.014,'BrightMetal',normal=(0,0,1),n=24,k=4)
-  ellipsoid('Turbine spinner',(x,0,-7.55),(.11,.11,.23),'SteelGrey',n=16,k=8)
-  for i in range(16):
-   a=math.tau*i/16;b=a+.16
-   mesh('Turbine blade',[(x+.12*math.cos(a),.12*math.sin(a),-7.53),(x+.36*math.cos(a),.36*math.sin(a),-7.37),(x+.36*math.cos(b),.36*math.sin(b),-7.32),(x+.12*math.cos(b),.12*math.sin(b),-7.47)],[(0,1,2,3)],'SteelGrey')
-   rod('Petal actuator',(x+.49*math.cos(a),.49*math.sin(a),-7.8),(x+.405*math.cos(a),.405*math.sin(a),-8.43),.018,'BrightMetal',n=5)
-  # Shoulder formation strips and maintenance warning triangles are surface geometry.
-  for z in [-2.2,3.7]:
-   pt=skin(z,.21 if side>0 else math.pi-.21,.022);box('Formation light',pt,(.028,.065,.47),'WarmLight')
-  mesh('Intake danger arrow',[(side*1.83,-.15,2),(side*1.83,-.05,1.55),(side*1.83,-.25,1.55)],[(0,1,2)],'SafetyRed')
- # Layered canopy bows, windshield divider, a small head-up display and instrument bezels.
- for z,w,y,h in [(1.83,.58,1.05,.52),(4.45,.4,.95,.46)]:
-  line('Canopy arch',[(w*math.cos(math.pi*i/20),y+h*math.sin(math.pi*i/20),z)for i in range(21)],.035,'AircraftLight',n=7)
- line('Windscreen centre frame',[(0,1.78,3.4),(0,1.53,4.1),(0,1.17,4.75)],.023,'SteelDark',n=6)
- box('Instrument panel backing',(0,1.12,3.44),(.91,.39,.1),'SteelDark')
- for x in [-.28,0,.28]:
-  box('Display bezel',(x,1.14,3.374),(.23,.23,.035),'Black');box('Cockpit multifunction display',(x,1.145,3.35),(.18,.17,.012),'Glass')
-  line('Display artificial horizon',[(x-.077,1.145,3.337),(x+.077,1.145,3.337)],.003,'GreenLight',n=4)
-  for xx in [-.085,.085]:
-   for yy in [-.09,-.03,.03,.09]:box('Display softkey',(x+xx,1.145+yy,3.33),(.009,.011,.01),'WhiteMarking')
+  x=side*.685
+  def nozzle(r,z,a):
+   return (x+r*math.cos(a),r*math.sin(a),z)
+  for i in range(20):
+   a=math.tau*i/20
+   b=math.tau*(i+1)/20
+   # Faceted titanium feathers overlap the narrow, darker under-petals.
+   mesh('Exhaust petal',[nozzle(r,z,t) for r,z,t in
+        [(.641,-7.32,a),(.641,-7.32,b),(.637,-7.77,b),(.537,-8.65,b-.013),
+         (.546,-8.65,a+.026),(.65,-7.77,a)]],[(0,1,2,3,4,5)],'SteelDark' if i%2 else 'Titanium')
+   mesh('Petal edge',[nozzle(r,z,t) for r,z,t in [(.651,-7.77,a),(.652,-7.77,a+.035),
+        (.551,-8.64,a+.032),(.55,-8.65,a+.019)]],[(0,1,2,3)],'BrightMetal')
+  for z,r in [(-7.45,.640),(-7.75,.64)]:
+   ring('Nozzle collar',(x,0,z),r,.021,'SteelGrey',normal=(0,0,1),n=36,k=4)
+  n=40
+  rings=[[nozzle(r,z,math.tau*i/n) for i in range(n)] for z,r in [(-8.65,.532),(-8.50,.514),(-7.98,.491)]]
+  mesh('Nozzle liner',sum(rings,[]),[(j*n+i,j*n+(i+1)%n,(j+1)*n+(i+1)%n,(j+1)*n+i) for j in range(2) for i in range(n)],'Graphite')
+  rod('Turbine recess',(x,0,-7.96),(x,0,-7.97),.50,'Black',n=40)
+  for r in [.22,.39,.487]:
+   ring('Flameholder',(x,0,-8.08),r,.018,'SteelDark',normal=(0,0,1),n=24,k=3)
+  ellipsoid('Exhaust cone',(x,0,-8.08),(.12,.12,.25),'SteelDark',n=14,k=6)
+  for z,height in [(-4.26,.765),(-2.87,.796)]:
+   pts=[(side*(.82+.20*math.cos(math.tau*i/20)),height,z+.28*math.sin(math.tau*i/20)) for i in range(21)]
+   fighter_tube('Engine access hatch',pts,.008,'Stencil',4)
+  for z in [-1.6,-1.42,-1.24,-1.06,-.88]:
+   box('Heat vent',(side*.78,.794,z),(.30,.018,.061),'Stencil')
+
+ fighter_cockpit()
+
+
+def fighter_tube(name,points,r,material,n=8):
+ # Parallel transport keeps the cross section continuous through a bent rail.
+ points=list(map(Vector,points))
+ axis=Vector((0,0,1))
+ if abs((points[1]-points[0]).normalized().dot(axis))>.9:
+  axis=Vector((1,0,0))
+ sections=[]
+ for i,pt in enumerate(points):
+  tangent=(points[min(i+1,len(points)-1)]-points[max(0,i-1)]).normalized()
+  axis=(axis-tangent*axis.dot(tangent)).normalized()
+  cross=tangent.cross(axis)
+  radius=r(i/(len(points)-1)) if callable(r) else r
+  sections.append([tuple(pt+radius*(axis*math.cos(j*math.tau/n)+cross*math.sin(j*math.tau/n))) for j in range(n)])
+ fighter_shell(name,sections,material)
+
+
+def fighter_cockpit():
+ # All dimensions are in game metres. Registration is to the production eye at
+ # (0,1.44,2.90). Display strokes are physical inlays because the rigid aircraft
+ # loader reads PBR factors but does not sample decal textures.
+ glass=MATS['Glass'].node_tree.nodes.get('Principled BSDF')
+ glass.inputs['Base Color'].default_value=(.008,.021,.019,1)
+ glass.inputs['Roughness'].default_value=.36
+ glass.inputs['Metallic'].default_value=.08
+
+ def plate(name,verts,material):
+  mesh(name,verts,[tuple(range(len(verts)))],material)
+
+ def rect(w,h,r):
+  return [(-w+r,-h),(w-r,-h),(w,-h+r),(w,h-r),(w-r,h),(-w+r,h),(-w,h-r),(-w,-h+r)]
+
+ def face(x,y,z,cant=0,rake=.20):
+  # u increases to the pilot's right, d increases towards the eye.
+  return lambda u,v,d=0:(x-u,y+v,z+v*rake+u*cant-d)
+
+ def pad(name,P,u,v,w,h,r,d,material):
+  plate(name,[P(u+a,v+b,d) for a,b in rect(w/2,h/2,r)],material)
+
+ def stroke(P,points,width,material='GreenLight',d=.001):
+  edges=[]
+  for i,(u,v) in enumerate(points):
+   a,b=points[max(0,i-1)],points[min(i+1,len(points)-1)]
+   du,dv=b[0]-a[0],b[1]-a[1]
+   scale=width/(2*math.hypot(du,dv))
+   edges.extend((P(u-dv*scale,v+du*scale,d),P(u+dv*scale,v-du*scale,d)))
+  mesh('Printed instrument stroke',edges,[(i,i+1,i+3,i+2) for i in range(0,len(edges)-2,2)],material)
+
+ # Single-stroke lettering stays legible head-on at millimetre height without
+ # spending the mesh budget extruding the sides and backs of printed glyphs.
+ alphabet={
+  'A':'03752 35','B':'067543 5410','C':'8602','D':'067520','E':'8602 34',
+  'F':'068 35','G':'860254','I':'17','J':'85210',
+  'K':'06 83 32','L':'602','M':'06482','N':'0628','O':'06820',
+  'P':'06853','R':'06853 42','S':'863520','T':'68 71','U':'6028',
+  'V':'618','W':'60428','Y':'648 41','0':'06820','1':'471',
+  '2':'685302','3':'6820 45','4':'635 82','5':'863520','6':'860253',
+  '7':'681','8':'06820 35','9':'53682','H':'06 35 28','X':'62 80','Z':'6802','.':'10'}
+ def label(P,word,u,v,h,material='GreenLight',d=.002):
+  for j,char in enumerate(word):
+   for path in alphabet.get(char,'').split():
+    stroke(P,[(u+j*h*.83+(int(k)%3)*h*.29,v+(int(k)//3)*h*.5) for k in path],h*.105,material,d)
+
+ def arc(P,u,v,r,start,end,width,material='GreenLight',d=.001,n=32):
+  stroke(P,[(u+r*math.sin(start+(end-start)*i/n),v+r*math.cos(start+(end-start)*i/n)) for i in range(n+1)],width,material,d)
+
+ def bezel(P,w,h,border,softkeys=True):
+  loops=[]
+  for extent,depth in [(0,-.022),(0,.003),(-.003,.008),(-border+.003,.008),(-border,.001)]:
+   loops.append([P(u,v,depth) for u,v in rect(w/2+extent,h/2+extent,.009)])
+  mesh('Cast bezel',sum(loops,[]),[(j*8+i,j*8+(i+1)%8,(j+1)*8+(i+1)%8,(j+1)*8+i) for j in range(4) for i in range(8)],'Black')
+  pad('Recessed display',P,0,0,w-2*border+.001,h-2*border+.001,.008,0,'Glass')
+  if softkeys:
+   for i in range(-2,3):
+    for side in [-1,1]:
+     for u,v,sw,sh in [(i*w*.14,side*(h-border)/2,.012,.0045),(side*(w-border)/2,i*h*.14,.0045,.012)]:
+      pad('Membrane key',P,u,v,sw,sh,.001,.009,'Graphite')
+
+ # Crown of the windscreen rakes aft. Sample the *same* glazing surface as the
+ # bubble, from sill to sill, to keep the bow sealed along the entire arch.
+ def bow(a):
+  z=4.12-.58*math.sin(a)
+  t=(z-1.19)/4.22
+  radius=math.sin(math.pi*t)**.70
+  return Vector((.616*radius*math.cos(a),.84+.12*math.sin(math.pi*t)+(1.13-.48*t)*radius*math.sin(a),z))
+ fighter_tube('Windscreen bow',[bow(math.pi*i/64) for i in range(65)],lambda t:.022+.010*(2*t-1)**2,'Rubber',10)
+ for angle in [.29*math.pi,.50*math.pi,.71*math.pi]:
+  centre=bow(angle)
+  down=Vector((-.616*math.cos(angle),-.85*math.sin(angle),0)).normalized()
+  tangent=Vector((down.y,-down.x,.24*math.cos(angle))).normalized()
+  mount=centre+down*.048
+  rod('Mirror mount',centre,mount,.008,'Black')
+  def mirror(u,v,d):
+   return tuple(mount+tangent*u-down*v+Vector((0,0,v*.28-d)))
+  fighter_shell('Mirror rim',[[mirror(u,v,d) for u,v in rect(.069+s,.029+s,.012)] for d,s in [(-.009,-.004),(0,0),(.005,-.002)]],'Black')
+  pad('Polished mirror',mirror,0,0,.125,.045,.009,.0055,'BrightMetal')
  for side in [-1,1]:
-  box('Cockpit side console',(side*.38,.96,2.7),(.18,.14,1.0),'SteelDark')
-  for k in range(6):rod('Console switch',(side*.38,1.04,2.25+k*.14),(side*.38,1.09,2.25+k*.14),.012,'BrightMetal',n=5)
-  for k in range(4):box('Armrest pad',(side*.28,1.11,2.2+k*.1),(.095,.10,.065),'Black')
-  rod('Seat guide rail',(side*.29,.79,1.94),(side*.29,1.70,1.94),.027,'BrightMetal',n=6)
-  ring('Ejection seat handle',(side*.15,1.64,2.3),.065,.016,'SafetyYellow',normal=(0,0,1),n=12,k=4)
- mesh('HUD combiner glass',[(-.2,1.28,3.86),(.2,1.28,3.86),(.17,1.55,3.98),(-.17,1.55,3.98)],[(0,1,2,3)],'Canopy')
- for side in [-1,1]:rod('HUD bracket',(side*.23,1.13,3.8),(side*.2,1.36,3.9),.023,'SteelDark',n=6)
- # Gear brake lines, tie-down eyes, wheel bolts and undercarriage placards.
- for name,x,z,piv in [('GearNose',0,5.3,(0,-.55,4.9)),('GearLeft',-2.65,-1.7,(-1.7,-.5,-1.7)),('GearRight',2.65,-1.7,(1.7,-.5,-1.7))]:
-  radius=.36 if x==0 else .45;cy=-2+radius
-  line('Flexible gear brake line',[(piv[0]+.11,piv[1],piv[2]),(x+.13,-1.13,z+.06),(x+.1,cy,z+.14)],.018,'Black',name,n=5)
-  for side in [-1,1]:
-   for k in range(8):
-    a=math.tau*k/8;rod('Wheel lug',(x+side*.16,cy+radius*.27*math.sin(a),z+radius*.27*math.cos(a)),(x+side*.18,cy+radius*.27*math.sin(a),z+radius*.27*math.cos(a)),.023,'BrightMetal',name,n=6)
-  ring('Gear tie-down eye',(x,-1.25,z+.2),.095,.025,'SafetyYellow',normal=(1,0,0),group=name,n=10,k=4)
-  box('Oleo data plate',(x+.12,-1.03,z),(.012,.18,.1),'Black',name)
- for z in [-6.2,-6.6,-7,-7.4]:rod('Hook safety band',(0,-.41-(z+5.8)*-.047,z),(0,-.41-(z+5.8)*-.047,z-.13),.07,'SafetyYellow','ArrestorHook',n=10)
- text_mesh('RESCUE',(0,1.02,1.0),.23,'SafetyYellow',rotation=(0,0,0));text_mesh('KESTREL 07',(0,.91,-.45),.4,'WhiteMarking',rotation=(0,0,0))
+  angle=.14*math.pi if side==1 else .86*math.pi
+  points=[bow(angle+side*k*.031)+Vector((0,-dy,-dz)) for k,dy,dz in [(0,0,0),(1,.015,.045),(2,.018,.054),(5,.018,.054),(6,.015,.045),(7,0,0)]]
+  fighter_tube('Canopy handhold',points,.009,'Graphite',8)
+
+ def shelf(x,z):
+  return 1.013+.065*(z-2.46)+.16*(abs(x)-.406)
+
+ # A continuous rolled brow wraps around the three separately canted panels.
+ sections=[]
+ for i in range(41):
+  x=(i-20)*.027
+  t=abs(x)/.54
+  crest=1.324+.050*math.exp(-((t-.55)/.32)**2)-.26*t**9
+  lip=3.630-.225*t**2+.034*math.exp(-(t/.29)**2)
+  sections.append([(x,crest+dy,lip+dz) for dz,dy in [(.012,-.036),(-.004,-.016),(0,-.003),(.014,.005),(.043,.008),(.12,.002),(.30,-.038),(.52,-.120),(.53,-.16),(.04,-.034)]])
+ fighter_shell('Rolled coaming',sections,'Black')
+ # Dark well and canted instrument rack behind the replaceable displays.
+ for side in (-1,1):
+  fighter_shell('Panel support',[
+   [(side*x,y,z) for x,y in [(0,.81),(.45,.84),(.51,.99),(.48,1.18),(.41,1.27),(0,1.29)]]
+   for z in (3.72,3.83)],'Graphite')
+  console=[]
+  for z,inner,outer in [(2.12,.25,.48),(2.46,.27,.52),(3.02,.28,.56),(3.44,.29,.53),(3.62,.30,.51)]:
+   console.append([(side*x,shelf(x,z)+dy,z) for x,dy in [(inner,-.14),(inner,-.012),(inner+.013,0),(outer,0),(outer,-.14)]])
+  fighter_shell('Console cheek',console,'Graphite')
+  for j in range(6):
+   z=2.42+j*.205
+   def deck(u,v,d=0):
+    return (side*(.406+u),shelf(.406+u,z+v)+d-.013,z+v)
+   pad('Console access panel',deck,0,0,.174,.194,.007,.014,'Black')
+   if side==1 and j in (2,3):continue
+   def legend(u,v,d=0):
+    return deck(-side*u,v,d+.015)
+   label(legend,['L GEN','AUDIO','ANTI ICE','LIGHTS','CABIN','PWR'][j],-.069,-.058,.008,'AircraftLight')
+   if j%2==1:
+    rod('Selector dial',deck(-.045,.053,.015),deck(-.045,.053,.030),.013,'Black',n=10)
+    pad('Pointer',deck,-.045,.058,.003,.009,.0007,.031,'SteelGrey')
+   for k in (-1,0,1):
+    rod('Toggle stem',deck(k*.049,.010,.015),deck(k*.049,.004,.038),.0035,'SteelGrey',n=5)
+    pad('Switch legend',deck,k*.049,-.021,.024,.003,.0008,.016,'AircraftLight')
+   if j%2==0:
+    fighter_tube('Toggle guard',[deck(-.035,-.01,.015),deck(-.035,-.01,.045),deck(-.035,.042,.045),deck(-.035,.042,.015)],.0035,'SteelDark',5)
+
+ for side in (-1,1):
+  P=face(-side*.284,1.175,3.654,-side*.32)
+  bezel(P,.265,.228,.016)
+  if side==-1:
+   # Twin-engine readout with separate N2, temperature and flow rows.
+   for row,title in enumerate(['RPM','EGT','FF']):
+    v=.047-row*.052
+    label(P,title,-.011,v-.004,.008)
+    for u in [-.067,.067]:
+     arc(P,u,v,.021,-2.15,2.15,.0013,n=19)
+     stroke(P,[(u,v),(u+.012,v+.012)],.0015)
+     label(P,['82','410','64'][row],u-.011,v-.014,.008)
+   label(P,'ENG',-.097,.076,.009)
+  else:
+   for k in range(-3,4):
+    v=k*.018
+    span=.046 if k%2==0 else .025
+    stroke(P,[(-span,v),(-.007,v)],.0012)
+    stroke(P,[(.007,v),(span,v)],.0012)
+   arc(P,0,-.003,.078,-1.14,1.14,.0012)
+   for k in range(-4,5):
+    a=k*.24
+    stroke(P,[(r*math.sin(a),-.003+r*math.cos(a)) for r in [.071,.079]],.0012)
+   stroke(P,[(-.019,.003),(-.009,.003),(0,-.004),(.009,.003),(.019,.003)],.0021)
+   label(P,'245',-.105,.01,.009)
+   label(P,'1800',.069,.01,.008)
+   label(P,'ATT',-.098,.077,.009)
+  # Menu legends and engine graduation marks sit on the glass under the rim.
+  label(P,'MENU',-.014,-.092,.0065)
+  for i in [0,1,3,4]:
+   u=(i-2)*.040
+   stroke(P,[(u,-.086),(u,-.082)],.001)
+  for edge in [-1,1]:
+   for v in [-.084,.084]:
+    pad('Captive screw',P,edge*.122,v,.005,.005,.0012,.0091,'SteelDark')
+  if side==-1:
+   for row in range(3):
+    for u in [-.067,.067]:
+     for a in [-1.7,-.85,0,.85,1.7]:
+      stroke(P,[(u+r*math.sin(a),.047-row*.052+r*math.cos(a)) for r in [.0175,.020]],.001)
+  else:
+   for i in range(-2,3):
+    label(P,str(abs(i)*5),.050,i*.018,.005)
+   label(P,'KTS',-.102,-.003,.006)
+   label(P,'ALT',.072,-.003,.006)
+  annunciator=face(-side*.281,1.311,3.562,-side*.32)
+  for j,title in enumerate(['FIRE','CAUT','L GEN'] if side==-1 else ['R GEN','WARN','FIRE']):
+   u=(j-1)*.060
+   pad('Annunciator window',annunciator,u,0,.057,.014,.002,.001,'Graphite')
+   label(annunciator,title,u-.016,-.0035,.007,'SafetyYellow' if title=='CAUT' else 'Stencil',.002)
+ P=face(0,1.213,3.679)
+ bezel(P,.222,.155,.012,False)
+ for j,word in enumerate(['COM 1','251.000','COM 2','305.000']):
+  label(P,word,-.088,.044-j*.030,.009 if j%2==0 else .015)
+ for i,char in enumerate('123456789'):
+  u=.012+(i%3)*.029
+  v=.038-(i//3)*.035
+  pad('Touch target',P,u+.005,v+.004,.025,.026,.002,.001,'Black')
+  label(P,char,u,v,.011,d=.0025)
+ for u in [-.12,.12]:
+  a,b=P(u,-.048,.002),P(u,-.048,.020)
+  rod('UFCD encoder',a,b,.013,'Black',n=16)
+  for k in range(8):
+   a=k*math.tau/8
+   rod('Knurled rim',P(u+.012*math.cos(a),-.048+.012*math.sin(a),.006),P(u+.012*math.cos(a),-.048+.012*math.sin(a),.018),.0015,'Graphite',n=4)
+
+ P=face(0,1.012,3.584,0,.35)
+ bezel(P,.208,.190,.014)
+ for r in [.030,.058,.074]:
+  arc(P,0,-.006,r,-math.pi,math.pi,.0011,n=32)
+ for k in range(24):
+  a=k*math.tau/24
+  stroke(P,[(r*math.sin(a),-.006+r*math.cos(a)) for r in [.067 if k%3==0 else .071,.074]],.0013)
+ stroke(P,[(-.05,-.043),(-.012,-.026),(.005,.012),(.051,.041)],.0012)
+ label(P,'N',-.003,.059,.009)
+ for side in [-1,1]:
+  P=face(side*.203,.989,3.575,side*.24)
+  for i in range(2):
+   u=(i-.5)*.081
+   rod('Instrument case',P(u,0,-.012),P(u,0,.007),.038,'SteelDark',n=24)
+   rod('Dial face',P(u,0,.007),P(u,0,.008),.034,'Black',n=24)
+   if i==0 and side==1:
+    plate('Attitude hemisphere',[P(u+.029*math.cos(a*math.pi/16),.029*math.sin(a*math.pi/16),.009) for a in range(17)],'SteelGrey')
+   for j in range(12):
+    a=math.tau*j/12
+    stroke(P,[(u+r*math.sin(a),r*math.cos(a)) for r in [.027,.032]],.0015,'AircraftLight',.010)
+   stroke(P,[(u-.006,-.006),(u+.018,.019)],.0024,'WhiteMarking',.011)
+  rod('Lever shaft',P(-side*.136,.066,0),P(-side*.128,.101,.079),.007,'SteelDark')
+  ellipsoid('Gear wheel grip' if side==1 else 'Hook grip',P(-side*.128,.101,.079),(.017,.019,.010) if side==1 else (.030,.010,.012),'AircraftLight' if side==1 else 'Graphite',n=12,k=5)
+
+ # HUD optical bench. Leave the combiner clear for the game's moving symbology.
+ # Mask the short foredeck up to the windscreen seal. It slopes down with the
+ # skin, leaving clear sky at the pilot's level flight sightline.
+ fighter_shell('Anti-glare foredeck',[[(w*math.cos(a*math.pi/16),y+h*math.sin(a*math.pi/16),z) for a in range(17)]
+  for z,w,y,h in [(3.87,.40,1.04,.220),(4.22,.38,1.015,.18),(4.55,.34,.955,.117),(4.90,.245,.88,.068),(5.32,.095,.822,.023)]],'Black')
+ rod('Optical well',(0,1.255,3.814),(0,1.339,3.814),.075,'Graphite',n=32)
+ ring('Projector retaining rim',(0,1.340,3.814),.066,.006,'Black',n=28,k=5)
+ ellipsoid('Collimator',(0,1.340,3.814),(.061,.009,.061),'Glass',n=22,k=5)
+ for s in [-1,1]:
+  fighter_shell('HUD side casting',[[(s*(w+x),y,z+dz) for x,dz in [(-r,-d),(r,-d),(r,d),(-r,d)]]
+   for w,y,z,r,d in [(.123,1.29,3.793,.019,.067),(.130,1.329,3.801,.015,.046),(.136,1.418,3.830,.009,.018),(.135,1.459,3.846,.009,.012)]],'Graphite')
+  rod('Combiner trunnion',(s*.128,1.433,3.835),(s*.146,1.433,3.835),.012,'SteelDark',n=12)
+ outline=[(-.12,1.360),(-.134,1.400),(-.134,1.532),(-.107,1.552),(.107,1.552),(.134,1.532),(.134,1.400),(.12,1.360)]
+ fighter_shell('Combiner bevel',[[(x*f,y,3.797+(y-1.36)*.43+d) for x,y in outline] for d,f in [(0,.995),(.002,1),(.005,.995)]],'Canopy')
+
+ # Throttle gate with two parallel fore/aft slots on the port shelf.
+ for x in [.351,.403]:
+  plate('Throttle gate',[(x+u,shelf(x+u,2.985+v)+.002,2.985+v) for u,v in rect(.013,.127,.008)],'Black')
+ for i in range(6):
+  z=2.87+i*.045
+  plate('Quadrant index',[(.426+u,shelf(.426+u,z+v)+.003,z+v) for u,v in rect(.009,.0014,.0006)],'AircraftLight')
+ # SJU-17 cushions, back pad, headbox and thigh bolsters follow the reclined pan.
+ # A continuous dark footwell covers the fuselage crown below the controls.
+ fighter_shell('Tub liner',[
+  [(x,y,z) for x,y in [(-w,.991),(-w+.03,.894),(-w+.09,.851),(0,.850),(w-.09,.851),(w-.03,.894),(w,.991),(w,.839),(-w,.839)]]
+  for w,z in [(.35,2.18),(.36,2.75),(.36,3.30),(.39,3.69)]],'Rubber')
+ for side in [-1,1]:
+  for j in range(4):
+   rod('Rudder pedal tread',(side*.165-.043,.872+j*.013,3.465+j*.012),(side*.165+.043,.872+j*.013,3.465+j*.012),.004,'Graphite',n=5)
+ def cushion(name,z,y,w,h,depth,lean,material):
+  fighter_shell(name,[[(a*f,y+b*f,z+lean*b+d) for a,b in rect(w/2,h/2,min(w,h)*.19)] for f,d in [(.83,-depth),(.98,-depth*.75),(1,-depth*.21),(.91,0),(.64,.009)]],material)
+ cushion('Seat back',2.40,1.235,.415,.54,.10,-.26,'Rubber')
+ cushion('Headbox',2.33,1.562,.328,.226,.17,-.20,'Graphite')
+ cushion('Head pad',2.348,1.554,.236,.14,.04,-.20,'Rubber')
+ ellipsoid('Seat pan',(0,.947,2.64),(.244,.087,.29),'Rubber',n=20,k=6)
+ for side in [-1,1]:
+  ellipsoid('Thigh bolster',(side*.212,1.005,2.64),(.043,.083,.251),'Black',n=14,k=6)
+  rod('Breaker tip',(side*.139,1.64,2.22),(side*.178,1.722,2.19),.011,'SteelDark',n=6)
+  strap=[(side*x,y,z) for x,y,z in [(.133,1.49,2.36),(.115,1.45,2.385),(.101,1.32,2.402),(.151,1.126,2.455),(.179,1.028,2.65)]]
+  mesh('Harness webbing',[(x+off,y,z+.015) for x,y,z in strap for off in [-.022,.022]],[(j,j+1,j+3,j+2) for j in range(0,8,2)],'Stencil')
+  rod('Harness keeper',(side*.106-.022,1.31,2.423),(side*.106+.022,1.31,2.423),.004,'SteelGrey',n=6)
+  rod('Throttle arm',(.377+side*.026,1.017,2.962),(.377+side*.026,1.138,2.993),.011,'SteelDark')
+  fighter_shell('Split throttle grip',[
+   [(.377+side*.027+rx*math.cos(a*math.tau/12),y+ry*math.sin(a*math.tau/12),z) for a in range(12)]
+   for z,y,rx,ry in [(2.925,1.142,.014,.014),(2.936,1.148,.024,.027),(2.959,1.155,.026,.030),
+                      (2.997,1.149,.024,.027),(3.020,1.138,.023,.024),(3.034,1.133,.016,.016)]],'Black')
+  if side==-1:
+   rod('Throttle rocker',(.328,1.15,2.962),(.321,1.15,2.962),.008,'Graphite',n=8)
+ for j in range(20):
+  a,b=j*math.tau/20,(j+1)*math.tau/20
+  rod('Seat pull loop',(.055*math.cos(a),1.035+.031*math.sin(a),2.885),(.055*math.cos(b),1.035+.031*math.sin(b),2.885),.006,'SafetyYellow' if j%3 else 'Black',n=5)
+ for y,r in [(.855,.075),(.876,.065),(.895,.055),(.913,.043)]:
+  ellipsoid('Stick boot',(0,y,3.088),(r,.023,r*.9),'Rubber',n=12,k=4)
+ fighter_tube('Control column',[(0,.91,3.088),(0,.99,3.102),(.006,1.062,3.088),(.01,1.084,3.066)],.016,'SteelDark',8)
+ fighter_shell('Grip',[[ (x+rx*math.cos(a*math.tau/12),y,z+rz*math.sin(a*math.tau/12)) for a in range(12)]
+   for x,y,z,rx,rz in [(0,1.018,3.09,.022,.027),(.009,1.035,3.082,.029,.025),(.009,1.070,3.062,.021,.021),(.009,1.108,3.055,.032,.027),(0,1.143,3.060,.040,.030),(-.005,1.156,3.062,.030,.023)]],'Black')
+ ellipsoid('Stick thumb rest',(.034,1.106,3.056),(.023,.011,.021),'Black',n=12,k=4)
+ ellipsoid('Index trigger',(-.006,1.112,3.086),(.019,.024,.012),'Graphite',n=12,k=4)
+ for x,y in [(-.019,1.146),(.013,1.125)]:
+  rod('Trim hat',(x,y,3.038),(x,y+.003,3.028),.009,'Graphite',n=10)
+  rod('Hat vertical index',(x,y-.002,3.027),(x,y+.006,3.027),.0009,'SteelGrey',n=4)
+  rod('Hat index',(x-.004,y+.002,3.027),(x+.004,y+.002,3.027),.0009,'SteelGrey',n=4)
+
+
+def fighter_hinge_axes():
+ # Aviation.syncModels rotates about node-local axes. Orient the two fin
+ # hinges along their cant, and fold the main wheels inboard into the belly.
+ for name,axis,angle in [('RudderR','Y',math.radians(20)),('RudderL','Y',math.radians(-20)),
+                         ('GearLeft','Z',math.pi),('GearRight','Z',math.pi)]:
+  joint=bpy.data.objects[name]
+  joint.rotation_euler.rotate_axis(axis,angle)
+  inverse=joint.rotation_euler.to_matrix().inverted().to_4x4()
+  for child in joint.children:
+   child.data.transform(inverse)
 
 
 def build_objects():
@@ -520,12 +993,21 @@ def stage(kind):
   # Render at rest waterline. Model geometry remains below water in the .blend.
   bpy.ops.mesh.primitive_plane_add(size=2000,location=(0,0,-.05));water=bpy.context.object;water.name='Preview sea';m=bpy.data.materials.new('PreviewOcean');m.diffuse_color=(.025,.085,.105,1);m.use_nodes=True;bs=m.node_tree.nodes.get('Principled BSDF');bs.inputs['Base Color'].default_value=(.025,.085,.105,1);bs.inputs['Metallic'].default_value=.45;bs.inputs['Roughness'].default_value=.26;water.data.materials.append(m);camera_at((-240,215,290),(0,8,0),440)
  else:
-  bpy.ops.mesh.primitive_plane_add(size=200,location=(0,0,-2.04));floor=bpy.context.object;floor.name='Preview studio';floor.data.materials.append(MATS['DeckNonslip']);camera_at((-19,13,23),(0,0,0),28)
+  bpy.ops.mesh.primitive_plane_add(size=200,location=(0,0,-2.04));floor=bpy.context.object;floor.name='Preview studio';floor.data.materials.append(MATS['DeckNonslip']);camera_at((-18,9,21),(0,.34,.55),22.2)
+  bpy.ops.object.light_add(type='AREA',location=cv((10,6,-14)))
+  fill=bpy.context.object
+  fill.data.energy=5400
+  fill.data.shape='DISK'
+  fill.data.size=14
+  fill.rotation_euler=(-fill.location).to_track_quat('-Z','Y').to_euler()
+  bpy.data.lights['Sun'].energy=.72
+  bpy.data.lights['Sun'].angle=math.radians(16)
  scene.render.image_settings.file_format='PNG';scene.render.filepath=str(ASSETS/(kind+'-preview.png'))
 
 def main(kind):
  global BATCH,PIVOTS,MATS,OBJECTS
  bpy.ops.wm.read_factory_settings(use_empty=True);bpy.context.preferences.filepaths.save_version=0;BATCH={};PIVOTS={};MATS={};OBJECTS=[];paint();carrier()if kind=='carrier'else fighter();carrier_detail()if kind=='carrier'else fighter_detail();build_objects()
+ if kind=='fighter':fighter_hinge_axes()
  bpy.ops.object.select_all(action='DESELECT')
  for o in OBJECTS:o.select_set(True)
  bpy.context.view_layer.objects.active=next(o for o in OBJECTS if o.type=='MESH')

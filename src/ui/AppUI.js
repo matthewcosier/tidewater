@@ -3,6 +3,7 @@ import { UI } from './UI.js';
 import { icon } from './icons.js';
 import { ON_FOOT } from '../player/Player.js';
 import { hudChips } from '../game/HudContext.js';
+import { AIRCRAFT_NAME } from '../aviation/Constants.js';
 
 // scratch for the per-frame chip rule; CHIP_WORDS is indexed by the purse|pin|guidance bitmask
 const CHIP_CTX = { mode: 'walk', freeCam: false, driving: false };
@@ -293,9 +294,12 @@ export class AppUI {
 		const show = ON_FOOT.has( p.mode ) && ! app.freeCam && ! app.rally?.active;
 		// context-aware HUD chips: stamp the rule on the root; GameHUD's and
 		// WorldTools' CSS read it. Scratch objects, so the per-frame call allocates nothing.
+		const g = app.game;
 		CHIP_CTX.mode = p.mode;
 		CHIP_CTX.freeCam = !! app.freeCam;
 		CHIP_CTX.driving = !! app.rally?.active;
+		CHIP_CTX.fishing = !! ( g?.rod?.equipped || g?.fight || g?.landing || g?.hud?.invOpen || g?.hud?.standOpen || p.mode === 'deck' || g?.nearVendor?.( p.position, 14 ) );
+		CHIP_CTX.nearAtm = !! ( g?.atm?.open || g?.atm?.near?.( p.position, 18 ) );
 		hudChips( CHIP_CTX, CHIPS );
 		const stamp = ( CHIPS.purse ? 1 : 0 ) | ( CHIPS.pin ? 2 : 0 ) | ( CHIPS.guidance ? 4 : 0 );
 		if ( this._chipStamp !== stamp ) {
@@ -348,7 +352,7 @@ export class AppUI {
 
 		const mode = p.mode === 'chairlift' ? 'Riding · Summit chairlift'
 			: p.mode === 'glider' ? ( app.glider?.pilot ? 'Flying · Hang glider' : 'Summit launch' )
-			: p.mode === 'aviation' ? ( app.aviation?.pilot ? 'Flying · Kestrel' : 'Carrier view' )
+			: p.mode === 'aviation' ? ( app.aviation?.pilot ? `Flying · ${ AIRCRAFT_NAME.short }` : 'Carrier view' )
 			: p.mode === 'rally' ? `Driving · ${ app.rally.profile.name }`
 			: p.mode === 'boat' ? `Boat · ${ p.camMode === 'first' ? '1st' : '3rd' } person`
 			: p.mode === 'deck' ? 'On deck'

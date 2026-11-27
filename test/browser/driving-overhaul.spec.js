@@ -9,9 +9,12 @@ async function enterDriving( page ) {
 	await page.goto( '/?scale=0.5&noAudio' );
 	await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120_000 } );
 	await page.keyboard.press( 'Enter' );
-	await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 	await expect( page.getByRole( 'dialog' ) ).toBeHidden();
-	await page.getByRole( 'button', { name: 'Drive Aster RS', exact: true } ).click();
+	await page.keyboard.press( 'm' );
+	const wheel = page.getByRole( 'menu', { name: 'Activity Wheel' } );
+	await expect( wheel ).toBeVisible();
+	await wheel.getByRole( 'menuitem', { name: 'Drive' } ).click();
+	await wheel.getByRole( 'menuitem', { name: 'Aster RS' } ).click();
 }
 
 // Drive the car with real W/S/A/D keys through a sequence of world-space waypoints.
@@ -259,7 +262,6 @@ test( 'Capture whole-frame review views of the expanded roads, suspension bridge
 	await page.goto( '/?scale=0.75&noAudio' );
 	await expect( page.getByRole( 'status', { name: 'Loading Tidewater' } ) ).toBeHidden( { timeout: 120_000 } );
 	await page.keyboard.press( 'Enter' );
-	await page.getByRole( 'button', { name: 'Skip', exact: true } ).click();
 	await expect( page.getByRole( 'dialog' ) ).toBeHidden();
 	await page.evaluate( async () => {
 		await window.__app.terminal?.ready;

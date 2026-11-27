@@ -125,19 +125,12 @@ export class DriveHUD {
 	// next to a drivable car (rally.nearCar) or when summoned; driving always shows it.
 	offered( active, blocked ) {
 		const app = this.app, p = app.player, pos = p.position, onFoot = p.mode === 'walk' || p.mode === 'ferry';
-		// The start screen ends for good on the first walk of START_WALK metres, a drive, the
-		// free camera, any other mode or a teleport, or START_TIME seconds after the intro.
-		if ( this.fresh !== false ) {
-			this.origin ??= { x: pos.x, z: pos.z };
-			const now = performance.now();
-			// the clock waits out the loader and the intro guide
-			if ( ! this.shownAt || app.game?.guide?.open || document.getElementById( 'loader' )?.checkVisibility?.() ) this.shownAt = now;
-			this.fresh = ! active && ! app.freeCam && p.mode === 'walk' && now - this.shownAt < START_TIME * 1000
-				&& Math.hypot( pos.x - this.origin.x, pos.z - this.origin.z ) < START_WALK;
-		}
+		// Keep the beach uncluttered on arrival: cars open via the Activity Wheel (Tab/Q),
+		// walking beside a parked car (NEAR_CAR), or summoning the dock with Backquote.
+		this.fresh = false;
 		if ( this.summonAt && ( active || blocked || ! ( onFoot || app.freeCam )
 			|| Math.hypot( pos.x - this.summonAt.x, pos.z - this.summonAt.z ) > SUMMON_RANGE ) ) this.summonAt = null;
-		return active || ( ! blocked && ( this.fresh || !! this.summonAt || ( onFoot && !! this.rally.nearCar( pos, NEAR_CAR ) ) ) );
+		return active || ( ! blocked && ( !! this.summonAt || ( onFoot && !! this.rally.nearCar( pos, NEAR_CAR ) ) ) );
 	}
 
 	// The unlisted "get me a car" key (Backquote): summons the dock on foot or in free

@@ -4,12 +4,14 @@ import assert from 'node:assert/strict';
 import { hudChips } from '../src/game/HudContext.js';
 
 const cases = [
-	// context                                   purse  pin    guidance
-	[ 'walking on the beach', { mode: 'walk' }, true, true, true ],
-	[ 'swimming', { mode: 'swim' }, true, true, true ],
-	[ 'standing on the ferry deck', { mode: 'ferry' }, true, true, true ],
-	[ 'free camera while on foot', { mode: 'walk', freeCam: true }, false, false, false ],
-	[ 'driving the rally car', { mode: 'walk', driving: true }, false, false, false ],
+	// context                                                purse  pin    guidance
+	[ 'walking on the beach (exploring)', { mode: 'walk' }, false, false, true ],
+	[ 'walking with fishing rod equipped or near vendor', { mode: 'walk', fishing: true }, true, false, true ],
+	[ 'walking near an ATM', { mode: 'walk', nearAtm: true }, true, true, true ],
+	[ 'swimming', { mode: 'swim' }, false, false, true ],
+	[ 'standing on the ferry deck', { mode: 'ferry' }, false, false, true ],
+	[ 'free camera while on foot', { mode: 'walk', freeCam: true, fishing: true, nearAtm: true }, false, false, false ],
+	[ 'driving the rally car', { mode: 'walk', driving: true, fishing: true, nearAtm: true }, false, false, false ],
 	[ 'flying the Kestrel', { mode: 'aviation' }, false, false, false ],
 	[ 'flying the hang glider', { mode: 'glider' }, false, false, false ],
 	[ 'riding the jetski', { mode: 'jetski' }, false, false, false ],

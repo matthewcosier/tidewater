@@ -1,8 +1,9 @@
 import {test,expect} from '@playwright/test';
+import {pickWheel} from './helpers/wheel.js';
 const OUT=process.env.PW_OUT||'test-results';
 const herd=page=>page.evaluate(()=>window.__app.livestock?.state()??null);
-async function island(page){await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.keyboard.press('Enter');await page.getByRole('button',{name:'Skip',exact:true}).click();}
-async function watch(page,kind){await page.getByRole('button',{name:'Animals',exact:true}).click();await page.getByRole('button',{name:`Watch ${kind}`,exact:true}).click();await page.waitForTimeout(350);}
+async function island(page){await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.keyboard.press('Enter');}
+async function watch(page,kind){await pickWheel(page,'World','More World','Animals');await page.getByRole('button',{name:`Watch ${kind}`,exact:true}).click();await page.waitForTimeout(350);}
 
 test('Goats and cows graze and roam as ten native animals in their actual island habitats',async({page})=>{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));let before;
@@ -24,7 +25,7 @@ test('A real vortex pushes livestock, pause freezes their native bodies, and Res
 });
 
 test('Watching animals preserves a fighter pilot and becomes available after leaving controls',async({page})=>{
- await test.step('Given a player at the real fighter controls',async()=>{await island(page);await page.getByRole('button',{name:'Aviation',exact:true}).click();await page.getByRole('button',{name:'Enter fighter',exact:true}).click();});
- await test.step('When I try Watch goats then the cockpit retains control and the reason is shown',async()=>{await page.getByRole('button',{name:'Animals',exact:true}).click();await page.getByRole('button',{name:'Watch goats',exact:true}).click();await expect(page.getByText('Leave the vehicle controls before watching animals.',{exact:true})).toBeVisible();expect(await page.evaluate(()=>({active:window.__app.aviation.active,mode:window.__app.player.mode,free:window.__app.freeCam}))).toEqual({active:true,mode:'aviation',free:false});});
- await test.step('When I leave aviation and watch the cows then the actual herd is observed',async()=>{await page.getByRole('button',{name:'Aviation',exact:true}).click();await page.getByRole('region',{name:'Aviation controls'}).getByRole('button',{name:'Leave aviation',exact:true}).click();await watch(page,'cows');expect((await herd(page)).observing).toBe('cow');});
+ await test.step('Given a player at the real fighter controls',async()=>{await island(page);await pickWheel(page,'Air','F/A-18 Hornet','Fly Hornet');});
+ await test.step('When I try Watch goats then the cockpit retains control and the reason is shown',async()=>{await pickWheel(page,'World','More World','Animals');await page.getByRole('button',{name:'Watch goats',exact:true}).click();await expect(page.getByText('Leave the vehicle controls before watching animals.',{exact:true})).toBeVisible();expect(await page.evaluate(()=>({active:window.__app.aviation.active,mode:window.__app.player.mode,free:window.__app.freeCam}))).toEqual({active:true,mode:'aviation',free:false});});
+ await test.step('When I leave aviation and watch the cows then the actual herd is observed',async()=>{await page.getByRole('status',{name:'Flight instruments'}).getByRole('button',{name:'Leave aviation',exact:true}).click();await watch(page,'cows');expect((await herd(page)).observing).toBe('cow');});
 });

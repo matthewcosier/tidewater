@@ -1,19 +1,21 @@
 import {test,expect} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
 import {gliderVisibility} from './helpers/glider-visibility.js';
+import {pickWheel} from './helpers/wheel.js';
 const flightHUD=p=>p.getByRole('status',{name:'Flight instruments'}),gliderHUD=p=>p.getByRole('status',{name:'Glider instruments'});
 const click=(page,name)=>page.getByRole('button',{name,exact:true}).click();
 async function ready(page,tool){
  await page.route('https://fonts.googleapis.com/**',r=>r.fulfill({contentType:'text/css',body:''}));
- await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.keyboard.press('Enter');await click(page,'Skip');
- await click(page,'Performance');await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();await click(page,'Collapse (H)');await click(page,tool);
+ await page.goto('/?scale=1&noAudio');await expect(page.getByRole('status',{name:'Loading Tidewater'})).toBeHidden({timeout:120000});await page.keyboard.press('Enter');
+ await click(page,'Performance');await page.getByRole('radiogroup',{name:'Resolution',exact:true}).getByRole('radio',{name:'Standard',exact:true}).click();await click(page,'Collapse (H)');
+ if(tool==='Hang glider')await pickWheel(page,'Air','Hang Glider');
 }
 async function shot(page,testInfo,name){const path=testInfo.outputPath(name+'.png');await page.screenshot({path});const render=await page.evaluate(()=>({width:window.__app.sceneRenderer.width,height:window.__app.sceneRenderer.height,mode:window.__app.engine.resolution.mode}));await writeFile(testInfo.outputPath(name+'.json'),JSON.stringify({output:page.viewportSize(),render},null,2));}
 const walker=page=>page.evaluate(()=>{const a=window.__app,p=a.player;return {position:p.position.toArray(),mode:p.mode,grounded:p.grounded,glider:a.glider.active,aviation:a.aviation.active,deck:a.aviation.carrier.local(p.position.toArray()),support:p.groundSupport?.provider?.id??null};});
 
 test('Carrier recovery: leave the parked fighter, walk and jump on the moving flight deck',async({page},testInfo)=>{
  let aircraft,exited;
- await test.step('Given a fresh island pilot in the parked carrier fighter',async()=>{await ready(page,'Aviation');await click(page,'Enter fighter');await expect(flightHUD(page)).toHaveAttribute('data-phase','ready');aircraft=await page.evaluate(()=>window.__app.aviation.flight.position.slice());});
+ await test.step('Given a fresh island pilot in the parked carrier fighter',async()=>{await ready(page);await pickWheel(page,'Air','F/A-18 Hornet','Fly Hornet');await expect(flightHUD(page)).toHaveAttribute('data-phase','ready');aircraft=await page.evaluate(()=>window.__app.aviation.flight.position.slice());});
  await test.step('When I leave the fighter with E',async()=>{await page.keyboard.press('e');});
  await test.step('Then I stand beside the jet on the actual carrier deck',async()=>{await expect(flightHUD(page)).toBeHidden();exited=await walker(page);expect(exited.mode).toBe('walk');expect(exited.grounded).toBe(true);expect(Math.hypot(exited.position[0]-aircraft[0],exited.position[2]-aircraft[2])).toBeLessThan(10);expect(exited.deck[1]).toBeCloseTo(18,1);});
  await test.step('When I walk forward and jump using ordinary player keys',async()=>{await page.keyboard.down('w');await page.waitForTimeout(1700);await page.keyboard.up('w');await page.keyboard.press('Space');await expect.poll(async()=>(await walker(page)).grounded).toBe(false);});
@@ -21,8 +23,8 @@ test('Carrier recovery: leave the parked fighter, walk and jump on the moving fl
 });
 
 test('Carrier recovery: the walking entry puts an ordinary island player on the flight deck',async({page},testInfo)=>{
- await test.step('Given a fresh island and the carrier controls',async()=>{await ready(page,'Aviation');});
- await test.step('When I choose Walk flight deck and walk normally',async()=>{await click(page,'Walk flight deck');await page.keyboard.down('w');await page.waitForTimeout(1300);await page.keyboard.up('w');});
+ await test.step('Given a fresh island and the carrier controls',async()=>{await ready(page);});
+ await test.step('When I choose Walk Flight Deck and walk normally',async()=>{await pickWheel(page,'Air','F/A-18 Hornet','Walk Flight Deck');await page.keyboard.down('w');await page.waitForTimeout(1300);await page.keyboard.up('w');});
  await test.step('Then I remain a walker supported by the carrier rather than falling through it',async()=>{const s=await walker(page);expect(s.mode).toBe('walk');expect(s.grounded).toBe(true);expect(s.aviation).toBe(false);expect(s.support).toBe('carrier');expect(s.deck[1]).toBeCloseTo(18,1);await shot(page,testInfo,'carrier-entry');});
 });
 

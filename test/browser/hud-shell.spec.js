@@ -131,15 +131,3 @@ test( 'The evacuation hint stays clear of the third-person character', async ( {
 	} );
 
 } );
-
-test( 'The aviation panel wears the shared panel shell', async ( { page }, info ) => {
-
-	await ready( page );
-	await page.getByRole( 'button', { name: 'Aviation', exact: true } ).click();
-	const title = page.locator( '.av-panel h2' );
-	await expect( title ).toHaveText( 'Flight deck' );
-	expect( await title.evaluate( el => getComputedStyle( el ).fontFamily ) ).toContain( 'Inter' );
-	expect( await page.locator( 'style' ).evaluateAll( styles => styles.some( s => s.textContent.includes( '.av-panel h2' ) ) ), 'the panel injects its own typography' ).toBe( false );
-	await page.screenshot( { path: info.outputPath( 'aviation-panel-1440.png' ) } );
-
-} );
