@@ -16,23 +16,42 @@ export function terrainMaterialCodes( terrain ) {
 
 }
 
-// Palm and tree trunks as solid cylinders for cars only (the walker already steers
-// between them). Young palms and banana plants are soft enough to drive through.
+// Palm and tree trunks as solid cylinders for cars and walkers. Leaning palms are segmented
+// along the exact stem curve from VegNodes.js so bumper- and roof-height impacts meet the
+// visible trunk instead of empty air beside it. Young palms and bananas remain drivable.
 export function trunkCylinders( vegetation, terrain ) {
 
 	const out = [];
 	const records = vegetation?.records;
 	if ( ! records ) return new Float32Array();
-	for ( const [ list, radius ] of [ [ records.palms, 0.2 ], [ records.trees, 0.28 ] ] ) {
-
-		for ( const r of list || [] ) {
-			if (r.disasterFallen) continue;
-
-			const ground = terrain.heightAt( r.x, r.z );
-			out.push( r.x, r.z, radius * ( r.s || 1 ), ground - 0.6, ground + Math.min( 6, r.H || 6 ) );
-
+	for ( const r of records.palms || [] ) {
+		if ( r.disasterFallen ) continue;
+		const ground = terrain.heightAt( r.x, r.z );
+		const s = r.s || 1, H = Math.max( 2.5, r.H || 8 ), top = Math.min( 6, H );
+		const lean = r.l || 0, lx = Math.cos( r.la || 0 ), lz = Math.sin( r.la || 0 );
+		if ( lean * H < 0.15 ) {
+			out.push( r.x, r.z, 0.26 * s, ground - 0.6, ground + top );
+			continue;
 		}
-
+		// Match VegNodes.js: c = fract(seed * 7.31), fc = mix(u, u * (2 - u), c).
+		const c = ( ( r.seed || 0 ) * 7.31 ) % 1;
+		const spans = [ [ - 0.6, 1.4, 0.26 ], [ 1.4, 3.2, 0.22 ], [ 3.2, top, 0.18 ] ];
+		for ( const [ y0, y1, rad ] of spans ) {
+			if ( y1 <= y0 + 0.05 ) continue;
+			const mid = Math.max( 0, ( Math.max( 0, y0 ) + y1 ) * 0.5 );
+			const u = Math.min( 1, mid / H );
+			const fc = u + ( u * ( 2 - u ) - u ) * c;
+			const off = lean * fc * H;
+			out.push( r.x + lx * off, r.z + lz * off, rad * s, ground + y0, ground + y1 );
+		}
+	}
+	for ( const r of records.trees || [] ) {
+		if ( r.disasterFallen ) continue;
+		const ground = terrain.heightAt( r.x, r.z );
+		const s = r.s || 1, top = Math.min( 6, r.H || 6 );
+		// Broadleaf trunk tapers above the root buttresses (PlantGeometry.js: 0.38..0.30 * s).
+		out.push( r.x, r.z, 0.38 * s, ground - 0.6, ground + Math.min( 1.8, top ) );
+		if ( top > 1.8 ) out.push( r.x, r.z, 0.30 * s, ground + 1.8, ground + top );
 	}
 	return new Float32Array( out );
 

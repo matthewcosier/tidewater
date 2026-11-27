@@ -13,6 +13,7 @@ mod tests;
 #[cfg(test)]
 mod contact_kernel_tests;
 
+use avian3d::parry::{na::DMatrix, shape::{HeightFieldFlags, SharedShape}};
 use avian3d::physics_transform::{PreSolveDeltaPosition, PreSolveDeltaRotation};
 use avian3d::prelude::*;
 use bevy::{prelude::*, mesh::MeshPlugin, time::TimeUpdateStrategy};
@@ -183,17 +184,19 @@ impl RallyPhysics {
     }
 
     /// The source is Tidewater's row-major (z then x) texel-centred height grid.
-    /// Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-    /// Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+    /// Parry rows are Z, columns are X. Keep the original samples and half-texel origin.
     pub fn set_terrain(&mut self, heights: &[f32], resolution: usize, size: f32, origin: f32) -> bool {
         if resolution < 2 || heights.len() != resolution * resolution || !size.is_finite() || size <= 0.0
             || !origin.is_finite() || heights.iter().any(|v| !v.is_finite()) { return false; }
-        let columns: Vec<Vec<f32>> = (0..resolution).map(|x|
-            (0..resolution).map(|z| heights[z * resolution + x]).collect()).collect();
+        let grid = DMatrix::from_row_slice(resolution, resolution, heights);
         let extent = size * (resolution - 1) as f32 / resolution as f32;
         let centre = origin + size * 0.5;
-        self.app.world_mut().spawn((RigidBody::Static,road::TerrainSurface,
-            Collider::heightfield(columns, Vec3::new(extent, 1.0, extent)),
+        // Adjacent triangles share an edge inside the ground. Constrain contact normals
+        // there so a low bumper crossing a shallow sag cannot hit it as a wall.
+        let ground = SharedShape::heightfield_with_flags(
+            grid, Vec3::new(extent, 1.0, extent).into(), HeightFieldFlags::FIX_INTERNAL_EDGES,
+        );
+        self.app.world_mut().spawn((RigidBody::Static,road::TerrainSurface, Collider::from(ground),
             Friction::new(0.65), Transform::from_xyz(centre, 0.0, centre)));
         self.app.insert_resource(TerrainMaterials { codes: Vec::new(), res: resolution, origin, texel: size / resolution as f32 });
         true
@@ -209,12 +212,12 @@ impl RallyPhysics {
 
     pub fn set_roads(&mut self,segments:&[f32])->bool {
         if segments.len()%6!=0 || segments.iter().any(|v| !v.is_finite()) {return false;}
-        let mut roads=Vec::new();
+        let mut roads=Vec::with_capacity(segments.len()/6);
         for s in segments.chunks_exact(6) {
             if s[4]<=0.0 || s[4]>20.0 || s[5]<0.05 || s[5]>1.25 {return false;}
             roads.push(s.try_into().unwrap());
         }
-        self.app.insert_resource(RoadSurfaces(roads)); true
+        self.app.insert_resource(RoadSurfaces::new(roads)); true
     }
 
     /// Each record is centre xyz, half-extents xyz, yaw, surface friction; all wood (piers, boardwalks).

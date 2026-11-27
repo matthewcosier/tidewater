@@ -71,14 +71,16 @@ export function buildStation(app){
  for(const side of [-1,1])for(const h of [.5,1.03])beam(launchPoint(side*6.7,-8,h),launchPoint(side*6.7,side<0?-1.6:0,h),.09);
  const connectorPost=launchPoint(-6.7,-1.6);beam(connectorPost,addY(connectorPost,1.08),.14);
  // Benches, equipment locker and a small wind mast give useful scale cues.
- for(const side of [-1,1]){const p=launchPoint(side*5.9,-4,.5);box('wood',p,[.7,.12,2.5],wood,LAUNCH.yaw);for(const along of [-5,-3])box('hard',launchPoint(side*5.9,along,.21),[.1,.42,.1],metal,LAUNCH.yaw);}
+ for(const side of [-1,1]){const p=launchPoint(side*5.9,-4,.5);box('wood',p,[.7,.12,2.5],wood,LAUNCH.yaw);for(const along of [-5,-3])box('hard',launchPoint(side*5.9,along,.21),[.1,.42,.1],metal,LAUNCH.yaw);app.colliders.addBox(new Vector3(...launchPoint(side*5.9,-4,.28)),new Vector3(.35,.28,1.25),LAUNCH.yaw,{walkable:true,solid:true,tag:'glider-bench'});}
  box('hard',launchPoint(5.6,-7,.65),[1.6,1.3,.7],[.11,.23,.26],LAUNCH.yaw);
+ app.colliders.addBox(new Vector3(...launchPoint(5.6,-7,.65)),new Vector3(.8,.65,.35),LAUNCH.yaw,{solid:true,tag:'glider-locker'});
  const mast=launchPoint(-5.7,-5);beam(mast,addY(mast,5),.065,metal);
+ app.colliders.addCylinder(mast[0],mast[2],.08,mast[1],mast[1]+5,{tag:'glider-mast'});
  const socket=launchPoint(-5.7,-5,4.8);windsock=new Group();windsock.name='Wind direction streamer';windsock.position.fromArray(socket);// The animated fabric is local to its pivot; exclude it from world-space structural load bounds.
  tagSpans(null,()=>{const S=new Builder();for(let i=0;i<8;i++)S.cyl('hard',0,0,-i*.16,.20-i*.016,.20-(i+1)*.016,.16,{rx:Math.PI/2,segs:12,tint:i%2?orange:[.95,.89,.75]});for(const[k,batch]of Object.entries(S.batches))windsock.add(new Mesh(batch.build(),app.village.materials[k]));group.add(windsock);});
  });const launchRecord=STRUCTURES.at(-1);records.unshift(launchRecord);
  // Beach target corners lie on real sand, with no fake landing surface.
- for(const dx of [-15,15])for(const dz of [-12,12]){const x=BEACH.x+dx,z=BEACH.z+dz,y=app.terrainData.heightAt(x,z);box('hard',[x,y+.32,z],[.08,.64,.08],metal);box('hard',[x+.20,y+.54,z],[.4,.18,.012],orange);}
+ for(const dx of [-15,15])for(const dz of [-12,12]){const x=BEACH.x+dx,z=BEACH.z+dz,y=app.terrainData.heightAt(x,z);box('hard',[x,y+.32,z],[.08,.64,.08],metal);box('hard',[x+.20,y+.54,z],[.4,.18,.012],orange);const near=app.coastalRoute?.closest?.(x,z);if(!near||near.distance>=near.path.halfWidth+1.15)app.colliders.addCylinder(x,z,.07,y-.1,y+.7,{tag:'glider-target-post'});}
  for(const[k,batch]of Object.entries(B.batches)){const mesh=new Mesh(batch.build(),app.village.materials[k]);mesh.name='Glider station '+k;mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);}
  app.scene.add(group);return{group,windsock,site,records,launchRecord,railSegments:layout.rails.length,cornerLandings:layout.landings.length,parts:group.children.length,triangles:Object.values(B.batches).reduce((n,b)=>n+b.idx.length/3,0)};
 }

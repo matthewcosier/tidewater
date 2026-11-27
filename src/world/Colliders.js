@@ -9,6 +9,8 @@ export class Colliders {
 		this.boxes = [];
 		this.cylinders = [];
 		this.boom = [];     // camera-only capsules (ThirdPersonCamera): braces, stringers; nothing collides with them
+		this.trunks = null; // packed [x, z, r, yMin, yMax, ...] tree and palm trunks for O(1) cell queries
+		this._trunkGrid = null;
 		this._v = new THREE.Vector3();
 
 	}
@@ -33,6 +35,24 @@ export class Colliders {
 		const c = { x, z, radius, yMin, yMax, tag };
 		this.cylinders.push( c );
 		return c;
+
+	}
+
+	// Register packed [x, z, r, yMin, yMax, ...] trunk cylinders in a 16 m cell grid so
+	// resolveCapsule stops walkers and wreckage against trees/palms in O(1) with zero allocs.
+	setTrunks( trunks ) {
+
+		this.trunks = trunks && trunks.length ? trunks : null;
+		if ( ! this.trunks ) { this._trunkGrid = null; return; }
+		const grid = new Map(), cell = 16;
+		for ( let i = 0; i < trunks.length; i += 5 ) {
+			const cx = Math.floor( trunks[ i ] / cell ), cz = Math.floor( trunks[ i + 1 ] / cell );
+			const key = ( cx + 4096 ) * 8192 + ( cz + 4096 );
+			let list = grid.get( key );
+			if ( ! list ) grid.set( key, list = [] );
+			list.push( i );
+		}
+		this._trunkGrid = grid;
 
 	}
 
@@ -130,6 +150,33 @@ export class Colliders {
 			pos.x = c.x + dx / d * r;
 			pos.z = c.z + dz / d * r;
 			hit = true;
+
+		}
+
+		if ( this._trunkGrid ) {
+
+			const t = this.trunks, grid = this._trunkGrid, reach = radius + 1.2, cell = 16;
+			const x0 = Math.floor( ( pos.x - reach ) / cell ), x1 = Math.floor( ( pos.x + reach ) / cell );
+			const z0 = Math.floor( ( pos.z - reach ) / cell ), z1 = Math.floor( ( pos.z + reach ) / cell );
+			for ( let cz = z0; cz <= z1; cz ++ ) for ( let cx = x0; cx <= x1; cx ++ ) {
+
+				const list = grid.get( ( cx + 4096 ) * 8192 + ( cz + 4096 ) );
+				if ( ! list ) continue;
+				for ( let k = 0; k < list.length; k ++ ) {
+
+					const i = list[ k ];
+					if ( pos.y + height < t[ i + 3 ] || pos.y + stepHeight > t[ i + 4 ] ) continue;
+					const dx = pos.x - t[ i ], dz = pos.z - t[ i + 1 ], r = t[ i + 2 ] + radius;
+					const d2 = dx * dx + dz * dz;
+					if ( d2 >= r * r ) continue;
+					const d = Math.sqrt( d2 ) || 1e-4;
+					pos.x = t[ i ] + dx / d * r;
+					pos.z = t[ i + 1 ] + dz / d * r;
+					hit = true;
+
+				}
+
+			}
 
 		}
 

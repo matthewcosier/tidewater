@@ -97,8 +97,15 @@ class Builder {
 		g.setAttribute( 'position', new BufferAttribute( new Float32Array( this.positions ), 3 ) );
 		g.setAttribute( 'normal', new BufferAttribute( new Float32Array( this.normals ), 3 ) );
 		g.setAttribute( 'uv', new BufferAttribute( new Float32Array( this.uvs ), 2 ) );
-		const names = extraNames ? [].concat( extraNames ) : [];
-		names.forEach( ( name, k ) => g.setAttribute( name, new BufferAttribute( new Float32Array( this.extra.filter( ( _, i ) => i % names.length === k ) ), 1 ) ) );
+		const specs = extraNames ? [].concat( extraNames ).map( n => Array.isArray( n ) ? n : [ n, 1 ] ) : [];
+		const stride = specs.reduce( ( sum, [ , size ] ) => sum + size, 0 );
+		let offset = 0;
+		for ( const [ name, size ] of specs ) {
+			const count = this.positions.length / 3, out = new Float32Array( count * size );
+			for ( let v = 0; v < count; v ++ ) for ( let c = 0; c < size; c ++ ) out[ v * size + c ] = this.extra[ v * stride + offset + c ];
+			g.setAttribute( name, new BufferAttribute( out, size ) );
+			offset += size;
+		}
 		if ( this.colors ) g.setAttribute( 'color', new BufferAttribute( new Float32Array( this.colors ), 3 ) );
 		g.setIndex( this.indices ); g.computeBoundingSphere();
 		return g;
@@ -180,7 +187,7 @@ export class CoastalRoad {
 		this.group = new Group(); this.group.name = 'Coastal road';
 		this.guardrails = route.guardrails || [];
 		const loop = route.loop, L = route.length, circuit = route.circuit, ferry = route.ferryRoad;
-		const ramps = route.paths.filter( path => path.kind === 'gravel' );
+		const ramps = route.paths.filter( path => path.name === 'west' || path.name === 'east' );
 		const loopSegments = route.segments.filter( segment => segment.path === loop );
 		// Each beach entrance: where it leaves the loop, on which side, and the loop's normal there.
 		this.junctions = ramps.map( ramp => {
@@ -232,8 +239,8 @@ export class CoastalRoad {
 		// circuit where it leaves it: over each merge the parent road's edge line and shoulder
 		// open on the branch's side, and the branch's ribbon is cut away wherever it lies on
 		// the parent's seal or far shoulder.
-		const onLoop = ( x, z ) => route.closest( x, z, segment => segment.path === loop );
-		const onCircuit = ( x, z ) => route.closest( x, z, segment => segment.path === circuit );
+		const onPath = path => ( x, z ) => route.closest( x, z, segment => segment.path === path );
+		const onLoop = onPath( loop ), onCircuit = onPath( circuit ), onFerry = onPath( ferry );
 		const mergeOf = ( points, onParent ) => {
 			const alongs = []; let side = 1;
 			for ( const p of points ) {
@@ -241,12 +248,18 @@ export class CoastalRoad {
 				alongs.push( q.segment.a.distance + Math.min( 1, Math.max( 0, q.raw ) ) * q.segment.length );
 				if ( q.distance > 0.5 ) side = Math.sign( ( p.x - q.x ) * q.nx + ( p.z - q.z ) * q.nz ) || 1;
 			}
-			return { a0: Math.min( ...alongs ) - 1, a1: Math.max( ...alongs ) + 1, side };
+			return alongs.length ? { a0: Math.min( ...alongs ) - 1, a1: Math.max( ...alongs ) + 1, side } : null;
 		};
-		const gapOf = m => `gap = max( gap, clamp( min( along - ${ m.a0.toFixed( 3 ) }, ${ m.a1.toFixed( 3 ) } - along ) / fa + 0.5, 0.0, 1.0 ) * step( 0.0, u * ${ m.side.toFixed( 1 ) } ) );`;
+		const gapOf = m => m ? `gap = max( gap, clamp( min( along - ${ m.a0.toFixed( 3 ) }, ${ m.a1.toFixed( 3 ) } - along ) / fa + 0.5, 0.0, 1.0 ) * step( 0.0, u * ${ m.side.toFixed( 1 ) } ) );` : '';
 		const merges = this.merges = [ 0, 1 ].map( end => mergeOf( end ? circuit.points.slice().reverse() : circuit.points, onLoop ) );
 		const ferryMerge = this.ferryMerge = mergeOf( ferry.points, onCircuit );
-		const entrances = this.junctions.map( j => `open = max( open, clamp( ( 6.0 - min( abs( along - ${ j.along.toFixed( 3 ) } ), ${ L.toFixed( 3 ) } - abs( along - ${ j.along.toFixed( 3 ) } ) ) ) / fa + 0.5, 0.0, 1.0 ) * step( 0.0, u * ${ j.side.toFixed( 1 ) } ) );` ).concat( merges.map( gapOf ) ).join( '\n' );
+		const westH = route.westHeadland, highW = route.islandHighway, mPass = route.mountainPass, eastH = route.eastHeadland, rallyS = route.rallyStage, joeyP = route.joeyPeninsula, bridgeN = route.bridgeNorth, bridgeS = route.bridgeSouth;
+		const whLoopMerge = westH ? mergeOf( westH.points, onLoop ) : null;
+		const whCircuitMerge = westH ? mergeOf( westH.points.slice().reverse(), onCircuit ) : null;
+		const mpCircuitMerge = mPass ? mergeOf( mPass.points, onCircuit ) : null;
+		const ihFerryMerge = highW ? mergeOf( highW.points.slice().reverse(), onFerry ) : null;
+		const ehFerryMerges = eastH ? [ 0, 1 ].map( end => mergeOf( end ? eastH.points.slice().reverse() : eastH.points, onFerry ) ) : [];
+		const entrances = this.junctions.map( j => `open = max( open, clamp( ( 6.0 - min( abs( along - ${ j.along.toFixed( 3 ) } ), ${ L.toFixed( 3 ) } - abs( along - ${ j.along.toFixed( 3 ) } ) ) ) / fa + 0.5, 0.0, 1.0 ) * step( 0.0, u * ${ j.side.toFixed( 1 ) } ) );` ).concat( [ ...merges, whLoopMerge ].map( gapOf ) ).join( '\n' );
 		const loopDrift = driftOf( loop ), loopSandy = sandyOf( loop ), core = new Builder();
 		strip( core, loop, OFFSETS, 0.01, ( i, offset ) => { const k = offset < 0 ? 0 : 1; return [ loopDrift[ i ][ k ], loopSandy[ i ][ k ] ]; } );
 		add( core.geometry( [ 'aDrift', 'aSandy' ] ), surfaceMaterial( { name: 'Coastal asphalt', roughness: 0.9, alphaTest: 0.5, attributes: verge, varyings: vergeOut,
@@ -256,13 +269,13 @@ export class CoastalRoad {
 		const CL = route.circuitLength, circuitDrift = driftOf( circuit ), circuitSandy = sandyOf( circuit ), ribbon = new Builder();
 		strip( ribbon, circuit, OFFSETS, 0.01, ( i, offset, x, z ) => {
 			const k = offset < 0 ? 0 : 1, q = onLoop( x, z ), m = merges[ circuit.points[ i ].distance < CL / 2 ? 0 : 1 ];
-			const far = q && Math.sign( ( x - q.x ) * q.nx + ( z - q.z ) * q.nz ) !== m.side ? 1 : 0;
+			const far = q && m && Math.sign( ( x - q.x ) * q.nx + ( z - q.z ) * q.nz ) !== m.side ? 1 : 0;
 			return [ circuitDrift[ i ][ k ] * ( 0.4 + 0.6 * circuitSandy[ i ][ k ] ), circuitSandy[ i ][ k ], q ? q.distance : 99, far ];
 		} );
 		add( ribbon.geometry( [ 'aDrift', 'aSandy', 'aLoopD', 'aFar' ] ), surfaceMaterial( { name: 'Mountain circuit asphalt', roughness: 0.9, alphaTest: 0.5,
 			attributes: { ...verge, aLoopD: 'f32', aFar: 'f32' }, varyings: { ...vergeOut, vLoopD: 'f32', vFar: 'f32' },
 			vertex: 'o.vDrift = v.aDrift; o.vSandy = v.aSandy; o.vLoopD = v.aLoopD; o.vFar = v.aFar;\n' + LIFT( '0.012', '0.002' ),
-			surface: SAMPLE( 0.23, ground ) + ASPHALT( CL, 12, gapOf( ferryMerge ) ) + /* wgsl */`
+			surface: SAMPLE( 0.23, ground ) + ASPHALT( CL, 12, [ ferryMerge, whCircuitMerge, mpCircuitMerge ].map( gapOf ).join( '\n' ) ) + /* wgsl */`
 s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && in.vs.vFar > 0.5 ) );
 ` } ) );
 
@@ -274,13 +287,13 @@ s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && i
 		const FL = route.ferryRoadLength, ferryDrift = driftOf( drawn ), ferrySandy = sandyOf( drawn ), ferryRibbon = new Builder();
 		strip( ferryRibbon, drawn, OFFSETS, 0.01, ( i, offset, x, z ) => {
 			const k = offset < 0 ? 0 : 1, q = onCircuit( x, z );
-			const far = q && Math.sign( ( x - q.x ) * q.nx + ( z - q.z ) * q.nz ) !== ferryMerge.side ? 1 : 0;
+			const far = q && ferryMerge && Math.sign( ( x - q.x ) * q.nx + ( z - q.z ) * q.nz ) !== ferryMerge.side ? 1 : 0;
 			return [ ferryDrift[ i ][ k ] * ( 0.4 + 0.6 * ferrySandy[ i ][ k ] ), ferrySandy[ i ][ k ], q ? q.distance : 99, far ];
 		} );
 		add( ferryRibbon.geometry( [ 'aDrift', 'aSandy', 'aLoopD', 'aFar' ] ), surfaceMaterial( { name: 'Ferry road asphalt', roughness: 0.9, alphaTest: 0.5,
 			attributes: { ...verge, aLoopD: 'f32', aFar: 'f32' }, varyings: { ...vergeOut, vLoopD: 'f32', vFar: 'f32' },
 			vertex: 'o.vDrift = v.aDrift; o.vSandy = v.aSandy; o.vLoopD = v.aLoopD; o.vFar = v.aFar;\n' + LIFT( '0.012', '0.002' ),
-			surface: SAMPLE( 0.23, ground ) + ASPHALT( FL, 12, '' ) + /* wgsl */`
+			surface: SAMPLE( 0.23, ground ) + ASPHALT( FL, 12, [ ihFerryMerge, ...ehFerryMerges ].map( gapOf ).join( '\n' ) ) + /* wgsl */`
 s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && in.vs.vFar > 0.5 ) );
 ` } ) );
 
@@ -291,14 +304,16 @@ s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && i
 		// the ring's seal (and the link's); the link runs 5 m on past the terminal's road entry,
 		// under the yard's paving, like the ferry road.
 		const joey = route.joeyLoop, link = route.joeyLink, JL = route.joeyLoopLength;
-		const onJoey = ( x, z ) => route.closest( x, z, segment => segment.path === joey );
+		const onJoey = onPath( joey );
+		const jpJoeyMerges = joeyP ? [ 0, 1 ].map( end => mergeOf( end ? joeyP.points.slice().reverse() : joeyP.points, onJoey ) ) : [];
+		const bsJoeyMerge = bridgeS ? mergeOf( bridgeS.points.slice().reverse(), onJoey ) : null;
 		const jq = onJoey( link.points[ 0 ].x, link.points[ 0 ].z ), jAlong = jq.segment.a.distance + Math.min( 1, Math.max( 0, jq.raw ) ) * jq.segment.length;
 		const lk = link.points.at( - 1 ), joeyT = this.joeyT = { a0: jAlong - 7.3, a1: jAlong + 7.3, side: Math.sign( ( lk.x - jq.x ) * jq.nx + ( lk.z - jq.z ) * jq.nz ) || 1 };
 		const joeyDrift = driftOf( joey ), joeySandy = sandyOf( joey ), joeyRibbon = new Builder();
 		strip( joeyRibbon, joey, OFFSETS, 0.01, ( i, offset ) => { const k = offset < 0 ? 0 : 1; return [ joeyDrift[ i ][ k ] * ( 0.4 + 0.6 * joeySandy[ i ][ k ] ), joeySandy[ i ][ k ] ]; } );
 		add( joeyRibbon.geometry( [ 'aDrift', 'aSandy' ] ), surfaceMaterial( { name: 'Joey Island road asphalt', roughness: 0.9, alphaTest: 0.5, attributes: verge, varyings: vergeOut,
 			vertex: 'o.vDrift = v.aDrift; o.vSandy = v.aSandy;\n' + LIFT( '0.012', '0.002' ),
-			surface: SAMPLE( Math.round( JL * 0.23 ) / JL, ground ) + ASPHALT( JL, JL / Math.round( JL / 12 ), gapOf( joeyT ) ) } ) );
+			surface: SAMPLE( Math.round( JL * 0.23 ) / JL, ground ) + ASPHALT( JL, JL / Math.round( JL / 12 ), [ joeyT, ...jpJoeyMerges, bsJoeyMerge ].map( gapOf ).join( '\n' ) ) } ) );
 		const linkTail = link.points.at( - 1 ), linkBefore = link.points.at( - 2 ), linkRun = Math.hypot( linkTail.x - linkBefore.x, linkTail.z - linkBefore.z );
 		const linkDrawn = { ...link, points: [ ...link.points, { ...linkTail, x: linkTail.x + ( linkTail.x - linkBefore.x ) / linkRun * 5, z: linkTail.z + ( linkTail.z - linkBefore.z ) / linkRun * 5, distance: linkTail.distance + 5 } ] };
 		const linkDrift = driftOf( linkDrawn ), linkSandy = sandyOf( linkDrawn ), linkRibbon = new Builder();
@@ -327,6 +342,91 @@ s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && i
 				vertex: 'o.vDrift = v.aDrift; o.vSandy = v.aSandy; o.vLoopD = v.aLoopD; o.vFar = v.aFar;\n' + LIFT( '0.012', '0.002' ),
 				surface: SAMPLE( 0.23, ground ) + ASPHALT( mouth.points.at( - 1 ).distance, 12, '' ) + /* wgsl */`
 s.alpha = select( s.alpha, 0.0, in.vs.vLoopD < 2.72 || ( in.vs.vLoopD < 3.9 && in.vs.vFar > 0.5 ) );
+` } ) );
+		}
+
+		// Expanded asphalt highway network batched into one draw call (shared seal, per-vertex junction cutouts).
+		const expanded = [ westH, highW, mPass, eastH, joeyP, bridgeN, bridgeS ].filter( Boolean );
+		if ( expanded.length ) {
+			const ihWhMerge = highW && westH ? mergeOf( highW.points, onPath( westH ) ) : null;
+			const bnWhMerge = bridgeN && westH ? mergeOf( bridgeN.points, onPath( westH ) ) : null;
+			const mpIhMerge = mPass && highW ? mergeOf( mPass.points.slice().reverse(), onPath( highW ) ) : null;
+			const rsIhMerges = rallyS && highW ? [ 0, 1 ].map( end => mergeOf( end ? rallyS.points.slice().reverse() : rallyS.points, onPath( highW ) ) ) : [];
+			const pathGaps = new Map( [
+				[ westH, [ ihWhMerge, bnWhMerge ].filter( Boolean ) ],
+				[ highW, [ mpIhMerge ].filter( Boolean ) ],
+			] );
+			const pathOpens = new Map( [
+				[ highW, rsIhMerges.filter( Boolean ) ],
+			] );
+			const parentSpecs = new Map( [
+				[ westH, [ [ loop, whLoopMerge ], [ circuit, whCircuitMerge ] ] ],
+				[ highW, [ [ westH, ihWhMerge ], [ ferry, ihFerryMerge ] ] ],
+				[ mPass, [ [ circuit, mpCircuitMerge ], [ highW, mpIhMerge ] ] ],
+				[ eastH, [ [ ferry, ehFerryMerges[ 0 ] ], [ ferry, ehFerryMerges[ 1 ] ] ] ],
+				[ joeyP, [ [ joey, jpJoeyMerges[ 0 ] ], [ joey, jpJoeyMerges[ 1 ] ] ] ],
+				[ bridgeN, [ [ westH, bnWhMerge ] ] ],
+				[ bridgeS, [ [ joey, bsJoeyMerge ] ] ],
+			] );
+			const extendEnd = ( path, atStart ) => {
+				const pts = path.points, e = atStart ? pts[ 0 ] : pts.at( - 1 ), adj = atStart ? pts[ 1 ] : pts.at( - 2 );
+				const d = Math.hypot( e.x - adj.x, e.z - adj.z ) || 1;
+				const extraPt = { ...e, x: e.x + ( e.x - adj.x ) / d * 1.6, z: e.z + ( e.z - adj.z ) / d * 1.6, distance: atStart ? - 1.6 : e.distance + 1.6 };
+				return { ...path, points: atStart ? [ extraPt, ...pts ] : [ ...pts, extraPt ] };
+			};
+			const highwayRibbon = new Builder();
+			for ( const path of expanded ) {
+				const drawnPath = path === bridgeN ? extendEnd( path, false ) : path === bridgeS ? extendEnd( path, true ) : path;
+				const drift = driftOf( drawnPath ), sandy = sandyOf( drawnPath ), gaps = pathGaps.get( path ) || [], opens = pathOpens.get( path ) || [];
+				const specs = ( parentSpecs.get( path ) || [] ).filter( ( [ p, m ] ) => p && m );
+				const halfLen = path.points.at( - 1 ).distance * 0.5;
+				strip( highwayRibbon, drawnPath, OFFSETS, 0.01, ( i, offset, x, z ) => {
+					const k = offset < 0 ? 0 : 1, along = drawnPath.points[ i ].distance;
+					let bestD = 99, far = 0;
+					const endSpec = specs.length === 2 ? specs[ along < halfLen ? 0 : 1 ] : specs[ 0 ];
+					if ( endSpec ) {
+						const [ parent, m ] = endSpec, q = route.closest( x, z, s => s.path === parent );
+						if ( q && q.distance < bestD ) {
+							bestD = q.distance;
+							far = Math.sign( ( x - q.x ) * q.nx + ( z - q.z ) * q.nz ) !== m.side ? 1 : 0;
+						}
+					}
+					const gap = gaps.some( m => along >= m.a0 && along <= m.a1 && offset * m.side > 0 ) ? 1 : 0;
+					const open = opens.some( m => along >= m.a0 - 2 && along <= m.a1 + 2 && offset * m.side > 0 ) ? 1 : 0;
+					return [ drift[ i ][ k ] * ( 0.4 + 0.6 * sandy[ i ][ k ] ), sandy[ i ][ k ], bestD, far, gap, open ];
+				} );
+			}
+			add( highwayRibbon.geometry( [ 'aDrift', 'aSandy', [ 'aCut', 4 ] ] ), surfaceMaterial( { name: 'Island highway network asphalt', roughness: 0.9, alphaTest: 0.5,
+				attributes: { ...verge, aCut: 'vec4f' },
+				varyings: { ...vergeOut, vCut: 'vec4f' },
+				vertex: 'o.vDrift = v.aDrift; o.vSandy = v.aSandy; o.vCut = v.aCut;\n' + LIFT( '0.012', '0.002' ),
+				surface: SAMPLE( 0.23, ground ) + ASPHALT( 10000, 12, 'gap = max( gap, in.vs.vCut.z ); open = max( open, in.vs.vCut.w );' ) + /* wgsl */`
+s.alpha = select( s.alpha, 0.0, in.vs.vCut.x < 2.72 || ( in.vs.vCut.x < 3.9 && in.vs.vCut.y > 0.5 ) );
+` } ) );
+		}
+
+		// Rainforest gravel rally stage: one draw call with compacted gravel wheel ruts and clean highway end fades.
+		if ( rallyS ) {
+			const onHigh = onPath( highW ), rallyBuilder = new Builder();
+			strip( rallyBuilder, rallyS, Array.from( { length: 13 }, ( _, k ) => ( k / 12 * 2 - 1 ) * 3.4 ), 0.018, ( i, offset, x, z ) => {
+				const q = highW ? onHigh( x, z ) : null;
+				return q ? q.distance : 99;
+			} );
+			add( rallyBuilder.geometry( 'aParentD' ), surfaceMaterial( { name: 'Rainforest gravel rally stage', roughness: 0.96, alphaTest: 0.5,
+				attributes: { aParentD: 'f32' }, varyings: { vParentD: 'f32' },
+				vertex: 'o.vParentD = v.aParentD;\n' + LIFT( '0.025', '0.0022' ),
+				surface: SAMPLE( 0.29, 'crSoil( P, lum )' ) + /* wgsl */`
+let r1 = ( au - 0.85 ) / 0.28; let rut = exp( - r1 * r1 );
+let stone = smoothstep( 0.34, 0.62, lum ) * ( 1.0 - smoothstep( 1.7, 2.7, au ) );
+let dirt = vec3f( 0.135, 0.095, 0.06 ) * ( 0.85 + crFbm( P.xz * 0.22 ) * 0.3 );
+s.albedo = mix( mix( sandC, dirt * ( 0.9 - rut * 0.24 ), 0.88 ), vec3f( 0.21, 0.185, 0.16 ) * ( 0.82 + lum * 0.4 ), stone * 0.6 );
+s.roughness = 0.96 - rut * 0.08;
+let k = 0.55 + stone * 0.35; let slope = - r1 * rut * 0.45 * sign( u );
+s.normal = crPerturb( normalize( s.normal ), P, tuv, normalize( vec3f( nm.x * k + slope, - nm.y * k, max( nm.z, 0.2 ) ) ) );
+let n = crFbm( P.xz * 0.5 ) - 0.5;
+let sides = 1.0 - smoothstep( 2.15 + n * 0.55, 3.15 + n * 0.3, au );
+let ends = smoothstep( 2.75, 3.85, in.vs.vParentD + n * 0.5 );
+s.alpha = sides * ends + ( crNoise( P.xz * 7.0 ) * 0.65 + crNoise( P.xz * 1.7 ) * 0.35 - 0.5 ) * 0.9;
 ` } ) );
 		}
 
@@ -414,8 +514,15 @@ s.ao = 1.0 - beam * 0.22 * exp( - valley * valley );
 		this.railColliders = railBoxes.length;
 
 		// White guide posts with red (keep-left) and white reflectors wherever there is no barrier.
+		// Every post registers a solid cylinder collider (r = 0.08 m) and stays >= halfWidth + 1.25 m clear of all roads.
 		const posts = new Builder( true ), railed = new Set( this.guardrails.flatMap( run => run.points.flatMap( p => [ - 3, 0, 3 ].map( o => `${ run.path }:${ run.side }:${ p.index + o }` ) ) ) );
+		const postClear = ( x, z ) => ! route.near( x, z ).some( segment => {
+			const q = route.project( segment, x, z );
+			if ( ! segment.path.closed && ( ( segment.first && q.raw < 0 ) || ( segment.last && q.raw > 1 ) ) ) return false;
+			return q.distance < segment.path.halfWidth + 1.25;
+		} );
 		const postsAlong = ( path, skip ) => {
+			if ( ! path ) return;
 			const pts = path.points, n = path.closed ? pts.length - 1 : pts.length;
 			for ( let i = path.closed ? 0 : 12; i < ( path.closed ? n : n - 12 ); i += 25 ) {
 				const p = pts[ i ], a = pts[ ( i + n - 1 ) % n ], b = pts[ ( i + 1 ) % n ], l = Math.hypot( b.x - a.x, b.z - a.z );
@@ -423,20 +530,30 @@ s.ao = 1.0 - beam * 0.22 * exp( - valley * valley );
 				if ( skip( p ) ) continue;
 				for ( const side of [ - 1, 1 ] ) {
 					if ( railed.has( `${ path.name }:${ side }:${ i }` ) ) continue;
-					const nx = tz * side, nz = - tx * side, x = p.x + nx * 4.0, z = p.z + nz * 4.0, ground = terrain.heightAt( x, z );
+					const nx = tz * side, nz = - tx * side, x = p.x + nx * 4.0, z = p.z + nz * 4.0;
+					if ( ! postClear( x, z ) ) continue;
+					const ground = terrain.heightAt( x, z );
 					posts.box( x, ground + 0.4, z, tx, tz, nx, nz, 0.035, 0.6, 0.06, [ - 1, - 1 ], [ 0.82, 0.82, 0.78 ] );
 					for ( const face of [ - 1, 1 ] ) {
 						const red = face === - side;
 						posts.box( x + tx * face * 0.041, ground + 0.86, z + tz * face * 0.041, tx, tz, nx, nz, 0.006, 0.07, 0.04, [ - 1, - 1 ], red ? [ 0.62, 0.035, 0.025 ] : [ 0.9, 0.9, 0.86 ] );
 					}
+					if ( colliders ) colliders.addCylinder( x, z, 0.08, ground - 0.1, ground + 1.0, { tag: 'guide-post' } );
 				}
 			}
 		};
-		const nearRoad = ( p, other, reach ) => ( route.closest( p.x, p.z, segment => segment.path === other ) || { distance: Infinity } ).distance < reach;
-		postsAlong( loop, p => this.junctions.some( j => Math.hypot( j.x - p.x, j.z - p.z ) < 11 ) || nearRoad( p, circuit, 10 ) );
-		postsAlong( circuit, p => nearRoad( p, loop, 12 ) || nearRoad( p, ferry, 10 ) );
-		postsAlong( ferry, p => nearRoad( p, circuit, 12 ) );
-		postsAlong( joey, p => nearRoad( p, link, 12 ) );
+		const nearRoad = ( p, other, reach ) => other && ( route.closest( p.x, p.z, segment => segment.path === other ) || { distance: Infinity } ).distance < reach;
+		postsAlong( loop, p => this.junctions.some( j => Math.hypot( j.x - p.x, j.z - p.z ) < 11 ) || nearRoad( p, circuit, 10 ) || nearRoad( p, westH, 10 ) );
+		postsAlong( circuit, p => nearRoad( p, loop, 12 ) || nearRoad( p, ferry, 10 ) || nearRoad( p, westH, 10 ) || nearRoad( p, mPass, 10 ) );
+		postsAlong( ferry, p => p.z > 160 || nearRoad( p, circuit, 12 ) || nearRoad( p, highW, 12 ) || nearRoad( p, eastH, 10 ) );
+		postsAlong( joey, p => nearRoad( p, link, 12 ) || nearRoad( p, joeyP, 10 ) || nearRoad( p, bridgeS, 10 ) );
+		postsAlong( westH, p => nearRoad( p, loop, 12 ) || nearRoad( p, circuit, 12 ) || nearRoad( p, highW, 12 ) || nearRoad( p, bridgeN, 10 ) );
+		postsAlong( highW, p => nearRoad( p, westH, 12 ) || nearRoad( p, ferry, 12 ) || nearRoad( p, mPass, 12 ) || nearRoad( p, rallyS, 12 ) );
+		postsAlong( mPass, p => nearRoad( p, circuit, 12 ) || nearRoad( p, highW, 12 ) );
+		postsAlong( eastH, p => nearRoad( p, ferry, 12 ) );
+		postsAlong( joeyP, p => nearRoad( p, joey, 12 ) );
+		postsAlong( bridgeN, p => nearRoad( p, westH, 12 ) || p.z > 116 );
+		postsAlong( bridgeS, p => nearRoad( p, joey, 12 ) || p.z < 744 );
 		if ( posts.positions.length ) add( posts.geometry(), new Material( { name: 'Roadside guide posts', color: 0xffffff, roughness: 0.55, side: 'front' } ), true );
 
 		scene.add( this.group );

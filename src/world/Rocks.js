@@ -42,8 +42,8 @@ export class Rocks {
 
 				// emergent rocks only (submerged ones would snag boats that the eye cannot see)
 				const top = r.y + r.size * r.sy * 0.8;
-				if ( r.size < 0.9 || top < - 0.3 ) continue;
-				colliders.addCylinder( r.x, r.z, r.size * 0.75, r.y - r.size * 0.5, top, { tag: 'rock' } );
+				if ( r.size < 0.55 || top < - 0.3 ) continue;
+				colliders.addCylinder( r.x, r.z, r.size * 0.92, r.y - r.size * 0.5, top, { tag: 'rock' } );
 
 			}
 

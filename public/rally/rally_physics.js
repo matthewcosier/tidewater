@@ -491,8 +491,7 @@ export class RallyPhysics {
     }
     /**
      * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Parry rows are Z, columns are X. Keep the original samples and half-texel origin.
      * @param {Float32Array} heights
      * @param {number} resolution
      * @param {number} size
@@ -754,12 +753,12 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 43757, function: Function { arguments: [], shim_idx: 43758, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 43758, function: Function { arguments: [], shim_idx: 43759, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h44f5a62f65970bcf, wasm_bindgen__convert__closures_____invoke__h5dea0dda19e45b89);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 52282, function: Function { arguments: [Externref], shim_idx: 52283, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 52283, function: Function { arguments: [Externref], shim_idx: 52284, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h5cefeeeb60d29d96, wasm_bindgen__convert__closures_____invoke__h460a035e5089bc90);
             return ret;
         },

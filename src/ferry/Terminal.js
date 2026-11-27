@@ -50,8 +50,29 @@ export function applyTerminalSite( terrain, site = TERMINAL_SITE, place = WORLD.
 // instanced mesh per car part across the bays they fill, so the whole car park is a few dozen draws.
 // About two bays in three are taken, the mix and the pick fixed by the bay's index.
 const PARKED = [ [ 'ParkedWagon', 0.34 ], [ 'ParkedPickup', 0.3 ], [ 'ParkedAster', 0.2 ], [ 'ParkedJeep', 0.16 ] ];
+// Measured body half-extents (m) from public/ferry/parked_cars.glb so every parked car is solid to cars and walkers.
+const PARKED_HALF = {
+	ParkedWagon: [ 1.11, 0.79, 2.52 ],
+	ParkedPickup: [ 1.19, 0.89, 2.78 ],
+	ParkedAster: [ 1.09, 0.71, 2.33 ],
+	ParkedJeep: [ 1.26, 1.15, 2.48 ],
+};
 const PARKED_SHARE = 0.66, PAVING = 3.2;
 const bayHash = ( i, salt ) => { const x = Math.sin( i * 127.1 + salt * 311.7 ) * 43758.5453; return x - Math.floor( x ); };
+// Static poles, bollards and gate posts authored in tools/ferry/terminal_build.py without colbox entries.
+// Coordinates are in the terminal glTF frame (-blenderX, blenderZ, blenderY).
+const TERMINAL_GATE_POSTS = [ [ 1.4, 4.4, - 93.0 ], [ - 7.6, 4.4, - 93.0 ] ];
+const TERMINAL_POST_CYLINDERS = [
+	// Quay bollards
+	[ 8.0, - 28.65, 0.24, 3.2, 3.85 ], [ 14.5, - 28.65, 0.24, 3.2, 3.85 ], [ - 6.0, - 28.65, 0.24, 3.2, 3.85 ],
+	// Jetty mooring bollards
+	...[ - 3.0, 10.5, 24.0, 37.5, 51.0, 64.0 ].map( z => [ 10.55, z, 0.24, 3.2, 3.75 ] ),
+	// Jetty lamp posts & red head light
+	...[ 16.0, 30.0, 44.0, 58.0, 72.0 ].map( z => [ 15.8, z, 0.12, 3.2, 8.4 ] ),
+	...[ 25.0, 39.0, 53.0 ].map( x => [ x, 77.8, 0.12, 3.2, 8.4 ] ),
+	[ 61.75, 55.65, 0.12, 1.3, 5.9 ], [ 53.25, 55.65, 0.12, 1.3, 5.9 ],
+	[ 10.5, 77.5, 0.12, 3.2, 7.3 ],
+];
 
 // The gangway end section's boxes (terminal frame, x 9.5 .. 11.2 across z 8.9 .. 10.5 at the
 // walkway's height), and how far its pivot turns to lie in along the walkway.
@@ -226,11 +247,23 @@ export class Terminal {
 		const group = this.parked = model.root;
 		group.name = 'TerminalParkedCars';
 		const m = new Matrix4(), q = new Quaternion(), up = new Vector3( 0, 1, 0 ), p = new Vector3(), one = new Vector3( 1, 1, 1 );
+		const colHalf = new Vector3(), colCenter = new Vector3();
+		this.parkedColliders = new Map();
 		let count = 0;
 		for ( const [ name, list ] of byModel ) {
 
 			const node = model.pivots.get( name );
 			if ( ! node ) continue;
+			const halfArr = PARKED_HALF[ name ] || [ 1.1, 0.8, 2.4 ];
+			if ( this.app.colliders ) {
+				for ( const [ x, z, yaw ] of list ) {
+					this.toWorld( [ x, PAVING, z ], p );
+					colCenter.set( p.x, p.y + halfArr[ 1 ], p.z );
+					colHalf.set( halfArr[ 0 ], halfArr[ 1 ], halfArr[ 2 ] );
+					const box = this.app.colliders.addBox( colCenter, colHalf, yaw + this.yaw, { solid: true, tag: 'parked-terminal-car' } );
+					this.parkedColliders.set( p.x.toFixed( 3 ) + ',' + p.z.toFixed( 3 ), { box, half: halfArr } );
+				}
+			}
 			node.position.set( 0, 0, 0 );
 			for ( const part of [ ...node.children.filter( c => c.isMesh ), ...this.parkedWheels( node ) ] ) {
 
@@ -250,6 +283,7 @@ export class Terminal {
 
 		}
 		this.parkedCount = count;
+		this.app.rally?.refreshIslandColliders?.();
 
 	}
 
@@ -367,6 +401,15 @@ export class Terminal {
             if (!(x>GANGWAY.x[0]&&x<GANGWAY.x[1]&&z>GANGWAY.z[0]&&z<GANGWAY.z[1]&&y>GANGWAY.y)) this.disasterColliders.push(box);
 			if ( x > GANGWAY.x[ 0 ] && x < GANGWAY.x[ 1 ] && z > GANGWAY.z[ 0 ] && z < GANGWAY.z[ 1 ] && y > GANGWAY.y ) this.gangwayBoxes.push( { box, walk: b.kind === 'walk' } );
 
+		}
+		// Road-entry steel gate posts, quay/jetty mooring bollards and jetty lamp posts.
+		for ( const pos of TERMINAL_GATE_POSTS ) {
+			const box = colliders.addBox( this.toWorld( pos, center ), half.set( 0.09, 1.2, 0.09 ), this.yaw, { solid: true, tag: 'terminal-post' } );
+			this.disasterColliders.push( box );
+		}
+		for ( const [ x, z, r, yMin, yMax ] of TERMINAL_POST_CYLINDERS ) {
+			this.toWorld( [ x, 0, z ], center );
+			colliders.addCylinder( center.x, center.z, r, this.position.y + yMin, this.position.y + yMax, { tag: 'terminal-post' } );
 		}
 		this.boxCount = boxes.length;
 		// the barriers' walker boxes go in later (setBarrier), after the car physics has taken the

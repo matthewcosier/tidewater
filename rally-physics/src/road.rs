@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use bevy::prelude::*;
 
 /// Marks the island heightfield; its surface comes from the terrain map and roads.
@@ -30,7 +31,7 @@ impl Surface {
             Surface::Soil => g(0.72,0.90,2.0,0.16,10.0,0.028,0.3,true),
             Surface::Gravel => g(0.76,0.90,2.0,0.16,11.0,0.022,0.2,true),
             Surface::Rock => g(0.92,0.80,2.3,0.11,8.0,0.015,0.0,false),
-            Surface::Asphalt => g(1.02,0.76,2.5,0.10,7.0,0.012,0.0,false),
+            Surface::Asphalt => g(1.02,0.78,2.5,0.10,9.0,0.012,0.0,false),
             Surface::Wood => g(0.72,0.78,2.3,0.10,8.0,0.015,0.0,false),
             Surface::Water => g(0.50,1.0,1.6,0.20,14.0,0.050,1.4,true),
         }
@@ -41,21 +42,54 @@ impl Surface {
 }
 
 /// Road ribbons as [ax, az, bx, bz, half width, grip]; grip >= 0.9 is asphalt, otherwise gravel.
-/// Asphalt wins where a gravel access overlaps the loop.
+/// Asphalt wins where a gravel access overlaps the loop. A 32 m cell grid keeps per-wheel lookup
+/// O(1) across 10+ km of road; very long test-strip segments fall into `global`.
+const ROAD_CELL: f32 = 32.0;
+
 #[derive(Resource,Default)]
-pub struct RoadSurfaces(pub Vec<[f32;6]>);
+pub struct RoadSurfaces {
+    segments: Vec<[f32;6]>,
+    cells: HashMap<(i32,i32), Vec<usize>>,
+    global: Vec<usize>,
+}
 impl RoadSurfaces {
-    pub fn grip(&self,x:f32,z:f32)->Option<f32> {
-        let mut result:Option<f32>=None;
-        for s in &self.0 {
-            if x<s[0].min(s[2])-s[4] || x>s[0].max(s[2])+s[4] || z<s[1].min(s[3])-s[4] || z>s[1].max(s[3])+s[4] {continue;}
-            let dx=s[2]-s[0]; let dz=s[3]-s[1]; let l2=dx*dx+dz*dz;
-            if l2<0.001 {continue;}
-            let t=(((x-s[0])*dx+(z-s[1])*dz)/l2).clamp(0.0,1.0);
-            if (x-s[0]-dx*t).powi(2)+(z-s[1]-dz*t).powi(2)<=s[4]*s[4] {
-                result=Some(result.unwrap_or(0.0).max(s[5]));
+    pub fn new(segments: Vec<[f32;6]>) -> Self {
+        let mut cells: HashMap<(i32,i32), Vec<usize>> = HashMap::new();
+        let mut global = Vec::new();
+        for (idx, s) in segments.iter().enumerate() {
+            let x0 = ((s[0].min(s[2]) - s[4]) / ROAD_CELL).floor() as i32;
+            let x1 = ((s[0].max(s[2]) + s[4]) / ROAD_CELL).floor() as i32;
+            let z0 = ((s[1].min(s[3]) - s[4]) / ROAD_CELL).floor() as i32;
+            let z1 = ((s[1].max(s[3]) + s[4]) / ROAD_CELL).floor() as i32;
+            if (x1 - x0 + 1) as i64 * (z1 - z0 + 1) as i64 > 64 {
+                global.push(idx);
+                continue;
+            }
+            for cx in x0..=x1 {
+                for cz in z0..=z1 {
+                    cells.entry((cx, cz)).or_default().push(idx);
+                }
             }
         }
+        Self { segments, cells, global }
+    }
+    #[inline]
+    fn check(s: &[f32;6], x: f32, z: f32, result: &mut Option<f32>) {
+        if x<s[0].min(s[2])-s[4] || x>s[0].max(s[2])+s[4] || z<s[1].min(s[3])-s[4] || z>s[1].max(s[3])+s[4] {return;}
+        let dx=s[2]-s[0]; let dz=s[3]-s[1]; let l2=dx*dx+dz*dz;
+        if l2<0.001 {return;}
+        let t=(((x-s[0])*dx+(z-s[1])*dz)/l2).clamp(0.0,1.0);
+        if (x-s[0]-dx*t).powi(2)+(z-s[1]-dz*t).powi(2)<=s[4]*s[4] {
+            *result=Some(result.unwrap_or(0.0).max(s[5]));
+        }
+    }
+    pub fn grip(&self,x:f32,z:f32)->Option<f32> {
+        let mut result:Option<f32>=None;
+        let key = ((x / ROAD_CELL).floor() as i32, (z / ROAD_CELL).floor() as i32);
+        if let Some(list) = self.cells.get(&key) {
+            for &i in list { Self::check(&self.segments[i], x, z, &mut result); }
+        }
+        for &i in &self.global { Self::check(&self.segments[i], x, z, &mut result); }
         result
     }
     pub fn surface(&self,x:f32,z:f32)->Option<Surface> {

@@ -337,6 +337,7 @@ def light_pole(x, z, dx):
 light_pole(12.0, -84.0, 1.4); light_pole(46.0, -84.0, -1.4)
 # the customer parking sign at the driveway
 cyl(V, GALV, (28.0, 3.2, -95.6), (28.0, 5.6, -95.6), 0.035, 8)
+col('solid', 27.9, 28.1, 3.2, 5.6, -95.7, -95.5)
 box(V, WHITE, 27.55, 28.45, 4.75, 5.55, -95.66, -95.64); box(V, BLUE := BAY_BLUE, 27.55, 28.45, 5.3, 5.55, -95.67, -95.655)
 text('T', 'CUSTOMER', (28.0, 5.43, -95.675), 0.13, WHITE, 'S'); text('T', 'PARKING', (28.0, 5.12, -95.67), 0.17, NAVY, 'S')
 text('T', '2P  8AM-6PM', (28.0, 4.88, -95.67), 0.1, NAVY, 'S')

@@ -438,7 +438,9 @@ def seawall(pts, top=HARD):
 seawall([(9.0, -22.0), (7.0, QY), (5.3, QY)]); seawall([(-5.3, QY), (-17.2, QY), (-17.6, -22.0), (-19.4, 12.0)])
 aabb('Harbour', CONCRETE, -5.3, 5.3, QY - 1.5, QY + 0.1, HARD - 0.9, HARD - 0.32)            # linkspan hinge seat
 aabb('Harbour', CONC_DARK, -5.3, 5.3, QY - 1.4, QY, BED, HARD - 0.9)
-for x in (-8.0, -14.5, 6.0): bollard('Harbour', x, QY - 0.4, HARD + 0.1)
+for x in (-8.0, -14.5, 6.0):
+    bollard('Harbour', x, QY - 0.4, HARD + 0.1)
+    colbox('solid', x - 0.24, x + 0.24, QY - 0.64, QY - 0.16, HARD, HARD + 0.65)
 for x in (-9.5, 5.5):                                                                        # quay ladders
     for dx in (-0.22, 0.22): cyl('Harbour', GALV, (x + dx, QY + 0.14, -1.5), (x + dx, QY + 0.14, HARD + 1.0), 0.025, 8)
     for z in [k * 0.3 - 1.4 for k in range(16)]: cyl('Harbour', GALV, (x - 0.22, QY + 0.14, z), (x + 0.22, QY + 0.14, z), 0.018, 6)
@@ -832,7 +834,9 @@ for k in range(18):
 for z0 in (0.9, 2.3): aabb(J, TIMBER_DARK, -9.99, -9.79, -8.0, JY1, z0, z0 + 0.25)
 for y0 in [JY0 + 1.2 + 6.1 * k for k in range(17)]:
     if y0 + 5.8 < JY1: aabb(J, TIMBER_DARK, JX1 - 0.22, JX1, y0, y0 + 5.8, TOPZ, TOPZ + 0.2)
-for yb2 in (-3.0, 10.5, 24.0, 37.5, 51.0, 64.0): bollard(J, JX1 - 0.55, yb2, TOPZ)
+for yb2 in (-3.0, 10.5, 24.0, 37.5, 51.0, 64.0):
+    bollard(J, JX1 - 0.55, yb2, TOPZ)
+    colbox('solid', JX1 - 0.79, JX1 - 0.31, yb2 - 0.24, yb2 + 0.24, TOPZ, TOPZ + 0.55)
 for yl in (6.0, 44.0):                                                   # ladders down the berth face
     for dy in (-0.22, 0.22): cyl(J, GALV, (-9.72, yl + dy, -1.2), (-9.72, yl + dy, TOPZ + 0.9), 0.025, 8)
     for z in [-1.0 + 0.3 * k for k in range(14)]: cyl(J, GALV, (-9.72, yl - 0.22, z), (-9.72, yl + 0.22, z), 0.018, 6)
@@ -841,9 +845,14 @@ handrail((JX0 + 0.1, JY0 + 1.0), (JX0 + 0.1, AY0 + 0.1))
 handrail((JX1 - 0.1, 55.0), (JX1 - 0.1, JY1 - 0.1)); handrail((JX1 - 0.1, JY1 - 0.1), (AX0 + 0.1, JY1 - 0.1))
 handrail((AX0 + 0.1, JY1 - 0.1), (AX0 + 0.1, AY0 + 0.1)); handrail((AX0 + 0.1, AY0 + 0.1), (-58.9, AY0 + 0.1))
 handrail((-56.3, AY0 + 0.1), (JX0 + 0.1, AY0 + 0.1))
-for yl in (16.0, 30.0, 44.0, 58.0, 72.0): lamp_post(J, JX0 + 0.2, yl, TOPZ, 5.2, 1.0, 0.0)
-for xl in (-25.0, -39.0, -53.0): lamp_post(J, xl, JY1 - 0.2, TOPZ, 5.2, 0.0, -1.0)
+for yl in (16.0, 30.0, 44.0, 58.0, 72.0):
+    lamp_post(J, JX0 + 0.2, yl, TOPZ, 5.2, 1.0, 0.0)
+    colbox('solid', JX0 + 0.08, JX0 + 0.32, yl - 0.12, yl + 0.12, TOPZ, TOPZ + 5.2)
+for xl in (-25.0, -39.0, -53.0):
+    lamp_post(J, xl, JY1 - 0.2, TOPZ, 5.2, 0.0, -1.0)
+    colbox('solid', xl - 0.12, xl + 0.12, JY1 - 0.32, JY1 - 0.08, TOPZ, TOPZ + 5.2)
 cyl(J, STEEL, (JX1 - 0.5, JY1 - 0.5, TOPZ), (JX1 - 0.5, JY1 - 0.5, TOPZ + 3.6), 0.08, 12)        # red head light
+colbox('solid', JX1 - 0.62, JX1 - 0.38, JY1 - 0.62, JY1 - 0.38, TOPZ, TOPZ + 4.1)
 cyl(J, NAV_RED, (JX1 - 0.5, JY1 - 0.5, TOPZ + 3.6), (JX1 - 0.5, JY1 - 0.5, TOPZ + 3.95), 0.15, 16)
 cyl(J, BLACK, (JX1 - 0.5, JY1 - 0.5, TOPZ + 3.95), (JX1 - 0.5, JY1 - 0.5, TOPZ + 4.1), 0.18, 16, 0.05)
 box(J, RED, (JX1 - 0.5, JY1 - 0.62, TOPZ + 2.7), (0.7, 0.04, 0.7))
@@ -1742,7 +1751,9 @@ for F in FENCES:
                 p = a + d * u + nrm * (lr.choice((-1, 1)) * lr.uniform(0.1, 0.6))
                 if not paved(p.x, p.y): tuft(WEED, p.x, p.y, lr.uniform(0.25, 0.5))
             u += 0.45
-for gp in ((-1.4, -93.0), (7.6, -93.0)): box('Site', GALV, (gp[0], gp[1], HARD + 1.2), (0.15, 0.15, 2.4))      # gate posts at the road
+for gp in ((-1.4, -93.0), (7.6, -93.0)):
+    box('Site', GALV, (gp[0], gp[1], HARD + 1.2), (0.15, 0.15, 2.4))      # gate posts at the road
+    colbox('solid', gp[0] - 0.09, gp[0] + 0.09, gp[1] - 0.09, gp[1] + 0.09, HARD, HARD + 2.4)
 # grass tufts scattered over the verges (icosphere saltbushes read as boulders, so none); weeds along the revetment crest
 NT = 0
 for P in VERGES:

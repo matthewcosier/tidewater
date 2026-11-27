@@ -7,7 +7,7 @@ import { GRAVITY, AIR_DENSITY, quadraticDrag } from '../physics/Loads.js';
 // then sinks. Old pieces sink into the ground and go, so the count stays bounded.
 
 const MAX = 36, LIFE = 120, SINK = 2.5;
-const _n = new Vector3(), _t = new Vector3(), _axis = new Vector3(), _q = new Quaternion(), _q2 = new Quaternion();
+const _n = new Vector3(), _t = new Vector3(), _axis = new Vector3(), _q = new Quaternion(), _q2 = new Quaternion(), _prev = new Vector3();
 const X = new Vector3( 1, 0, 0 ), Y = new Vector3( 0, 1, 0 ), Z = new Vector3( 0, 0, 1 );
 
 export function makePiece( { position, quaternion = new Quaternion(), velocity = new Vector3(), spin = new Vector3(), rest = 0.05, radius = 0.3, thin = Y, wheel = null, floats = 8, mass = 5, area = null } ) {
@@ -28,8 +28,28 @@ function ground( terrain, x, z, normal ) {
 	return terrain.heightAt( x, z );
 }
 
+// Push a tumbling or rolling piece out of solid world obstacles and reflect its impact velocity.
+function collideWorld( p, colliders ) {
+	if ( ! colliders ) return;
+	_prev.copy( p.pos );
+	const r = Math.max( 0.12, p.radius * 0.75 ), h = Math.max( 0.25, p.radius * 1.5 );
+	if ( ! colliders.resolveCapsule( p.pos, r, h, 0.1 ) ) return;
+	const dx = p.pos.x - _prev.x, dz = p.pos.z - _prev.z, len = Math.hypot( dx, dz );
+	if ( len < 1e-5 ) return;
+	const nx = dx / len, nz = dz / len, vn = p.vel.x * nx + p.vel.z * nz;
+	if ( vn < 0 ) {
+		p.vel.x -= nx * vn * 1.35;
+		p.vel.z -= nz * vn * 1.35;
+		p.vel.multiplyScalar( 0.75 );
+		if ( p.wheel ) {
+			p.wheel.heading = Math.atan2( p.vel.x, p.vel.z );
+			p.wheel.speed = Math.hypot( p.vel.x, p.vel.z );
+		}
+	}
+}
+
 // Advance one piece by dt. terrain: { heightAt( x, z ), normalAt( x, z, out ) }.
-export function stepPiece( p, dt, terrain, seaLevel = 0, current = null ) {
+export function stepPiece( p, dt, terrain, seaLevel = 0, current = null, colliders = null ) {
 	p.age += dt;
 	if ( p.gone > 0 ) { p.pos.y -= dt * 0.18; p.gone += dt; return; }
 	if ( p.sleep ) return;
@@ -46,8 +66,9 @@ export function stepPiece( p, dt, terrain, seaLevel = 0, current = null ) {
 		p.w.multiplyScalar( Math.exp( - dt * 2 ) );
 		if ( p.wheel ) p.wheel.lean = Math.min( Math.PI / 2, p.wheel.lean + dt );
 	} else p.vel.y -= GRAVITY * dt;
-	if ( p.wheel ) return stepWheel( p, dt, terrain, h, water, !! current );
+	if ( p.wheel ) { stepWheel( p, dt, terrain, h, water, !! current ); collideWorld( p, colliders ); return; }
 	p.pos.addScaledVector( p.vel, dt );
+	collideWorld( p, colliders );
 	integrate( p.q, p.w, dt );
 	const floor = Math.max( ground( terrain, p.pos.x, p.pos.z, _n ), water ? - Infinity : - Infinity );
 	// Contact height: lying flat on its thin axis rests low, on an edge it stands taller.
@@ -131,10 +152,11 @@ function environmentStep(p,dt,terrain,field) {
 const copyState=value=>value?.clone?value.clone():value&&typeof value==='object'?structuredClone(value):value;
 
 export class Wreckage {
-	constructor( scene, terrain, seaLevel = () => 0 ) {
+	constructor( scene, terrain, seaLevel = () => 0, colliders = null ) {
 		this.scene = scene;
 		this.terrain = terrain;
 		this.seaLevel = seaLevel;
+		this.colliders = colliders;
 		this.pieces = [];
 	}
 
@@ -158,7 +180,7 @@ export class Wreckage {
 		for ( const p of this.pieces ) {
 			if ( ! p.gone && p.age > LIFE ) p.gone = 1e-3;
 			const fluid=field&&!p.gone?environmentStep(p,step,this.terrain,field):null;
-			stepPiece( p, step, this.terrain, fluid?.height??sea, fluid );
+			stepPiece( p, step, this.terrain, fluid?.height??sea, fluid, this.colliders );
 			p.object.position.copy( p.pos );
 			p.object.quaternion.copy( p.q );
 		}

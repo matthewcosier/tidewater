@@ -855,3 +855,107 @@ fn released_tree_spin_is_capped_and_its_crown_props_the_top_off_the_ground() {
     let crown=Vec3::new(pose[i+1],pose[i+2],pose[i+3])+rotation*Vec3::new(0.0,4.0,0.0);
     assert!(crown.y>=1.4, "crown centre {} m above the ground; the 1.5 m crown holds it up", crown.y);
 }
+
+#[test]
+fn high_speed_turn_in_is_responsive_and_sustained_without_steering_collapse() {
+    // Aster (0), Fulmine (2), GT3 RS (6) at 120 and 160 km/h on dry asphalt, full right steer.
+    // Turn-in must bite quickly, and sustained cornering must hold smooth high-g yaw without
+    // collapsing steering lock to 1.7 deg, reversing yaw, or spiralling past 15 deg slip.
+    for (kind, name, kmh, min_lat_g, min_heading_deg, min_yaw_rate) in [
+        (0u8, "Aster", 120.0f32, 0.85f32, 32.0f32, 0.17f32),
+        (0u8, "Aster", 160.0f32, 0.85f32, 25.0f32, 0.15f32),
+        (2u8, "Fulmine", 160.0f32, 1.05f32, 29.0f32, 0.16f32),
+        (6u8, "GT3RS", 160.0f32, 1.25f32, 35.0f32, 0.15f32),
+    ] {
+        let mut sim = world_at(kind, true, 0.0, -1500.0);
+        time_to(&mut sim, kmh, 25.0).unwrap();
+        let start_h = heading(&sim);
+        let mut turned = 0.0f32;
+        let mut prev_h = start_h;
+        let mut yaw_150ms = 0.0f32;
+        let mut latg_150ms = 0.0f32;
+        let mut min_sustained_yaw = f32::MAX;
+        let mut max_slip_deg = 0.0f32;
+        let mut sum_sustained_latg = 0.0f32;
+        let mut sustained_n = 0;
+        for step in 1..=240 {
+            run(&mut sim, 1.0 / 120.0, [0.5, 0.0, 1.0, 0.0]);
+            let v = s(&sim);
+            let h = heading(&sim);
+            turned += prev_h.cross(h).y.asin();
+            prev_h = h;
+            if step == 18 {
+                yaw_150ms = -v[78];
+                latg_150ms = v[76].abs();
+            }
+            if step >= 60 {
+                // Right steer => negative yaw rate
+                min_sustained_yaw = min_sustained_yaw.min(-v[78]);
+                sum_sustained_latg += v[76].abs();
+                sustained_n += 1;
+                for w in 0..4 { max_slip_deg = max_slip_deg.max(v[85 + w].abs().to_degrees()); }
+            }
+        }
+        let heading_deg = (-turned).to_degrees();
+        let mean_latg = sum_sustained_latg / sustained_n as f32;
+        eprintln!("{name} @ {kmh}: 0.15s yaw={yaw_150ms:.2} latG={latg_150ms:.2} | 0.5-2s minYaw={min_sustained_yaw:.3} meanLatG={mean_latg:.2} turned={heading_deg:.1}deg maxSlip={max_slip_deg:.1}deg");
+        assert!(yaw_150ms >= 0.35 && latg_150ms >= 0.30,
+            "{name} @ {kmh}: slow turn-in at 0.15 s (yaw {yaw_150ms:.2} rad/s, latG {latg_150ms:.2})");
+        assert!(min_sustained_yaw >= min_yaw_rate,
+            "{name} @ {kmh}: yaw rate collapsed to {min_sustained_yaw:.3} rad/s (want >= {min_yaw_rate})");
+        assert!(mean_latg >= min_lat_g,
+            "{name} @ {kmh}: sustained lateral g {mean_latg:.2} (want >= {min_lat_g})");
+        assert!(heading_deg >= min_heading_deg,
+            "{name} @ {kmh}: turned only {heading_deg:.1} deg in 2 s (want >= {min_heading_deg})");
+        assert!(max_slip_deg < 16.0,
+            "{name} @ {kmh}: uncontrolled slide to {max_slip_deg:.1} deg slip with assists on");
+    }
+}
+
+#[test]
+fn car_hull_matches_visual_body_bounds_against_a_wall() {
+    // Visual half-lengths from GLBs: Aster 2.33 m, Jeep 2.48 m. Pushing into a wall at z = 25 m
+    // must stop the car before the rendered nose pokes more than 12 cm through the wall face.
+    for (kind, name, visual_half_z) in [(0u8, "Aster", 2.33f32), (1u8, "Jeep", 2.48f32)] {
+        let mut sim = world(kind, true, 0.0);
+        sim.add_boxes(&[0.0, 1.0, 25.5, 6.0, 1.0, 0.5, 0.0, 0.65]); // wall face at z = 25.0
+        let mut max_nose_z = f32::MIN;
+        for _ in 0..(4 * 120) {
+            run(&mut sim, 1.0 / 120.0, [0.45, 0.0, 0.0, 0.0]);
+            max_nose_z = max_nose_z.max(s(&sim)[2] + visual_half_z);
+        }
+        assert!(max_nose_z <= 25.12, "{name} visual nose poked through wall at z=25.0 to z={max_nose_z:.2}");
+    }
+}
+
+#[test]
+fn heightfield_sag_internal_edges_do_not_launch_low_cars() {
+    // 1 m texels across a shallow 8% -> flat sag where internal triangle edges once snagged low bumpers.
+    let res = 121usize;
+    let mut heights = vec![0.0f32; res * res];
+    for z in 0..res {
+        let wz = z as f32 - 60.0;
+        let h = if wz < 0.0 { -wz * 0.08 } else { 0.0 };
+        for x in 0..res { heights[z * res + x] = h; }
+    }
+    let mut sim = RallyPhysics::new();
+    assert!(sim.set_terrain(&heights, res, res as f32, -(res as f32) * 0.5));
+    assert!(sim.set_roads(&[0.0, -60.0, 0.0, 60.0, 6.0, 0.95]));
+    assert!(sim.select_vehicle(6)); // low GT3 RS
+    sim.reset(0.0, 4.5, -52.0, 0.0);
+    run(&mut sim, 1.5, [0.0, 0.0, 0.0, 1.0]);
+    sim.take_impacts();
+    let mut max_vy = 0.0f32;
+    let mut min_up = 1.0f32;
+    for _ in 0..(4 * 120) {
+        run(&mut sim, 1.0 / 120.0, [1.0, 0.0, 0.0, 0.0]);
+        let v = s(&sim);
+        max_vy = max_vy.max(v[94]);
+        min_up = min_up.min(up_y(&sim));
+        if v[2] > 35.0 { break; }
+    }
+    let hits = sim.take_impacts();
+    let max_dv = hits.chunks_exact(8).map(|h| h[6]).fold(0.0f32, f32::max);
+    assert!(max_vy < 1.8 && min_up > 0.92 && max_dv < 3.0,
+        "heightfield edge launched GT3 RS: max_vy={max_vy:.2} m/s, min_up={min_up:.2}, max_dv={max_dv:.2}");
+}

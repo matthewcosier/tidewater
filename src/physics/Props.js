@@ -470,8 +470,16 @@ export class PropPhysics {
 		if ( panel.box ) { panel.box.solid = false; panel.box.walkable = false; }
 		this.stats.breaks ++;
 		const v = new Vector3();
+		const pushLen = car ? Math.hypot( car.v.x, car.v.z ) : 0;
+		const px = pushLen > 0.1 ? car.v.x / pushLen * 0.38 : 0;
+		const pz = pushLen > 0.1 ? car.v.z / pushLen * 0.38 : 0;
 		for ( const piece of panel.pieces ) {
 
+			// Shift broken pieces slightly ahead of the hitting bumper so they do not spawn inside the car hull.
+			if ( pushLen > 0.1 ) {
+				piece.m.elements[ 12 ] += px;
+				piece.m.elements[ 14 ] += pz;
+			}
 			if ( car ) v.copy( car.v ).multiplyScalar( 0.6 + Math.random() * 0.25 );
 			v.y += 1 + Math.random() * 1.5;
 			v.x += ( Math.random() - 0.5 ) * 1.5;
