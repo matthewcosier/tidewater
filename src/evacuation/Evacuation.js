@@ -69,10 +69,10 @@ export class Evacuation {
      if(i%20===0)node(p.z,p.y,i/20);
     }
     if(start===0){
-     for(const side of [-1,1])post(r.x+side*(w/2+.08),a.z,a.y+3.3,app.terrainData.heightAt(r.x+side*2,a.z),102+side);
+     for(const side of [-1,1]){const px=r.x+side*(w/2+.08),base=app.terrainData.heightAt(r.x+side*2,a.z);post(px,a.z,a.y+3.3,base,102+side);box(px,(base+a.y+3.3)/2,a.z,.24,a.y+3.3-base,.24,false,'evacuation-post');}
      sign(r.x,a.z,a.y+2.84,0);
     }
-    if(start===180||start===320){const p=r.points[start];sign(r.x+3.15,p.z,p.y+1.85,start===180?3:1,2.8);post(r.x+3.15,p.z,p.y+1.45,app.terrainData.heightAt(r.x+3.15,p.z),start);}
+    if(start===180||start===320){const p=r.points[start],px=r.x+3.15,base=app.terrainData.heightAt(px,p.z);sign(px,p.z,p.y+1.85,start===180?3:1,2.8);post(px,p.z,p.y+1.45,base,start);box(px,(base+p.y+2.3)/2,p.z,.24,p.y+2.3-base,.24,false,'evacuation-post');}
    },'timber');
    this.records.push(STRUCTURES.at(-1));
   }
@@ -101,7 +101,7 @@ export class Evacuation {
    for(const side of [-1,1]){wood(R.x+side*2.95,R.y+1.04,R.z+R.depth/2,1.9,.10,.10,green);box(R.x+side*2.95,R.y+.60,R.z+R.depth/2,1.9,1.2,.16);}
    // Keep the rear-centre sightline clear for the third-person view downhill.
    sign(R.x+3.0,R.z-2.85,R.y+1.92,2,2.6);
-   for(const x of [R.x+1.75,R.x+4.25])post(x,R.z-2.93,R.y+2.43,app.terrainData.heightAt(x,R.z-2.93)-.15,108);
+   for(const x of [R.x+1.75,R.x+4.25]){const base=app.terrainData.heightAt(x,R.z-2.93)-.15;post(x,R.z-2.93,R.y+2.43,base,108);box(x,(base+R.y+2.43)/2,R.z-2.93,.24,R.y+2.43-base,.24,false,'evacuation-post');}
    node(R.z,R.y,100);
   },'timber');
   this.records.push(STRUCTURES.at(-1));

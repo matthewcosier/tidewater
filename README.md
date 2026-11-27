@@ -140,14 +140,19 @@ rally coupe), the **Ridgeback 4x4** (a lifted, Blender-built 4x4 with mud-terrai
 recorded HEMI V8), the **COSIER GT3 RS** (the white-and-red Blender car with its own seven-speed gearbox), the **GT3RS ZRY** (a second white-and-red GT3 RS model on the same physics, with clear glass and no plates), the **Petrel GT** (a GT3-style rear-drive coupe), or one of three Blender-built
 hero cars: the **Fulmine V10** (a mid-engine wedge supercar), the **Corsaire W16** (a horseshoe-grille
 hypercar) or the **Sandpiper 1600** (an open-tub beach buggy), and choose where to start: the beach, the coastal road, the town backroad,
-the mountain summit, or either beach entrance. The Cedar wagon and Ridge pickup stay parked
+the mountain summit, either beach entrance, West Headland cliffs, Suspension bridge, North Coast highway, High Mountain pass, Rainforest rally, Ferry road, either ferry terminal, Joey Island road, or Joey East peninsula. The Cedar wagon and Ridge pickup stay parked
 near the village. All cars except the GT3RS ZRY carry custom number plates.
 
-The road is a full circuit. A graded coastal loop runs west of the village, with textured
-asphalt, patched and crack-sealed seal, painted lines, sandy verges and steel guardrails. A
-1.1 km branch leaves it behind the town, climbs through switchbacks to a mountain ridge, and
-drops down a 17 percent descent into a sharp hairpin back onto the loop. Gravel ramps lead
-from the loop down onto the beach.
+The road network spans 9.4 km across Tidewater Island and Joey Island, connected into one
+continuous two-island loop by a 637 m suspension bridge across the ferry strait (427 m main span,
+34.3 m mid-span soffit clearance so the `Tidewater Spirit` ferry sails cleanly underneath). A
+graded coastal loop runs west of the village with textured asphalt, patched and crack-sealed seal,
+painted lines, sandy verges, solid guide posts and steel guardrails. From it branch the 1.1 km
+mountain circuit (climbing through switchbacks to a ridge and a 17 percent descent), the West
+Headland cliff loop, the Grand Island Perimeter highway past the north coast and wind farm, the
+High Mountain pass switchbacks, the East Headland coastal loop, the Ferry road, a loose-surface
+Rainforest gravel rally stage, and Joey Island's ring road plus East Peninsula loop. Gravel
+ramps lead from the loop down onto the beach.
 
 The cars run on Tidewater's own physics, compiled to WebAssembly from Rust/Avian
 ([car physics](docs/rally-physics.md)):

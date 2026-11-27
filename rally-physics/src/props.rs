@@ -112,7 +112,8 @@ impl RallyPhysics {
         if breakable {
             body.insert((RigidBody::Static, Sensor, CollidingEntities::default()));
         } else {
-            body.insert((RigidBody::Dynamic, ColliderDensity(mass / volume), LinearVelocity(velocity), AngularVelocity::ZERO));
+            body.insert((RigidBody::Dynamic, ColliderDensity(mass / volume), LinearVelocity(velocity), AngularVelocity::ZERO,
+                SweptCcd { linear_threshold: 4.0, ..SweptCcd::LINEAR }));
         }
         let entity = body.id();
         self.props.insert(id, entity);

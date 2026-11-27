@@ -1,6 +1,7 @@
 import { WORLD } from './WorldLayout.js';
 import { TERMINAL_SITE } from '../ferry/terminalSite.js';
 import { shapeDistance, CUT_SHOULDER } from './TerrainData.js';
+import { BRIDGE } from './StraitBridge.js';
 
 // A graded coastal loop west of the village, and a mountain circuit that forks off
 // it behind the town, climbs the hills and dives back into it. All points are metres.
@@ -63,6 +64,54 @@ const JOEY_LOOP = [ [ - 151, 796.1 ], [ - 154.6, 814.7 ], [ - 149.7, 832.9 ], [ 
 	// behind the flat, 12 m back from its edge (grading never touches the flat itself)
 	[ - 25, 710 ], [ - 48, 712 ], [ - 63.9, 717.3 ], [ - 81.5, 732 ], [ - 96.8, 744.9 ], [ - 112.1, 757.8 ], [ - 125.2, 768.7 ] ];
 const JOEY_GRADE = 0.1, JOEY_STUB = 6, JOEY_LEVEL = 12, JOEY_MOUTH = 9, JOEY_FLAT = 3.1, JOEY_SEAM = [ 150, 873 ], JOEY_START = [ 25, 874 ];
+// Expanded island highway & rally network (all points metres, surveyed against TerrainData):
+// 1. West Headland cliff loop: forks off loop's west side, sweeps the ocean cliffs & south cape, climbs back onto circuit's descent straight.
+const WEST_HEADLAND_FORK = [ - 118, - 146 ], WEST_HEADLAND_MERGE = [ - 128, - 238 ];
+const WEST_HEADLAND = [
+	[ - 144, - 126 ], [ - 180, - 114 ], [ - 214, - 88 ], [ - 230, - 44 ], [ - 232, 8 ], [ - 234, 52 ],
+	[ - 264, 76 ], [ - 300, 72 ], [ - 322, 42 ], [ - 324, 12 ], [ - 320, - 40 ],
+	[ - 332, - 92 ], [ - 344, - 144 ], [ - 338, - 190 ], [ - 294, - 208 ], [ - 242, - 222 ], [ - 186, - 234 ]
+];
+// 2. Grand Island Perimeter highway: forks off West Headland north up the west bluffs, sweeps clear of all three
+//    wind turbines (>= 60 m from WT-01/02/03) along the north coast, and flows down the east bluffs onto ferryRoad.
+const HIGHWAY_FORK = [ - 344, - 144 ], HIGHWAY_MERGE = [ 191, - 24 ];
+const ISLAND_HIGHWAY = [
+	[ - 372, - 194 ], [ - 410, - 238 ], [ - 450, - 286 ], [ - 472, - 340 ], [ - 484, - 398 ], [ - 486, - 458 ],
+	[ - 480, - 518 ], [ - 458, - 568 ], [ - 416, - 600 ], [ - 374, - 636 ], [ - 354, - 684 ], [ - 330, - 728 ],
+	[ - 304, - 758 ], [ - 274, - 776 ], [ - 240, - 784 ], [ - 208, - 790 ], [ - 172, - 786 ], [ - 134, - 784 ],
+	[ - 76, - 792 ], [ - 14, - 790 ], [ 48, - 788 ], [ 110, - 786 ], [ 166, - 780 ], [ 224, - 770 ],
+	[ 280, - 746 ], [ 328, - 708 ], [ 368, - 660 ], [ 400, - 606 ], [ 432, - 548 ], [ 450, - 486 ],
+	[ 456, - 422 ], [ 460, - 358 ], [ 456, - 296 ], [ 426, - 240 ], [ 386, - 192 ], [ 358, - 136 ],
+	[ 336, - 84 ], [ 292, - 62 ], [ 250, - 52 ], [ 214, - 44 ]
+];
+// 3. High Mountain Touge pass: forks off circuit's west ridge, climbs West Massif switchbacks strictly west of x = -120
+//    (clear of glider stairs, chairlift and evacuation) along the natural 47 -> 112 -> 32 m massif bench into islandHighway.
+const PASS_GRADE = 0.135;
+const MOUNTAIN_PASS_FORK = [ - 128, - 255.5 ], MOUNTAIN_PASS_MERGE = [ - 274, - 776 ];
+const MOUNTAIN_PASS = [
+	[ - 186, - 264 ], [ - 246, - 274 ], [ - 306, - 290 ], [ - 362, - 314 ], [ - 404, - 348 ], [ - 420, - 388 ],
+	[ - 396, - 432 ], [ - 394, - 474 ], [ - 418, - 522 ], [ - 402, - 570 ], [ - 356, - 614 ], [ - 318, - 662 ],
+	[ - 296, - 708 ], [ - 292, - 748 ]
+];
+// 4. East Headland coastal loop: forks off ferryRoad onto the east headland bench overlooking the harbour & ocean.
+const EAST_HEADLAND_FORK = [ 193, - 12 ], EAST_HEADLAND_MERGE = [ 204, 150 ];
+const EAST_HEADLAND = [
+	[ 228, 22 ], [ 264, 54 ], [ 310, 64 ], [ 354, 46 ], [ 374, 86 ], [ 362, 128 ],
+	[ 330, 158 ], [ 284, 162 ], [ 246, 134 ], [ 224, 104 ], [ 208, 124 ]
+];
+// 5. Rainforest gravel rally stage: loose-surface special stage cutting through the north rainforest valley south of WT-02/03.
+const RALLY_GRADE = 0.135;
+const RALLY_STAGE_FORK = [ - 208, - 790 ], RALLY_STAGE_MERGE = [ 166, - 780 ];
+const RALLY_STAGE = [
+	[ - 182, - 742 ], [ - 156, - 696 ], [ - 118, - 674 ], [ - 64, - 680 ], [ - 10, - 714 ],
+	[ 42, - 686 ], [ 94, - 686 ], [ 124, - 708 ], [ 126, - 746 ], [ 144, - 772 ]
+];
+// 6. Joey Island East Peninsula loop: forks off joeyLoop's east shore out round the peninsula and back.
+const JOEY_PENINSULA_FORK = [ 311, 790 ], JOEY_PENINSULA_MERGE = [ 309, 723 ];
+const JOEY_PENINSULA = [
+	[ 344, 782 ], [ 386, 786 ], [ 432, 782 ], [ 476, 772 ], [ 512, 754 ], [ 530, 724 ],
+	[ 516, 690 ], [ 484, 668 ], [ 442, 670 ], [ 412, 698 ], [ 382, 720 ], [ 346, 724 ]
+];
 const clamp = ( x, a, b ) => Math.max( a, Math.min( b, x ) );
 const smooth = x => { const t = clamp( x, 0, 1 ); return t * t * ( 3 - 2 * t ); };
 const distance = ( a, b ) => Math.hypot( a.x - b.x, a.z - b.z );
@@ -116,20 +165,75 @@ export class CoastalRoute {
 		this.paths.push( this.ferryRoad ); this.indexPath( this.ferryRoad );
 		this.joeyLoop = this.buildJoeyLoop();
 		for ( const path of [ this.joeyLoop, this.joeyLink, ...this.joeyMouths ] ) { this.paths.push( path ); this.indexPath( path ); }
+		this.westHeadland = this.buildSpur( {
+			name: 'westHeadland', kind: 'asphalt', halfWidth: 2.7, grade: CLIMB, floor: 1.8,
+			startParent: this.loop, startPoint: WEST_HEADLAND_FORK,
+			endParent: this.circuit, endPoint: WEST_HEADLAND_MERGE, endFilter: p => p.limit === DESCENT,
+			control: WEST_HEADLAND
+		} );
+		this.paths.push( this.westHeadland ); this.indexPath( this.westHeadland );
+		this.islandHighway = this.buildSpur( {
+			name: 'islandHighway', kind: 'asphalt', halfWidth: 2.7, grade: CLIMB, floor: 1.8,
+			startParent: this.westHeadland, startPoint: HIGHWAY_FORK,
+			endParent: this.ferryRoad, endPoint: HIGHWAY_MERGE,
+			control: ISLAND_HIGHWAY
+		} );
+		this.paths.push( this.islandHighway ); this.indexPath( this.islandHighway );
+		this.mountainPass = this.buildSpur( {
+			name: 'mountainPass', kind: 'asphalt', halfWidth: 2.7, grade: PASS_GRADE, floor: 2.0,
+			startParent: this.circuit, startPoint: MOUNTAIN_PASS_FORK, startFilter: p => p.limit === CLIMB,
+			endParent: this.islandHighway, endPoint: MOUNTAIN_PASS_MERGE,
+			control: MOUNTAIN_PASS
+		} );
+		this.paths.push( this.mountainPass ); this.indexPath( this.mountainPass );
+		this.eastHeadland = this.buildSpur( {
+			name: 'eastHeadland', kind: 'asphalt', halfWidth: 2.7, grade: CLIMB, floor: 1.8,
+			startParent: this.ferryRoad, startPoint: EAST_HEADLAND_FORK,
+			endParent: this.ferryRoad, endPoint: EAST_HEADLAND_MERGE,
+			control: EAST_HEADLAND
+		} );
+		this.paths.push( this.eastHeadland ); this.indexPath( this.eastHeadland );
+		this.rallyStage = this.buildSpur( {
+			name: 'rallyStage', kind: 'gravel', halfWidth: 2.3, grade: RALLY_GRADE, floor: 2.0,
+			startParent: this.islandHighway, startPoint: RALLY_STAGE_FORK,
+			endParent: this.islandHighway, endPoint: RALLY_STAGE_MERGE,
+			control: RALLY_STAGE
+		} );
+		this.paths.push( this.rallyStage ); this.indexPath( this.rallyStage );
+		this.joeyPeninsula = this.buildSpur( {
+			name: 'joeyPeninsula', island: 'joey', kind: 'asphalt', halfWidth: 2.7, grade: JOEY_GRADE, floor: 1.8,
+			startParent: this.joeyLoop, startPoint: JOEY_PENINSULA_FORK,
+			endParent: this.joeyLoop, endPoint: JOEY_PENINSULA_MERGE,
+			control: JOEY_PENINSULA
+		} );
+		this.paths.push( this.joeyPeninsula ); this.indexPath( this.joeyPeninsula );
+		this.bridgeNorth = this.buildBridgeNorth();
+		this.paths.push( this.bridgeNorth ); this.indexPath( this.bridgeNorth );
+		this.bridgeSouth = this.buildBridgeSouth();
+		this.paths.push( this.bridgeSouth ); this.indexPath( this.bridgeSouth );
 		this.joeyLoopLength = this.joeyLoop.points.at( - 1 ).distance;
 		this.length = this.loop.points.at( - 1 ).distance;
 		this.circuitLength = this.circuit.points.at( - 1 ).distance;
 		this.ferryRoadLength = this.ferryRoad.points.at( - 1 ).distance;
+		this.bridgeLength = BRIDGE.LENGTH;
+		this.totalLength = this.paths.reduce( ( sum, path ) => sum + ( path.points.at( - 1 )?.distance || 0 ), 0 );
 		// maxGrade keeps meaning the coastal loop and its beach tracks; the circuit and the
 		// ferry road report their own.
 		const gradeOf = list => Math.max( ...list.map( segment => Math.abs( segment.b.h - segment.a.h ) / segment.length ) );
-		this.maxGrade = gradeOf( this.segments.filter( segment => segment.path === this.loop || segment.path.kind === 'gravel' ) );
+		this.maxGrade = gradeOf( this.segments.filter( segment => segment.path === this.loop || segment.path.name === 'west' || segment.path.name === 'east' ) );
 		this.circuitMaxGrade = gradeOf( this.segments.filter( segment => segment.path === this.circuit ) );
 		this.ferryRoadMaxGrade = gradeOf( this.segments.filter( segment => segment.path === this.ferryRoad ) );
 		this.joeyLoopMaxGrade = gradeOf( this.segments.filter( segment => segment.path === this.joeyLoop ) );
-		// Earthworks per island, each over its own box of texels; maxEarthwork keeps meaning Tidewater's.
+		// Earthworks per island: grade Tidewater's original five paths first in their own box so existing
+		// routes and the chairlift survey stay bit-for-bit identical, then grade the expanded Tidewater routes
+		// while protecting original road surfaces and the chairlift corridor.
 		const joey = segment => segment.path.island === 'joey';
-		this.maxEarthwork = this.grade( this.segments.filter( segment => ! joey( segment ) ) );
+		const origPaths = new Set( [ this.loop, ...this.paths.filter( p => p.name === 'west' || p.name === 'east' ), this.circuit, this.ferryRoad ] );
+		const origSegs = this.segments.filter( segment => origPaths.has( segment.path ) );
+		const newTwSegs = this.segments.filter( segment => ! joey( segment ) && ! origPaths.has( segment.path ) );
+		const newTw = segment => ! joey( segment ) && ! origPaths.has( segment.path );
+		this.maxEarthwork = this.grade( origSegs, null, segment => origPaths.has( segment.path ) );
+		this.maxEarthwork = Math.max( this.maxEarthwork, this.grade( newTwSegs, null, null, newTw ) );
 		// Joey's grading leaves the terminal site alone: the flat carries the yard and the village
 		// (the game applies the site before the roads). A shoulder round it is kept too (the
 		// width of TerrainData.cutPolygon's level shoulder: a ground read blends texels up to a
@@ -212,6 +316,88 @@ export class CoastalRoute {
 		} );
 		return { name: 'joeyLoop', island: 'joey', kind: 'asphalt', halfWidth: 2.7, points: ring, closed: true, pad: 26 };
 	}
+	// Generic Hermite highway or rally spur joining two existing parent roads along their own tangents and heights.
+	buildSpur( { name, kind, halfWidth, grade, floor = 1.6, island, startParent, startPoint, startFilter, endParent, endPoint, endFilter, control } ) {
+		const pick = ( path, [ tx, tz ], filter ) => {
+			const pts = path.points, n = path.closed ? pts.length - 1 : pts.length;
+			let best = - 1, bestD = Infinity;
+			for ( let i = path.closed ? 0 : 1; i < ( path.closed ? n : n - 1 ); i ++ ) {
+				if ( filter && ! filter( pts[ i ] ) ) continue;
+				const d = Math.hypot( pts[ i ].x - tx, pts[ i ].z - tz );
+				if ( d < bestD ) { bestD = d; best = i; }
+			}
+			const a = pts[ path.closed ? ( best + n - 1 ) % n : best - 1 ], b = pts[ path.closed ? ( best + 1 ) % n : best + 1 ];
+			const l = distance( a, b );
+			return { pt: pts[ best ], tangent: [ ( b.x - a.x ) / l, ( b.z - a.z ) / l ] };
+		};
+		const start = pick( startParent, startPoint, startFilter );
+		const end = pick( endParent, endPoint, endFilter );
+		const nodes = [
+			[ start.pt.x, start.pt.z, grade ],
+			...control.map( ( [ x, z, limit ] ) => [ x, z, limit || grade ] ),
+			[ end.pt.x, end.pt.z, grade ]
+		];
+		const points = this.spline( nodes, start.tangent, end.tangent );
+		const parents = startParent === endParent ? startParent : [ startParent, endParent ];
+		this.profile( points, parents, floor, true );
+		return { name, ...( island ? { island } : {} ), kind, halfWidth, points, closed: false, pad: 26 };
+	}
+	// North approach to the Strait suspension bridge: leaves West Headland heading south,
+	// curves smoothly onto the bridge axis and matches the deck grade and height over the last 16 m.
+	buildBridgeNorth() {
+		const pts = this.westHeadland.points;
+		let fork = 1, bestD = Infinity;
+		for ( let i = 1; i < pts.length - 1; i ++ ) {
+			const d = Math.hypot( pts[ i ].x - ( - 236 ), pts[ i ].z - 54 );
+			if ( d < bestD ) { bestD = d; fork = i; }
+		}
+		const a = pts[ fork - 1 ], b = pts[ fork + 1 ], l = distance( a, b );
+		const straightStart = BRIDGE.worldXZ( - 16, 0 );
+		const nodes = [
+			[ pts[ fork ].x, pts[ fork ].z, CLIMB ],
+			[ - 250, 86, CLIMB ],
+			[ - 260, 108, CLIMB ],
+			[ straightStart[ 0 ], straightStart[ 1 ], CLIMB ],
+			[ BRIDGE.P0[ 0 ], BRIDGE.P0[ 1 ], CLIMB ],
+		];
+		const points = this.spline( nodes, [ ( b.x - a.x ) / l, ( b.z - a.z ) / l ], [ BRIDGE.ux, BRIDGE.uz ] );
+		for ( const p of points ) {
+			const s = ( p.x - BRIDGE.P0[ 0 ] ) * BRIDGE.ux + ( p.z - BRIDGE.P0[ 1 ] ) * BRIDGE.uz;
+			if ( s >= - 16.5 ) p.hold = BRIDGE.deckY( s );
+		}
+		this.profile( points, this.westHeadland, 2.0, true );
+		return { name: 'bridgeNorth', kind: 'asphalt', halfWidth: 2.7, points, closed: false, pad: 26 };
+	}
+	// South approach off the Strait suspension bridge on Joey Island: leaves the south expansion
+	// joint dead straight on the bridge grade, then sweeps down the central valley onto joeyLoop.
+	buildBridgeSouth() {
+		const pts = this.joeyLoop.points, n = pts.length - 1;
+		let merge = 0, bestD = Infinity;
+		for ( let i = 0; i < n; i ++ ) {
+			const d = Math.hypot( pts[ i ].x - 158, pts[ i ].z - 874 );
+			if ( d < bestD ) { bestD = d; merge = i; }
+		}
+		const a = pts[ ( merge + n - 1 ) % n ], b = pts[ ( merge + 1 ) % n ], l = distance( a, b );
+		const straightEnd = BRIDGE.worldXZ( BRIDGE.LENGTH + 16, 0 );
+		const nodes = [
+			[ BRIDGE.P1[ 0 ], BRIDGE.P1[ 1 ], JOEY_GRADE ],
+			[ straightEnd[ 0 ], straightEnd[ 1 ], JOEY_GRADE ],
+			[ 22, 756, JOEY_GRADE ],
+			[ 46, 778, JOEY_GRADE ],
+			[ 80, 784, JOEY_GRADE ],
+			[ 112, 794, JOEY_GRADE ],
+			[ 134, 818, JOEY_GRADE ],
+			[ 142, 848, JOEY_GRADE ],
+			[ pts[ merge ].x, pts[ merge ].z, JOEY_GRADE ],
+		];
+		const points = this.spline( nodes, [ BRIDGE.ux, BRIDGE.uz ], [ ( b.x - a.x ) / l, ( b.z - a.z ) / l ] );
+		for ( const p of points ) {
+			const s = ( p.x - BRIDGE.P0[ 0 ] ) * BRIDGE.ux + ( p.z - BRIDGE.P0[ 1 ] ) * BRIDGE.uz;
+			if ( s <= BRIDGE.LENGTH + 16.5 ) p.hold = BRIDGE.deckY( s );
+		}
+		this.profile( points, this.joeyLoop, 1.8, true );
+		return { name: 'bridgeSouth', island: 'joey', kind: 'asphalt', halfWidth: 2.7, points, closed: false, pad: 26 };
+	}
 	// Hermite spline through control points [ x, z, grade limit ], leaving along the unit
 	// tangent start and arriving along end, a point about every 0.83 m on the natural ground.
 	spline( control, start, end ) {
@@ -237,14 +423,15 @@ export class CoastalRoute {
 	// The vertical profile of a road that leaves (and may rejoin) a parent road. Follow the
 	// smoothed ground, then take the parent's own height wherever the two roads share asphalt,
 	// so no junction has a step; points carrying a hold height are fixed at it.
-	profile( points, parent, floor = - Infinity ) {
+	profile( points, parent, floor = - Infinity, blendJunction = false ) {
 		for ( let pass = 0; pass < 30; pass ++ ) {
 			const heights = points.map( ( p, i ) => { const at = o => points[ clamp( i + o, 0, points.length - 1 ) ].h; return ( at( - 2 ) + 2 * at( - 1 ) + 4 * p.h + 2 * at( 1 ) + at( 2 ) ) / 10; } );
 			points.forEach( ( p, i ) => { p.h = Math.max( floor, heights[ i ] ); } );
 		}
+		const isParent = Array.isArray( parent ) ? path => parent.includes( path ) : path => path === parent;
 		for ( const p of points ) {
-			const q = this.closest( p.x, p.z );
-			p.pin = q && q.path === parent ? 1 - smooth( ( q.distance - 2 ) / 10 ) : 0;
+			const q = parent ? this.closest( p.x, p.z, s => isParent( s.path ) ) : null;
+			p.pin = q ? 1 - smooth( ( q.distance - 2 ) / 10 ) : 0;
 			if ( p.pin > 0 ) p.h += ( q.h - p.h ) * p.pin;
 			if ( p.hold !== undefined ) { p.pin = 1; p.h = p.hold; }
 		}
@@ -276,18 +463,59 @@ export class CoastalRoute {
 			if ( n < 3 ) return;
 			const length = [], grade = [];
 			for ( let i = s; i < e; i ++ ) { length.push( distance( points[ i ], points[ i + 1 ] ) ); grade.push( ( points[ i + 1 ].h - points[ i ].h ) / length.at( - 1 ) ); }
+			// For new multi-parent spurs, include adjacent fixed parent grades in the running mean so junctions
+			// transition smoothly with zero vertical kink; existing roads keep their exact original profile.
+			const preLen = [], preGrade = [], postLen = [], postGrade = [];
+			if ( blendJunction ) {
+				for ( let k = Math.max( 0, s - REACH ); k < s; k ++ ) {
+					const l = distance( points[ k ], points[ k + 1 ] );
+					preLen.push( l ); preGrade.push( ( points[ k + 1 ].h - points[ k ].h ) / l );
+				}
+				for ( let k = e; k < Math.min( points.length - 1, e + REACH ); k ++ ) {
+					const l = distance( points[ k ], points[ k + 1 ] );
+					postLen.push( l ); postGrade.push( ( points[ k + 1 ].h - points[ k ].h ) / l );
+				}
+			}
+			const hasPre = preLen.length > 0, hasPost = postLen.length > 0;
 			for ( let pass = 0; pass < 3; pass ++ ) {
 				const mean = grade.map( ( g, i ) => {
 					let sum = 0, weight = 0;
-					for ( let k = Math.max( 0, i - REACH ); k <= Math.min( n - 1, i + REACH ); k ++ ) { sum += grade[ k ] * length[ k ]; weight += length[ k ]; }
+					for ( let k = blendJunction ? i - REACH : Math.max( 0, i - REACH ); k <= ( blendJunction ? i + REACH : Math.min( n - 1, i + REACH ) ); k ++ ) {
+						let gk, lk;
+						if ( k < 0 ) {
+							const pk = preLen.length + k;
+							if ( pk < 0 ) continue;
+							gk = preGrade[ pk ]; lk = preLen[ pk ];
+						} else if ( k >= n ) {
+							const pk = k - n;
+							if ( pk >= postLen.length ) continue;
+							gk = postGrade[ pk ]; lk = postLen[ pk ];
+						} else {
+							gk = grade[ k ]; lk = length[ k ];
+						}
+						sum += gk * lk; weight += lk;
+					}
 					return sum / weight;
 				} );
 				grade.splice( 0, n, ...mean.map( ( g, i ) => { const cap = points[ s + i ].limit * 0.995; return clamp( g, - cap, cap ); } ) );
 			}
-			let rise = 0, total = 0;
-			for ( let i = 0; i < n; i ++ ) { rise += grade[ i ] * length[ i ]; total += length[ i ]; }
-			const fix = ( points[ e ].h - points[ s ].h - rise ) / total;
-			for ( let i = 0; i < n; i ++ ) points[ s + i + 1 ].h = points[ s + i ].h + ( grade[ i ] + fix ) * length[ i ];
+			if ( ! blendJunction ) {
+				let rise = 0, total = 0;
+				for ( let i = 0; i < n; i ++ ) { rise += grade[ i ] * length[ i ]; total += length[ i ]; }
+				const fix = ( points[ e ].h - points[ s ].h - rise ) / total;
+				for ( let i = 0; i < n; i ++ ) points[ s + i + 1 ].h = points[ s + i ].h + ( grade[ i ] + fix ) * length[ i ];
+				return;
+			}
+			let rise = 0, wsum = 0;
+			const wts = grade.map( ( _, i ) => {
+				let w = 1;
+				if ( hasPre ) w *= smooth( ( i + 0.5 ) / REACH );
+				if ( hasPost ) w *= smooth( ( n - 0.5 - i ) / REACH );
+				return w;
+			} );
+			for ( let i = 0; i < n; i ++ ) { rise += grade[ i ] * length[ i ]; wsum += wts[ i ] * length[ i ]; }
+			const fix = wsum > 1e-4 ? ( points[ e ].h - points[ s ].h - rise ) / wsum : 0;
+			for ( let i = 0; i < n; i ++ ) points[ s + i + 1 ].h = points[ s + i ].h + ( grade[ i ] + fix * wts[ i ] ) * length[ i ];
 		};
 		for ( let i = 1; i < points.length; i ++ ) { const a = points[ i - 1 ], b = points[ i ], l = distance( a, b ) * a.limit * 0.995; if ( ! fixed( b ) ) b.h = clamp( b.h, a.h - l, a.h + l ); }
 		for ( let i = points.length - 2; i >= 0; i -- ) { const a = points[ i ], b = points[ i + 1 ], l = distance( a, b ) * a.limit * 0.995; if ( ! fixed( a ) ) a.h = clamp( a.h, b.h - l, b.h + l ); }
@@ -307,12 +535,15 @@ export class CoastalRoute {
 			accumulated += length; b.distance = accumulated; this.segments.push( segment );
 			for ( let x = Math.floor( ( Math.min( a.x, b.x ) - pad ) / CELL ); x <= Math.floor( ( Math.max( a.x, b.x ) + pad ) / CELL ); x ++ ) {
 				for ( let z = Math.floor( ( Math.min( a.z, b.z ) - pad ) / CELL ); z <= Math.floor( ( Math.max( a.z, b.z ) + pad ) / CELL ); z ++ ) {
-					const key = `${ x },${ z }`; if ( ! this.grid.has( key ) ) this.grid.set( key, [] ); this.grid.get( key ).push( segment );
+					const key = ( ( x + 2048 ) << 12 ) | ( z + 2048 );
+					let cell = this.grid.get( key );
+					if ( ! cell ) { cell = []; this.grid.set( key, cell ); }
+					cell.push( segment );
 				}
 			}
 		}
 	}
-	near( x, z ) { return this.grid.get( `${ Math.floor( x / CELL ) },${ Math.floor( z / CELL ) }` ) || []; }
+	near( x, z ) { return this.grid.get( ( ( Math.floor( x / CELL ) + 2048 ) << 12 ) | ( Math.floor( z / CELL ) + 2048 ) ) || []; }
 	project( segment, x, z ) {
 		const { a, b, length } = segment, dx = b.x - a.x, dz = b.z - a.z;
 		const raw = ( ( x - a.x ) * dx + ( z - a.z ) * dz ) / ( length * length );
@@ -328,8 +559,17 @@ export class CoastalRoute {
 		}
 		return best;
 	}
-	// Plants, rocks and logs keep clear of the sealed shoulder, barrier and its flared ends.
-	clearance( x, z ) { const p = this.closest( x, z ); return p ? p.distance - p.path.halfWidth - ( p.path.kind === 'asphalt' ? 3.4 : 1.6 ) : Infinity; }
+	// Plants, rocks and logs keep clear of the sealed shoulder, barrier, flared ends and bridge abutments.
+	clearance( x, z ) {
+		const p = this.closest( x, z );
+		let d = p ? p.distance - p.path.halfWidth - ( p.path.kind === 'asphalt' ? 3.4 : 1.6 ) : Infinity;
+		const bs = ( x - BRIDGE.P0[ 0 ] ) * BRIDGE.ux + ( z - BRIDGE.P0[ 1 ] ) * BRIDGE.uz;
+		if ( bs >= - 22 && bs <= BRIDGE.LENGTH + 22 ) {
+			const lat = Math.abs( ( x - BRIDGE.P0[ 0 ] ) * BRIDGE.rx + ( z - BRIDGE.P0[ 1 ] ) * BRIDGE.rz );
+			d = Math.min( d, lat - 11.5 );
+		}
+		return d;
+	}
 	surfaceAt( x, z ) {
 		let gravel = null;
 		for ( const segment of this.near( x, z ) ) {
@@ -346,9 +586,10 @@ export class CoastalRoute {
 	// pass close by at different heights the ground between them blends instead of
 	// jumping at the midline. Returns the nearest projection (for the road surface and
 	// paint) and the blended target height and strength, or null out of reach.
-	gradeAt( wx, wz ) {
+	gradeAt( wx, wz, filter = null ) {
 		const legs = [];
 		for ( const segment of this.near( wx, wz ) ) {
+			if ( filter && ! filter( segment ) ) continue;
 			const p = this.project( segment, wx, wz ), { a, b } = segment;
 			const bank = a.bank ? a.bank + ( b.bank - a.bank ) * clamp( p.raw, 0, 1 ) : 3.5;
 			const width = p.path.halfWidth, blend = 1 - smooth( ( p.distance - width - 0.5 ) / bank );
@@ -379,7 +620,7 @@ export class CoastalRoute {
 	}
 	// Carve the roads in `segments` into the heightfield over their own box; returns the deepest cut
 	// or fill. Texels where keep( x, z ) is true are never graded or relaxed.
-	grade( segments = this.segments, keep = null ) {
+	grade( segments = this.segments, keep = null, filter = null, onlyNear = null ) {
 		const terrain = this.terrain, bounds = { x0: Infinity, z0: Infinity, x1: - Infinity, z1: - Infinity };
 		for ( const segment of segments ) for ( const point of [ segment.a, segment.b ] ) {
 			const margin = point.bank ? point.bank + 4 : 8;
@@ -397,7 +638,8 @@ export class CoastalRoute {
 			for ( let x = x0; x <= x1; x ++ ) {
 				const wx = terrain.origin + ( x + 0.5 ) * terrain.texel, wz = terrain.origin + ( z + 0.5 ) * terrain.texel;
 				if ( keep && keep( wx, wz ) ) { graded[ ( z - z0 ) * w + x - x0 ] = 3; continue; }
-				const g = this.gradeAt( wx, wz ); if ( ! g ) continue;
+				const g = this.gradeAt( wx, wz, filter ); if ( ! g ) continue;
+				if ( onlyNear && ! this.gradeAt( wx, wz, onlyNear ) ) { graded[ ( z - z0 ) * w + x - x0 ] = 3; continue; }
 				const p = g.nearest, { a } = p.segment, asphalt = p.path.kind === 'asphalt', width = p.path.halfWidth;
 				const index = z * terrain.res + x;
 				terrain.heights[ index ] = original[ index ] + ( g.target - original[ index ] ) * g.blend;
@@ -413,31 +655,45 @@ export class CoastalRoute {
 			}
 		}
 		// Cut faces and embankments no steeper than 1:1: relax graded ground (never the road
-		// surface) until no neighbour pair steps more than a metre per texel. Ground that
-		// moves hands the constraint on to its neighbours, so a deep cutting's slope runs out
-		// into the hillside as far as it needs; untouched natural ground stays as it was.
+		// surface) in row-major order using a dirty bitmask so untouched/converged regions skip
+		// immediately while preserving exact Gauss-Seidel heights on existing routes.
 		const limit = terrain.texel, h = terrain.heights, res = terrain.res, zn = z1 - z0 + 1;
+		let dirty = new Uint8Array( graded.length ), nextDirty = new Uint8Array( graded.length );
+		let rowHas = new Uint8Array( zn ), nextRowHas = new Uint8Array( zn );
+		for ( let dz = 0; dz < zn; dz ++ ) {
+			const row = dz * w;
+			for ( let dx = 0; dx < w; dx ++ ) if ( graded[ row + dx ] === 1 ) { dirty[ row + dx ] = 1; rowHas[ dz ] = 1; }
+		}
 		for ( let pass = 0; pass < 300; pass ++ ) {
 			let moved = 0;
-			for ( let z = z0; z <= z1; z ++ ) for ( let x = x0; x <= x1; x ++ ) {
-				const k = ( z - z0 ) * w + x - x0;
-				if ( graded[ k ] !== 1 ) continue;
-				const i = z * res + x;
-				// Each pair may be as steep as 1:1 or as steep as nature made it, never steeper.
-				let lo = - Infinity, hi = Infinity;
-				for ( const j of [ i - 1, i + 1, i - res, i + res ] ) {
-					const allowed = Math.max( limit, Math.abs( original[ i ] - original[ j ] ) );
-					lo = Math.max( lo, h[ j ] - allowed ); hi = Math.min( hi, h[ j ] + allowed );
+			nextRowHas.fill( 0 );
+			for ( let dz = 0; dz < zn; dz ++ ) {
+				if ( ! rowHas[ dz ] ) continue;
+				const z = z0 + dz, row = dz * w, zRes = z * res;
+				for ( let dx = 0; dx < w; dx ++ ) {
+					const k = row + dx;
+					if ( ! dirty[ k ] ) continue;
+					dirty[ k ] = 0;
+					if ( graded[ k ] !== 1 ) continue;
+					const x = x0 + dx, i = zRes + x;
+					let lo = - Infinity, hi = Infinity;
+					for ( const j of [ i - 1, i + 1, i - res, i + res ] ) {
+						const allowed = Math.max( limit, Math.abs( original[ i ] - original[ j ] ) );
+						lo = Math.max( lo, h[ j ] - allowed ); hi = Math.min( hi, h[ j ] + allowed );
+					}
+					const next = lo > hi ? ( lo + hi ) * 0.5 : Math.min( hi, Math.max( lo, h[ i ] ) );
+					if ( Math.abs( next - h[ i ] ) <= 1e-3 ) continue;
+					h[ i ] = next; moved ++;
+					nextDirty[ k ] = 1; nextRowHas[ dz ] = 1;
+					if ( dx > 0 && graded[ k - 1 ] < 2 ) { if ( ! graded[ k - 1 ] ) graded[ k - 1 ] = 1; nextDirty[ k - 1 ] = 1; nextRowHas[ dz ] = 1; }
+					if ( dx + 1 < w && graded[ k + 1 ] < 2 ) { if ( ! graded[ k + 1 ] ) graded[ k + 1 ] = 1; dirty[ k + 1 ] = 1; nextDirty[ k + 1 ] = 1; nextRowHas[ dz ] = 1; }
+					if ( dz > 0 && graded[ k - w ] < 2 ) { if ( ! graded[ k - w ] ) graded[ k - w ] = 1; nextDirty[ k - w ] = 1; nextRowHas[ dz - 1 ] = 1; }
+					if ( dz + 1 < zn && graded[ k + w ] < 2 ) { if ( ! graded[ k + w ] ) graded[ k + w ] = 1; dirty[ k + w ] = 1; rowHas[ dz + 1 ] = 1; nextDirty[ k + w ] = 1; nextRowHas[ dz + 1 ] = 1; }
 				}
-				const next = lo > hi ? ( lo + hi ) * 0.5 : Math.min( hi, Math.max( lo, h[ i ] ) );
-				if ( Math.abs( next - h[ i ] ) <= 1e-3 ) continue;
-				h[ i ] = next; moved ++;
-				if ( x > x0 && ! graded[ k - 1 ] ) graded[ k - 1 ] = 1;
-				if ( x < x1 && ! graded[ k + 1 ] ) graded[ k + 1 ] = 1;
-				if ( z > z0 && ! graded[ k - w ] ) graded[ k - w ] = 1;
-				if ( z < z1 && z - z0 + 1 < zn && ! graded[ k + w ] ) graded[ k + w ] = 1;
 			}
 			if ( ! moved ) break;
+			const td = dirty; dirty = nextDirty; nextDirty = td;
+			const tr = rowHas; rowHas = nextRowHas; nextRowHas = tr;
 		}
 		// The relaxation holds each texel to its four neighbours only, so a cut face or batter comes
 		// out as a staircase of texels along any diagonal, and its crease with the natural slope reads
@@ -526,14 +782,16 @@ export class CoastalRoute {
 					const [ ax, az ] = tangent( i - 8 ), [ bx, bz ] = tangent( i + 8 ), turn = ( bx - ax ) * nx + ( bz - az ) * nz;
 					const outer = turn < - 0.3, tight = ! coastal && turn < - 0.6, inside = ! coastal && turn > 0.6;
 					const rampBlocked = path === this.loop && ramps.some( segment => { const q = this.project( segment, x, z ); return ! ( segment.first && q.raw < 0 ) && q.distance < segment.path.halfWidth + 5; } );
-					// Another road on this side (junction gores, or a far leg of the same road): keep the barrier off it.
+					// Another road (asphalt or gravel) on this side: keep the barrier off junctions and gores.
 					const roadBlocked = this.near( x, z ).some( segment => {
-						if ( segment.path.kind !== 'asphalt' || ( segment.path === path && Math.abs( segment.a.distance - p.distance ) < 60 ) ) return false;
+						if ( segment.path === path && Math.abs( segment.a.distance - p.distance ) < 60 ) return false;
 						const q = this.project( segment, x, z ), own = this.project( segment, p.x, p.z );
 						if ( ( segment.first && q.raw < 0 ) || ( segment.last && q.raw > 1 ) ) return false;
 						return q.distance < segment.path.halfWidth + 5 && q.distance < own.distance;
 					} );
-					blocked[ i ] = rampBlocked || roadBlocked;
+					const bridgeBlocked = ( path === this.bridgeNorth && Math.hypot( p.x - BRIDGE.P0[ 0 ], p.z - BRIDGE.P0[ 1 ] ) < 22 )
+						|| ( path === this.bridgeSouth && Math.hypot( p.x - BRIDGE.P1[ 0 ], p.z - BRIDGE.P1[ 1 ] ) < 22 );
+					blocked[ i ] = rampBlocked || roadBlocked || bridgeBlocked;
 					want[ i ] = ! blocked[ i ] && ( coastal ? d10 > 0.62 || d16 > 0.95 || ( outer && d10 > 0.35 ) : ( d10 > 1.4 || d16 > 2.2 || tight ) && ! inside );
 					frame[ i ] = { x, z, nx, nz, road: p.h, ground: terrain.heightAt( x, z ), index: i, drop, path: path.name };
 				}
@@ -575,6 +833,29 @@ export class CoastalRoute {
 		if ( name === 'joeyLoop' ) {
 			const pts = this.joeyLoop.points, d = p => Math.hypot( p.x - JOEY_START[ 0 ], p.z - JOEY_START[ 1 ] );
 			return facing( this.joeyLoop, pts.reduce( ( best, p, i ) => d( p ) < d( pts[ best ] ) ? i : best, 0 ) );
+		}
+		// New expanded road starts: pick the flattest scenic point near each named target.
+		const pickLevel = ( path, targetX, targetZ ) => {
+			const pts = path.points;
+			const anchor = pts.reduce( ( best, p, i ) => Math.hypot( p.x - targetX, p.z - targetZ ) < Math.hypot( pts[ best ].x - targetX, pts[ best ].z - targetZ ) ? i : best, 20 );
+			const lo = Math.max( 15, anchor - 35 ), hi = Math.min( pts.length - 16, anchor + 35 );
+			let bestIdx = anchor, bestScore = Infinity;
+			for ( let k = lo; k <= hi; k ++ ) {
+				const p = pts[ k ], next = pts[ k + 1 ], yaw = Math.atan2( next.x - p.x, next.z - p.z ), fx = Math.sin( yaw ), fz = Math.cos( yaw );
+				const hs = [ [ - 2.7, - 1.3 ], [ - 2.7, 1.3 ], [ 2.7, - 1.3 ], [ 2.7, 1.3 ] ].map( ( [ a, b ] ) => this.terrain.heightAt( p.x + fx * a + fz * b, p.z + fz * a - fx * b ) );
+				const score = ( Math.max( ...hs ) - Math.min( ...hs ) ) + Math.abs( k - anchor ) * 0.002;
+				if ( score < bestScore ) { bestScore = score; bestIdx = k; }
+			}
+			return facing( path, bestIdx );
+		};
+		if ( name === 'westHeadland' ) return pickLevel( this.westHeadland, - 270, 88 );
+		if ( name === 'northCoast' ) return pickLevel( this.islandHighway, - 60, - 792 );
+		if ( name === 'mountainPass' ) return pickLevel( this.mountainPass, - 396, - 432 );
+		if ( name === 'rallyStage' ) return pickLevel( this.rallyStage, - 64, - 680 );
+		if ( name === 'joeyPeninsula' ) return pickLevel( this.joeyPeninsula, 468, 668 );
+		if ( name === 'straitBridge' ) {
+			const [ sx, sz ] = BRIDGE.worldXZ( - 10, 0 );
+			return { x: sx, z: sz, yaw: BRIDGE.yaw };
 		}
 		const path = this.paths.find( p => p.name === name ) || this.loop;
 		const index = path === this.loop ? this.loop.points.findIndex( point => point.x > - 90 && point.x < - 85 && point.z > - 85 ) : 0;

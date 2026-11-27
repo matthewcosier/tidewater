@@ -22,7 +22,7 @@ export class DisasterBodies {
   for(const [type,records]of [[app.vegetation?.palms,app.vegetation?.records.palms],[app.vegetation?.canopy,app.vegetation?.records.trees]])if(type)for(let i=0;i<records.length;i++){const r=records[i];this.trees.push({type,r,i,k:this.trees.length,kind:type.name==='palms'?'palms':'canopy',damage:0,fallen:false});}
   for(const item of app.rally.supports??[])this.register({...item,name:'Parked support vehicle',mass:1800,half:new Vector3(1,.85,item.halfLength),height:1.7,area:4,volume:2.5});
   for(const terminal of [app.terminal,app.joeyTerminal]){
-   const groups=new Map();for(const mesh of terminal?.parkedMeshes??[])for(let i=0;i<mesh.count;i++){mesh.getMatrixAt(i,m);const pos=new Vector3().setFromMatrixPosition(m),key=pos.x.toFixed(3)+','+pos.z.toFixed(3);let r=groups.get(key);if(!r){r={name:'Parked terminal car',position:pos,quaternion:new Quaternion(),parts:[],mass:1400,half:new Vector3(.95,.75,2.1),height:1.5,area:3,volume:2};m.decompose(zero,r.quaternion,one);groups.set(key,r);}r.parts.push({mesh,i,m:m.clone()});}
+   const groups=new Map();for(const mesh of terminal?.parkedMeshes??[])for(let i=0;i<mesh.count;i++){mesh.getMatrixAt(i,m);const pos=new Vector3().setFromMatrixPosition(m),key=pos.x.toFixed(3)+','+pos.z.toFixed(3);let r=groups.get(key);if(!r){const col=terminal.parkedColliders?.get(key);const h=col?new Vector3(...col.half):new Vector3(.95,.75,2.1);r={name:'Parked terminal car',position:pos,quaternion:new Quaternion(),parts:[],mass:1400,half:h,height:h.y*2,area:3,volume:2,collider:col?.box};m.decompose(zero,r.quaternion,one);groups.set(key,r);}r.parts.push({mesh,i,m:m.clone()});}
    for(const r of groups.values())this.register(r);
   }
  }

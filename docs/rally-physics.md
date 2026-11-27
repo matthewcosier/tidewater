@@ -20,7 +20,8 @@ hash-checked by `test/rally-bridge.mjs`); `npm run sync:rally` never overwrites 
   never drops and piles up. Wheel spin is integrated at 720 Hz, implicitly in the tyre's
   stiffness, so light wheels on stiff tyres stay stable. Grip falls slightly with load. A
   locked, nearly stopped tyre holds with static friction instead of creeping downhill.
-- **Surfaces** (`road.rs`). Asphalt, gravel (from the road ribbons), then the terrain splat
+- **Surfaces** (`road.rs`). Asphalt, gravel (from the road ribbons, indexed in a 32 m spatial
+  grid for O(1) per-wheel lookup across 8.5+ km of island roads), then the terrain splat
   per texel: dry sand, wet sand near the waterline, soil or grass, rock. Props are wood
   (pier, rails, logs); trunks and rocks are rock. Contacts under the sea are water.
   Sand adds rolling and ploughing drag.
@@ -36,19 +37,27 @@ hash-checked by `test/rally-bridge.mjs`); `npm run sync:rally` never overwrites 
   governed to 27 km/h. W does the reverse of that. With no demand, a stopped car auto-holds
   on its brakes, even on a grade.
 - **Assists, on by default** (`set_assists( false )` turns them off). ABS always works.
-  Traction control trims torque past 1.4 times the useful slip. Stability control brakes
-  the outside front wheel and eases the throttle when the yaw rate exceeds what the
-  steering asks for (capped by grip), and stands down on the handbrake. Steering lock
-  shrinks with speed to the tyres' useful slip angle. A countersteer assist leans the
-  wheels into a rear slide. Wheels reach full lock in about 0.2 s at any speed.
+  Traction control trims torque past 1.4 times the useful slip. Stability control measures
+  intended yaw from driver demand (not trimmed lock) and brakes the outside front wheel only
+  when the rear axle actually slides past peak grip in a spinout, leaving corner entry crisp,
+  and stands down on the handbrake. At speed, slip-guided front-axle steering aligns the front
+  tyres near their peak slip angle with proportional yaw damping so full keyboard steer holds
+  high-g cornering without collapsing lock. Steering turn-in reaches lock in about 0.085 s
+  and returns in about 0.055 s.
 - **Water.** Twelve vertical water columns under the hull give buoyancy at the right
   place, drag relative to the moving surface, and a push along the wave slope. Wheels
   under water paddle weakly (under 2 m/s). The renderer fits the local sea plane from five
   GPU wave queries (`src/rally/CarWater.js`) and calls `set_water`. The plane is off
   when no sample is over water.
-- **Collisions.** Rounded hull boxes slide along walls. Swept CCD above 6 m/s stops a car
-  at 120 km/h on a 12 cm rail. Palm and tree trunks are car-only cylinders
-  (`src/rally/WorldPhysics.js`). Guardrails are solid boxes from `CoastalRoad`.
+- **Collisions.** Compound hulls match rendered GLB body widths and lengths with rounded
+  corners (`0.08` to `0.10 m`) that slide along walls. Non-linear swept CCD (`SweptCcd` above
+  3 m/s linear / 0.4 rad/s angular) prevents fast rotating corners from poking through rails,
+  poles or parked cars, and `HeightFieldFlags::FIX_INTERNAL_EDGES` keeps low splitters from
+  catching graded road sags. Leaning palm trunks (segmented along their shader curve),
+  full-radius tree trunks, roadside guide posts, parked terminal cars, terminal posts and
+  guardrails are all solid static colliders (`src/rally/WorldPhysics.js`, `CoastalRoad.js`,
+  `Terminal.js`). Dynamic props use linear swept CCD and breakable fence shards spawn ahead
+  of the hitting car hull.
 - **Damage hooks.** `take_impacts()` returns hard hits on the body, each as a car-local
   point, push direction, delta-v severity and a scenery flag. `set_damage( engine, pull,
   wheels[12] )` sets power loss, steering pull, per-wheel toe, spring strength and
@@ -102,12 +111,12 @@ is bridged along the car's own reported speed and heading, for at most 150 ms.
 
 ## Evidence
 
-`npm run test:physics` runs 28 native behaviour tests against the real Avian solver.
-They cover:
+`npm run test:physics` runs 69 native behaviour tests against the real Avian solver (plus
+3 ignored benchmark/trace probes). They cover:
 - rest and slope hold
 - 0-100 km/h and top-speed bands
 - ABS stops
-- steering direction and symmetry
+- steering direction, symmetry, fast turn-in and sustained high-speed cornering at 120 and 160 km/h without lock collapse
 - cornering without rollover, including a Jeep slalom
 - handbrake rotation
 - a sand launch with TC
@@ -115,14 +124,16 @@ They cover:
 - gearbox hunting
 - floating, riding a swell, drifting down a sloping sea, and floating when capsized
 - paddle speed
-- no tunnelling through a thin rail
+- no tunnelling through a thin rail, heightfield sag non-launch, and visual-matched car hull contact bounds
 - climbing a log
 - impact reports and mechanical damage
+- moving ferry deck contacts, fluid loads, structural compliance and disaster force batches
 
-Stability control, the reverse pause and the gearbox were each shown to fail the test
-without the fix. Browser scenarios cover the same behaviour through the real game:
-`rally.spec.js`, `rally-water.spec.js`, `tyre-marks.spec.js`, `gamepad.spec.js`, and
-`coastal-road.spec.js` (guardrail).
+Stability control, the reverse pause, the gearbox, high-speed turn-in, heightfield sag edges
+and visual hull contact were each shown to fail the test without the fix. Browser scenarios
+cover the same behaviour through the real game: `rally.spec.js`, `rally-water.spec.js`,
+`tyre-marks.spec.js`, `gamepad.spec.js`, `coastal-road.spec.js`, `gt3-handling.spec.js`,
+`road-clearance.spec.js`, and `driving-overhaul.spec.js`.
 
 ## Controls
 

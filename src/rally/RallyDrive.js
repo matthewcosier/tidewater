@@ -98,6 +98,7 @@ export class RallyDrive {
 		// Sand, wet sand, soil and rock grip from the terrain splat; trunks a car can hit.
 		this.physics.set_surface_map( terrainMaterialCodes( terrain ) );
 		this.trunks = trunkCylinders( this.app.vegetation, terrain );
+		colliders.setTrunks( this.trunks );
 		// camera-only: banana plants the chase boom treats as obstacles (never solid to the car)
 		( { stems: this.cameraStems, crowns: this.crowns } = cameraPlants( this.app.vegetation, terrain ) );
 		this.physics.add_cylinders( this.trunks );
@@ -107,11 +108,12 @@ export class RallyDrive {
 		// Every static box, each with its surface: the terminal's lanes and linkspan are asphalt,
 		// piers and boardwalks wood.
 		// Loose props and fence panels (src/physics/Props.js) are not static: they wake as bodies near the car.
-		const statics = colliders.boxes.filter( b => ( b.solid || b.walkable ) && ! b.prop );
+		const statics = colliders.boxes.filter( b => ( b.solid || b.walkable ) && ! b.prop && b.tag !== 'bridge-deck' && b.tag !== 'bridge-rail' );
 		this.physics.add_surface_boxes( new Float32Array( statics.flatMap( b => [
 			...carBox( b ), b.rotY, b.tag.includes( 'pier' ) ? 0.8 : 0.65,
 		] ) ), new Uint8Array( statics.map( b => b.tag === 'terminal-car' ? SURFACE_ASPHALT : SURFACE_WOOD ) ) );
 		this.physics.add_cylinders( new Float32Array( colliders.cylinders.filter( c => ! c.prop ).flatMap( c => [ c.x, c.z, c.radius, c.yMin, c.yMax ] ) ) );
+		this.app.straitBridge?.attachPhysics( this.physics );
 		// head, tail and brake lights (before the damage rig, which draws the lenses these give each car)
 		this.lights = {};
 		for ( const key of keys ) {
@@ -211,8 +213,9 @@ export class RallyDrive {
 		const {colliders}=this.app;
 		this.physics.clear_island_statics();
 		this.trunks=trunkCylinders(this.app.vegetation,this.app.terrainData);
+		colliders.setTrunks(this.trunks);
 		this.physics.add_cylinders(this.trunks);
-		const boxes=colliders.boxes.filter(b=>(b.solid||b.walkable)&&!b.prop&&b!==this.walkingProxy);
+		const boxes=colliders.boxes.filter(b=>(b.solid||b.walkable)&&!b.prop&&b!==this.walkingProxy&&b.tag!=="bridge-deck"&&b.tag!=="bridge-rail");
 		this.tracks.setPaving( boxes );
 		this.physics.add_surface_boxes(new Float32Array(boxes.flatMap(b=>[...carBox(b),b.rotY,b.tag.includes("pier")?0.8:0.65])),new Uint8Array(boxes.map(b=>b.tag==="terminal-car"?SURFACE_ASPHALT:SURFACE_WOOD)));
 		this.physics.add_cylinders(new Float32Array(colliders.cylinders.filter(c=>!c.prop&&c.yMax>c.yMin).flatMap(c=>[c.x,c.z,c.radius,c.yMin,c.yMax])));

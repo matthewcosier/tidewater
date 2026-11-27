@@ -181,8 +181,7 @@ export class RallyPhysics {
     set_surface_map(codes: Uint8Array): boolean;
     /**
      * The source is Tidewater's row-major (z then x) texel-centred height grid.
-     * Avian passes flattened rows to a column-major matrix; Parry rows are Z.
-     * Transpose here, keeping the exact original 1 m vertices and half-texel origin.
+     * Parry rows are Z, columns are X. Keep the original samples and half-texel origin.
      */
     set_terrain(heights: Float32Array, resolution: number, size: number, origin: number): boolean;
     /**

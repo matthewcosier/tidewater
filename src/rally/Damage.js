@@ -55,7 +55,7 @@ export class Damage {
 	constructor( rally ) {
 		this.rally = rally;
 		this.app = rally.app;
-		this.wreckage = new Wreckage( this.app.scene, this.app.terrainData, () => G.seaLevel.value );
+		this.wreckage = new Wreckage( this.app.scene, this.app.terrainData, () => G.seaLevel.value, this.app.colliders );
 		this.wreckage.environment = () => this.app.disasters?.field;
 		this.fx = new CarFire( this.app );
 		this.cars = new Map();

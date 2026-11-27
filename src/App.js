@@ -27,6 +27,7 @@ import { Environment } from './sky/Environment.js';
 import { TerrainData } from './world/TerrainData.js';
 import { CoastalRoute } from './world/CoastalRoute.js';
 import { CoastalRoad } from './world/CoastalRoad.js';
+import { StraitBridge } from './world/StraitBridge.js';
 import { TerrainGPU } from './world/TerrainGPU.js';
 import { Terrain } from './world/Terrain.js';
 import { computeShoreField } from './world/ShoreField.js';
@@ -198,6 +199,7 @@ export class App {
 		prepareGliderSite(this.terrainData, this.coastalRoute);
 		prepareChairliftSite(this.terrainData, this.coastalRoute);
 		this.coastalRoad = new CoastalRoad( scene, this.terrainData, this.coastalRoute, this.colliders );
+		this.straitBridge = new StraitBridge( scene, this.terrainData, this.colliders );
 		if ( ! qs.has( 'noVeg' ) ) {
 
 			await progress( 0.14, 'Planting the island…' );

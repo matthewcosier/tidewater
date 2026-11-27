@@ -41,6 +41,14 @@ export const VIEWS = {
 	tStacks: { p: [ - 240, 8, 300 ], yaw: 0.15, pitch: - 0.05, time: 16.5 },
 	tCove: { p: [ - 160, 2.2, - 30 ], yaw: 1.35, pitch: - 0.08, time: 10.5 },
 	tMorning: { p: [ 18, 3.0, - 60 ], yaw: 0.2, pitch: 0.05, time: 7.2 },
+	westHeadland: { p: [ - 235, 58, 165 ], yaw: 0.53, pitch: - 0.52, time: 15.5 },
+	straitBridge: { p: [ 155, 92, 345 ], yaw: 1.89, pitch: - 0.15, time: 15.5 },
+	straitBridgeDeck: { p: [ - 254, 21, 129 ], yaw: - 2.73, pitch: - 0.02, time: 15.5 },
+	northCoast: { p: [ - 130, 52, - 830 ], yaw: - 1.87, pitch: - 0.27, time: 10.5 },
+	mountainPass: { p: [ - 335, 165, - 515 ], yaw: 0.95, pitch: - 0.62, time: 15.5 },
+	rallyStage: { p: [ - 62, 52, - 710 ], yaw: - 1.38, pitch: - 0.38, time: 11.0 },
+	joeyPeninsula: { p: [ 440, 62, 835 ], yaw: - 0.28, pitch: - 0.38, time: 15.0 },
+	terminalParked: { p: [ 182, 16, 218 ], yaw: - 2.48, pitch: - 0.30, time: 14.5 },
 };
 
 export function installDebugViews( app ) {

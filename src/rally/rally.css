@@ -72,7 +72,7 @@
 .rh-dock:not(.is-driving) .rh-share:hover { background: rgba(var(--tw-aqua-rgb), 0.1); }
 
 .rh-dock.is-driving {
-	flex-direction: row; flex-wrap: wrap; align-items: center; gap: calc(6 * var(--tw-u)); width: calc(400 * var(--tw-u));
+	flex-direction: row; flex-wrap: wrap; align-items: center; gap: calc(6 * var(--tw-u)); width: min(calc(400 * var(--tw-u)), calc(50vw - 125 * var(--tw-u)));
 	padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
 }
 .rh-dock.is-driving .rh-eyebrow, .rh-dock.is-driving .rh-tag { display: none; }

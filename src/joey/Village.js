@@ -222,6 +222,9 @@ export class JoeyVillage {
 		const { colliders } = this.app;
 		const center = new Vector3(), half = new Vector3();
 		this.disasterColliders=boxes.map(b=>colliders.addBox( this.toWorld( b.center, center ), half.set( ...b.half ), this.yaw, KINDS[ b.kind ] || KINDS.solid ));
+		// Customer parking sign post at the driveway (tools/joey/village_build.py).
+		this.toWorld( [ 28.0, 0, - 95.6 ], center );
+		colliders.addCylinder( center.x, center.z, 0.08, this.terminal.position.y + 3.2, this.terminal.position.y + 5.6, { tag: 'village-post' } );
 		this.boxCount = boxes.length;
 		for ( const [ name, p ] of Object.entries( stations ) ) this.stations[ name ] = this.toWorld( p );
 

@@ -304,40 +304,7 @@ pub fn drive_forces(
     let axle_torque=engine_torque*ratio*DRIVELINE_EFFICIENCY;
     car.engine_load=(throttle*car.traction).clamp(0.0,1.0)*f32::from(u8::from(coupled));
 
-    // ---- steering: speed-sensitive lock sized to the tyres' useful slip angle, a faster
-    // return to centre, and a countersteer assist when the rear steps out.
-    let lock=(0.13+c.wheelbase*9.0/speed.abs().max(1.0).powi(2)).min(c.max_steer);
-    let rear=q.inverse()*(forces.velocity_at_point(position.0+q*Vec3::new(0.0,0.0,-c.wheelbase*0.5))-deck_velocity);
-    let rear_slip=if rear.z>3.0 { rear.x.atan2(rear.z) } else { 0.0 };
-    let demand=-intent.steer.clamp(-1.0,1.0);
-    // Give back rack travel in the direction of a real countersteer. The old
-    // speed cap also capped the correction needed to line up a sliding rear axle.
-    let catch=(rear_slip*demand.signum()).max(0.0)*smoothstep(3.0,8.0,speed);
-    let manual=demand*(lock+catch).min(c.max_steer);
-    // At speed the nose can already be travelling sideways relative to the body.
-    // Full keyboard lock beyond peak slip then scrubs the fronts and widens the
-    // turn. In assisted driving aim the tyres relative to the front axle's path.
-    let guide=if assists.0 && handbrake<0.1 { smoothstep(10.0,24.0,speed) } else { 0.0 };
-    let front_point=position.0+q*Vec3::new(0.0,0.0,c.wheelbase*0.5);
-    let front_v=q.inverse()*(forces.velocity_at_point(front_point)-deck_velocity);
-    let path_angle=front_v.x.atan2(front_v.z.max(1.0));
-    let peak=(car.wheels[0].surface.grip().angle_peak+car.wheels[1].surface.grip().angle_peak)*0.5;
-    let guided_lock=(peak.atan()+path_angle*demand.signum()).clamp(0.03,c.max_steer);
-    let driver=manual+(demand*guided_lock-manual)*guide;
-    let assist=if assists.0 && handbrake<0.5 {
-        0.6*rear_slip.signum()*(rear_slip.abs()-0.07).max(0.0)*smoothstep(3.0,8.0,speed)
-    } else { 0.0 };
-    // Driver-right is -X, which is negative yaw.
-    let target=(driver+(1.0-guide*demand.abs())*assist.clamp(-0.35,0.35)+damage.pull).clamp(-c.max_steer,c.max_steer);
-    // About 0.2 s to full lock at any speed; returning and countersteering are quicker.
-    let rate=if target.abs()<car.steering.abs() || target*car.steering<0.0 { (lock/0.12).max(2.5) } else { (lock/0.2).max(1.0) };
-    car.steering+=(target-car.steering).clamp(-rate*dt,rate*dt);
-    let steering=car.steering;
-
-    // ---- stability control: compare the yaw rate with the one the steering asks for,
-    // capped by the grip under the tyres. When the tail swings wider than that, brake the
-    // outside front wheel and ease the throttle, as a real ESC does. The handbrake (or
-    // switching assists off) leaves the driver to catch slides alone.
+    // ---- grip capacity & yaw-rate budget (shared by slip-guided steering and ESC)
     let yaw_rate=angular.dot(up);
     let mut capacity=0.0;
     let mut grounded=false;
@@ -350,13 +317,54 @@ pub fn drive_forces(
     }
     let lateral_limit=if grounded { capacity/c.mass } else { 0.8*GRAVITY };
     let yaw_cap=lateral_limit/speed.abs().max(3.0);
-    let wanted=(speed*steering.tan()/c.wheelbase).clamp(-yaw_cap,yaw_cap);
+
+    // ---- steering: crisp speed-sensitive rack, critically damped slip-guided front axle
+    // alignment at speed so keyboard full-lock bites fast and holds steady high-g yaw without
+    // overshooting into a snap-back oscillation or collapsing lock.
+    let lock=(0.16+c.wheelbase*11.5/speed.abs().max(1.0).powi(2)).min(c.max_steer);
+    let rear=q.inverse()*(forces.velocity_at_point(position.0+q*Vec3::new(0.0,0.0,-c.wheelbase*0.5))-deck_velocity);
+    let rear_slip=if rear.z>3.0 { rear.x.atan2(rear.z) } else { 0.0 };
+    let demand=-intent.steer.clamp(-1.0,1.0);
+    // Give back rack travel in the direction of a real countersteer.
+    let catch=(rear_slip*demand.signum()).max(0.0)*smoothstep(3.0,8.0,speed);
+    let manual=demand*(lock+catch).min(c.max_steer);
+    let guide=if assists.0 && handbrake<0.1 { smoothstep(8.0,20.0,speed) } else { 0.0 };
+    let front_point=position.0+q*Vec3::new(0.0,0.0,c.wheelbase*0.5);
+    let front_v=q.inverse()*(forces.velocity_at_point(front_point)-deck_velocity);
+    let path_angle=if front_v.z>2.0 { front_v.x.atan2(front_v.z) } else { 0.0 };
+    let peak=((car.wheels[0].surface.grip().angle_peak+car.wheels[1].surface.grip().angle_peak)*0.5).atan();
+    // Target steady-state yaw rate for this demand; damping excess transient yaw prevents the
+    // tail whipping past peak grip and bouncing back into understeer.
+    let target_yaw=demand*yaw_cap*0.96;
+    let yaw_err=(target_yaw-yaw_rate).clamp(-0.6,0.6);
+    let rear_excess=(rear_slip.abs()-peak*0.95).max(0.0)*rear_slip.signum();
+    let front_slip=(demand*(peak*0.98)+yaw_err*0.55).clamp(-peak*1.08,peak*1.08);
+    let guided=(path_angle+front_slip+rear_excess*0.32).clamp(-c.max_steer,c.max_steer);
+    let driver=manual+(guided-manual)*guide;
+    let low_assist=if assists.0 && handbrake<0.5 {
+        (1.0-guide)*0.6*rear_slip.signum()*(rear_slip.abs()-0.07).max(0.0)*smoothstep(3.0,8.0,speed)
+    } else { 0.0 };
+    // Driver-right is -X, which is negative yaw.
+    let target=(driver+low_assist.clamp(-0.35,0.35)+damage.pull).clamp(-c.max_steer,c.max_steer);
+    // Crisp turn-in (~0.08 s to lock) and faster return/countersteer (~0.055 s).
+    let rate=if target.abs()<car.steering.abs() || target*car.steering<0.0 { (lock/0.055).max(5.5) } else { (lock/0.085).max(3.2) };
+    car.steering+=(target-car.steering).clamp(-rate*dt,rate*dt);
+    let steering=car.steering;
+
+    // ---- stability control: measure intended yaw from driver demand (not the already-trimmed
+    // steering angle), and intervene only when the rear axle actually slides past peak grip in
+    // an impending spinout. Normal high-speed corner entry stays free of outside-front braking.
+    let wanted=(speed*(demand*lock).tan()/c.wheelbase).clamp(-yaw_cap*1.15,yaw_cap*1.15);
     let excess=yaw_rate-wanted;
-    let oversteer=if assists.0 && speed>4.0 && handbrake<0.5 && excess*yaw_rate>0.0 { (excess.abs()-0.10-0.12*wanted.abs()).max(0.0) } else { 0.0 };
+    let rear_over=(rear_slip.abs()-peak*1.15).max(0.0);
+    let spinning=rear_slip*yaw_rate<0.0 && rear_over>0.0;
+    let oversteer=if assists.0 && speed>4.0 && handbrake<0.5 && spinning && excess*yaw_rate>0.0 {
+        (excess.abs()-0.08+rear_over*1.8).max(0.0)
+    } else { 0.0 };
     let mut esc_brake=[0.0f32;4];
     // Yawing left (positive) puts the outside on the driver's right, which is wheel 0.
-    if oversteer>0.0 { esc_brake[if yaw_rate>0.0 { 0 } else { 1 }]=(oversteer*2.5).min(1.0)*c.brake_torque*0.45; }
-    let esc_cut=1.0-(oversteer*3.0).min(0.85);
+    if oversteer>0.0 { esc_brake[if yaw_rate>0.0 { 0 } else { 1 }]=(oversteer*2.2).min(1.0)*c.brake_torque*0.45; }
+    let esc_cut=1.0-(oversteer*2.2).min(0.75);
     car.esc_active=oversteer>0.0;
 
     // ---- suspension loads, with anti-roll bars coupling each axle
@@ -431,7 +439,7 @@ pub fn drive_forces(
         // A fast, sliding road tyre develops less friction than one just at
         // breakaway. Blend by actual tread scrub (m/s), leaving peak grip and loose ground intact.
         let scrub=(car.wheels[i].omega*c.radius-vx).hypot(vy);
-        let sliding=if surface==Surface::Asphalt { 1.0-0.23*smoothstep(4.0,18.0,scrub) } else { 1.0 };
+        let sliding=if surface==Surface::Asphalt { 1.0-0.23*smoothstep(7.0,20.0,scrub) } else { 1.0 };
         let fmax=sliding*grip.peak*(if grip.loose { c.grip_loose } else { c.grip_road })*sensitivity*load;
 
         // Wheel spin sub-steps: implicit in the tyre's own stiffness, so a light wheel on
